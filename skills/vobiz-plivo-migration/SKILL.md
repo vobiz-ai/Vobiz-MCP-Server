@@ -75,7 +75,7 @@ The only real rename: `<GetDigits>` and `<GetInput>` -> `<Gather>`. Inside it, `
 
 ## Webhook signature (same family, use the Vobiz validator)
 
-Both platforms sign callbacks with HMAC-SHA256 keyed by your auth token, base64-encoded, with a random nonce in a companion header. Vobiz signs the **base URL with query stripped + nonce**: `X-Vobiz-Signature-V3` = `base64(HMAC-SHA256(authToken, baseURL + "." + nonce))` with `X-Vobiz-Signature-V3-Nonce`; `X-Vobiz-Signature-V2` = `base64(HMAC-SHA256(authToken, baseURL + nonce))` with `X-Vobiz-Signature-V2-Nonce`. Replace Plivo's `validate_v3_signature(...)` helper with the few-line Vobiz validator (it does not hash the POST params) and compare with `hmac.compare_digest` / `crypto.timingSafeEqual`. For sub-accounts, Vobiz also sends `X-Vobiz-Signature-MA-V2/V3` keyed by the **parent** token - same algorithm, different key. The legacy `X-Vobiz-Signature` (and Plivo's legacy `X-Plivo-Signature-V2`) are HMAC-SHA1 - avoid both. Signature headers are emitted only when the callback URL has auth credentials configured on it, so configure them and fail closed if an expected header is absent. Branch on the `Event` field (`Ring`, `StartApp` = answered, `Hangup`). Canonical: https://vobiz.ai/docs/concepts/validating-callbacks.
+Both platforms sign callbacks with HMAC-SHA256 keyed by your auth token, base64-encoded, with a random nonce in a companion header. Vobiz signs the **base URL with query stripped + nonce**: `X-Vobiz-Signature-V3` = `base64(HMAC-SHA256(authToken, baseURL + "." + nonce))` with `X-Vobiz-Signature-V3-Nonce`; `X-Vobiz-Signature-V2` = `base64(HMAC-SHA256(authToken, baseURL + nonce))` with `X-Vobiz-Signature-V2-Nonce`. Replace Plivo's `validate_v3_signature(...)` helper with the few-line Vobiz validator (it does not hash the POST params) and compare with `hmac.compare_digest` / `crypto.timingSafeEqual`. For sub-accounts, Vobiz also sends `X-Vobiz-Signature-MA-V2/V3` keyed by the **parent** token - same algorithm, different key. The legacy `X-Vobiz-Signature` (and Plivo's legacy `X-Plivo-Signature-V2`) are HMAC-SHA1 - avoid both. Signature headers are emitted only when the callback URL has auth credentials configured on it, so configure them and fail closed if an expected header is absent. Branch on the `Event` field (`Ring`, `StartApp` = answered, `Hangup`). Canonical: https://www.vobiz.ai/docs/concepts/validating-callbacks.
 
 ## Pitfalls
 
@@ -136,10 +136,10 @@ A future `vobiz-plivo-compat` (Python) / `@vobiz/plivo-compat` (Node) package wi
 
 ## When to search docs
 
-- "Full migration steps" -> https://vobiz.ai/docs/guides/plivo-to-vobiz (sub-pages: auth-and-base-url, endpoint-mapping, xml-migration, webhooks-and-signatures, gotchas, number-porting, cutover-checklist)
-- "Side-by-side Plivo vs Vobiz code" -> https://vobiz.ai/docs/compare/plivo/code-snippets; per-domain tables under https://vobiz.ai/docs/compare/plivo/overview
-- "Let an AI agent convert my Plivo code" -> https://vobiz.ai/docs/compare/plivo/migration-agent
-- "Buy a Vobiz number (can't port from Plivo)" -> https://vobiz.ai/docs/buy-a-phone-number, https://vobiz.ai/docs/guides/plivo-to-vobiz/number-porting
-- "Gather attributes" -> https://vobiz.ai/docs/xml/gather
-- "Verify the webhook signature" -> https://vobiz.ai/docs/concepts/validating-callbacks
-- "Make-call params" -> https://vobiz.ai/docs/call/make-call
+- "Full migration steps" -> https://www.vobiz.ai/docs/guides/plivo-to-vobiz (sub-pages: auth-and-base-url, endpoint-mapping, xml-migration, webhooks-and-signatures, gotchas, number-porting, cutover-checklist)
+- "Side-by-side Plivo vs Vobiz code" -> https://www.vobiz.ai/docs/compare/plivo/code-snippets; per-domain tables under https://www.vobiz.ai/docs/compare/plivo/overview
+- "Let an AI agent convert my Plivo code" -> https://www.vobiz.ai/docs/compare/plivo/migration-agent
+- "Buy a Vobiz number (can't port from Plivo)" -> https://www.vobiz.ai/docs/buy-a-phone-number, https://www.vobiz.ai/docs/guides/plivo-to-vobiz/number-porting
+- "Gather attributes" -> https://www.vobiz.ai/docs/xml/gather
+- "Verify the webhook signature" -> https://www.vobiz.ai/docs/concepts/validating-callbacks
+- "Make-call params" -> https://www.vobiz.ai/docs/call/make-call

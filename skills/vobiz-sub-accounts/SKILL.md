@@ -136,7 +136,7 @@ Return `2xx` to ack; failures are retried with exponential backoff - keep the ha
 
 ### Voice callbacks on sub-accounts are signed differently
 
-The scheme above is for **KYC session webhooks** only. Answer/hangup/action **call callbacks** for a sub-account use the standard callback signatures (`X-Vobiz-Signature-V2` / `-V3`, base64 HMAC-SHA256 over `url + nonce`, keyed with the **sub-account's** auth token) **plus** `X-Vobiz-Signature-MA-V2` / `X-Vobiz-Signature-MA-V3`, the same computation keyed with the **parent's** auth token - so you can validate with either key. See https://vobiz.ai/docs/concepts/validating-callbacks#sub-account-callbacks.
+The scheme above is for **KYC session webhooks** only. Answer/hangup/action **call callbacks** for a sub-account use the standard callback signatures (`X-Vobiz-Signature-V2` / `-V3`, base64 HMAC-SHA256 over `url + nonce`, keyed with the **sub-account's** auth token) **plus** `X-Vobiz-Signature-MA-V2` / `X-Vobiz-Signature-MA-V3`, the same computation keyed with the **parent's** auth token - so you can validate with either key. See https://www.vobiz.ai/docs/concepts/validating-callbacks#sub-account-callbacks.
 
 ## Pitfalls
 

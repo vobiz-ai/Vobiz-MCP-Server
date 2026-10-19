@@ -1,13 +1,13 @@
 {
   "name": "vobiz",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "Vobiz calls, conferences, IVRs, call records, numbers, SIP trunks, sub-accounts, billing and SMS/MMS/RCS, plus the Vobiz Agent Skills.",
   "author": {
     "name": "Vobiz",
     "email": "support@vobiz.ai",
-    "url": "https://vobiz.ai"
+    "url": "https://www.vobiz.ai"
   },
-  "homepage": "https://vobiz.ai/docs/resources/account-mcp",
+  "homepage": "https://www.vobiz.ai/docs/resources/vobiz-mcp",
   "repository": "https://github.com/vobiz-ai/Vobiz-MCP-Server",
   "license": "MIT",
   "keywords": [
@@ -59,7 +59,7 @@
       "command": "npx",
       "args": [
         "-y",
-        "github:vobiz-ai/Vobiz-MCP-Server#v1.1.1"
+        "github:vobiz-ai/Vobiz-MCP-Server#v1.1.2"
       ],
       "env": {
         "VOBIZ_AUTH_ID": "${user_config.auth_id}",

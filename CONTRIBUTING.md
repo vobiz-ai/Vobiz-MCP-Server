@@ -11,7 +11,7 @@ Thanks for helping make the Vobiz MCP server better. Bug reports, fixes, new too
   - respect the server's rate limits and idempotency
 - **No secrets in results or logs.** Redact tokens, passwords and SIP credentials. Log route templates and status codes only, never phone numbers or message text.
 - **Tenant scoping.** Build every API path from the configured or signed-in account (`ctx.client.accountPath(...)`). Never accept an account ID as tool input.
-- **Accurate tools.** Only wrap endpoints documented in the [Vobiz API reference](https://vobiz.ai/docs). Don't guess fields.
+- **Accurate tools.** Only wrap endpoints documented in the [Vobiz API reference](https://www.vobiz.ai/docs). Don't guess fields.
 - **Clear descriptions.** Every tool needs:
   - a snake_case name of 64 characters or fewer
   - a `title`

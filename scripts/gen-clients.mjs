@@ -19,7 +19,7 @@ const spec = npm ? `${pkg.name}@${pkg.version}` : `github:${slug}#v${pkg.version
 const hosted = pkg.config?.hostedUrl ?? "https://mcp.vobiz.ai/mcp";
 const docs = pkg.homepage;
 const desc = "Vobiz calls, conferences, IVRs, call records, numbers, SIP trunks, sub-accounts, billing and SMS/MMS/RCS, plus the Vobiz Agent Skills.";
-const author = { name: "Vobiz", email: "support@vobiz.ai", url: "https://vobiz.ai" };
+const author = { name: "Vobiz", email: "support@vobiz.ai", url: "https://www.vobiz.ai" };
 const keywords = ["vobiz", "telephony", "voice-api", "sip-trunking", "sms", "rcs", "ivr", "voice-agents", "mcp"];
 const env = (a, b) => ({ VOBIZ_AUTH_ID: a, VOBIZ_AUTH_TOKEN: b });
 const write = (rel, data) => {
@@ -85,9 +85,9 @@ write("plugin.json", {
         shortDescription: "Run Vobiz calls, numbers, SIP and messaging from your agent",
         developerName: "Vobiz",
         category: "Developer Tools",
-        websiteURL: "https://vobiz.ai",
-        privacyPolicyURL: "https://vobiz.ai/privacy",
-        termsOfServiceURL: "https://vobiz.ai/terms",
+        websiteURL: "https://www.vobiz.ai",
+        privacyPolicyURL: "https://www.vobiz.ai/privacy",
+        termsOfServiceURL: "https://www.vobiz.ai/terms",
         defaultPrompt: ["Show my Vobiz balance and live calls.", "Build a VobizXML IVR: press 1 for sales, 2 for support."],
       },
     },

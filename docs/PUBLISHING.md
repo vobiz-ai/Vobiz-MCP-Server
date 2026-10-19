@@ -28,7 +28,7 @@ Done: the public repository is `vobiz-ai/Vobiz-MCP-Server`, with its description
 
 ## 6. Documentation page
 
-- [ ] Once npm and the hosted connector are live, merge the docs branch `docs/vobiz-account-mcp` in the docs repository. It adds `https://vobiz.ai/docs/resources/account-mcp`, which is the documentation URL used by the package, the registry entry and the directory listing.
+- [ ] Once npm and the hosted connector are live, merge the docs branch `docs/vobiz-account-mcp` in the docs repository. It adds `https://www.vobiz.ai/docs/resources/vobiz-mcp`, which is the documentation URL used by the package, the registry entry and the directory listing.
 
 ## 7. Claude connector directory
 
@@ -42,8 +42,8 @@ Submit at <https://claude.ai/directory/manage> → **Submit new** → **MCP conn
 | One-liner (≤200) | Place and control calls, build IVRs, read call records and send SMS, MMS and RCS on your Vobiz account. |
 | Description (≤2000) | Use the README introduction and tool groups. |
 | Categories | Communication, Developer tools |
-| Documentation | https://vobiz.ai/docs/resources/account-mcp |
-| Privacy policy | https://vobiz.ai/privacy (the server's own policy is in the README) |
+| Documentation | https://www.vobiz.ai/docs/resources/vobiz-mcp |
+| Privacy policy | https://www.vobiz.ai/privacy (the server's own policy is in the README) |
 | Support | support@vobiz.ai |
 | Icon | `assets/icon.png` |
 | Test account | A populated Vobiz account (numbers, call records, recordings, a SIP trunk, an application, SMS history). Share the credentials only in the reviewer field. |

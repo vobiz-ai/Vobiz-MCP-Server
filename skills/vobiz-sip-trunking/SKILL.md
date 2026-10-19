@@ -76,7 +76,7 @@ curl -s -X POST "$BASE/numbers/%2B919876543210/assign" "${H[@]}" \
 
 ## Webhook verification
 
-Trunk webhooks (callbacks) are not signed: there is no signing secret and no signature header. To verify a request came from Vobiz, allow-list the Vobiz callback IPs listed on [IP Whitelisting](https://vobiz.ai/docs/concepts/ip-whitelisting#callbacks), and use an unguessable path or token in the webhook URL.
+Trunk webhooks (callbacks) are not signed: there is no signing secret and no signature header. To verify a request came from Vobiz, allow-list the Vobiz callback IPs listed on [IP Whitelisting](https://www.vobiz.ai/docs/concepts/ip-whitelisting#callbacks), and use an unguessable path or token in the webhook URL.
 
 Headers sent: `Content-Type: application/json`, `User-Agent: Vobiz/1.0`, `X-Vobiz-Event` (`CallInitiated`, `Hangup`, or `recording.completed`), and `X-Vobiz-Request-ID`. Link `CallInitiated` and `Hangup` for the same call by `SIPCallID` - `CallUUID` in `Hangup` is Vobiz's internal ID and can differ. `X-Vobiz-Request-ID` is unique per delivery; use it only to de-duplicate retries. `recording.completed` uses snake_case fields (`sip_call_id`, `recording_url`, ...).
 
