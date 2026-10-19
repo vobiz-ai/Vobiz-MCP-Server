@@ -26,6 +26,8 @@ jobs:
       # Mocked tests only: no Vobiz credentials are available (or wanted) in CI.
       - run: npx vitest run
       - run: npm audit --omit=dev --audit-level=high
+      - name: Client integration files are up to date
+        run: npm run clients:gen && git diff --exit-code
       - name: Validate the desktop extension manifest
         run: npx -y @anthropic-ai/mcpb@2.1.2 validate manifest.json
       - name: Package contents
