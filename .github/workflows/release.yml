@@ -15,6 +15,8 @@ permissions:
 
 jobs:
   release:
+    # Only the public repository publishes; mirrors (e.g. the internal ops repo) never release.
+    if: github.repository == 'vobiz-ai/Vobiz-MCP-Server'
     runs-on: ubuntu-latest
     env:
       # npm and MCP Registry publishing run only once the NPM_TOKEN secret exists; the GitHub release and Docker image always run.
