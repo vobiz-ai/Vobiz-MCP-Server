@@ -20,7 +20,7 @@ jobs:
       # npm and MCP Registry publishing run only once the NPM_TOKEN secret exists; the GitHub release and Docker image always run.
       HAS_NPM_TOKEN: ${{ secrets.NPM_TOKEN != '' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: 24
