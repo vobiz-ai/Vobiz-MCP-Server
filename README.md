@@ -28,6 +28,7 @@ It also ships the **Vobiz Agent Skills**, so the model knows how each Vobiz prod
 ## Contents
 
 - [What you can ask](#what-you-can-ask)
+- [Connect Claude in five steps](#connect-claude-in-five-steps)
 - [Install](#install) (every client: [docs/INSTALL.md](docs/INSTALL.md))
 - [Tools](#tools)
 - [Skills, prompts and resources](#skills-prompts-and-resources)
@@ -58,6 +59,24 @@ It also ships the **Vobiz Agent Skills**, so the model knows how each Vobiz prod
 | "Create a sub-account for the Mumbai team and send them the KYC link" | `create_sub_account`, `create_sub_account_kyc_session` (you confirm) |
 | "What did we spend last week?" | `list_transactions` with a date range |
 | "How do I migrate my Plivo integration?" | `vobiz-plivo-migration` prompt |
+
+## Connect Claude in five steps
+
+Works in claude.ai, Claude Desktop and the Claude mobile apps. Nothing to install.
+
+1. **Copy your credentials.** In the [Vobiz console](https://console.vobiz.ai) overview page, copy your **Auth ID** (`MA_…`, or `SA_…` for a sub-account) and **Auth Token**.
+2. **Open Connectors.** In Claude, go to **Settings → Connectors → Add custom connector**. On Team and Enterprise plans an Owner adds it once under **Admin settings → Connectors**, then each member connects their own Vobiz account.
+3. **Add the server.** Name it `Vobiz`, enter `https://mcp.vobiz.ai/mcp`, leave the advanced OAuth fields empty, and click **Add**.
+4. **Connect and sign in.** Click **Connect**. On the Vobiz sign-in page, paste your Auth ID and Auth Token, optionally tick **Read-only access**, and click **Allow access**. You return to Claude, connected.
+5. **Use it.** In a new chat, enable **Vobiz** in the tools menu and ask: *"What's my Vobiz balance, and how many calls are live right now?"*
+
+| To | Do this |
+|---|---|
+| Switch between read-only and full access | **Settings → Connectors → Vobiz → Disconnect**, then **Connect** again and change **Read-only access** |
+| Disconnect | **Settings → Connectors → Vobiz → Disconnect** |
+| Revoke every app at once | Rotate your Auth Token in the Vobiz console |
+
+Claude asks before it runs any tool that places a call, sends a message or changes your account, and the server requires your confirmation for each one. Number purchases are not offered by the hosted connector.
 
 ## Install
 
