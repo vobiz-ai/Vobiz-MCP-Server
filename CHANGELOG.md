@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.1
+
+- Point the bundled Vobiz Docs MCP server at `https://www.vobiz.ai/docs/mcp`. MCP clients do not follow the apex-domain redirect on POST.
+
 ## 1.0.0
 
 First public release, published as `@vobiz/mcp`.
