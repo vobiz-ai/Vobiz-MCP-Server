@@ -1,0 +1,20 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "vobiz": {
+      "type": "streamable-http",
+      "url": "https://mcp.vobiz.ai/mcp",
+      "extensions": {
+        "com.openai": {
+          "auth": {
+            "type": "oauth"
+          }
+        }
+      }
+    },
+    "vobiz-docs": {
+      "type": "streamable-http",
+      "url": "https://vobiz.ai/docs/mcp"
+    }
+  }
+}

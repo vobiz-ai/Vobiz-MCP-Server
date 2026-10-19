@@ -13,10 +13,10 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        node: [22, 24]
+        node: [22, 24, 26]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node }}
           cache: npm
@@ -26,7 +26,22 @@ jobs:
       # Mocked tests only: no Vobiz credentials are available (or wanted) in CI.
       - run: npx vitest run
       - run: npm audit --omit=dev --audit-level=high
+      - name: Client integration files are up to date
+        run: npm run clients:gen && git diff --exit-code
       - name: Validate the desktop extension manifest
         run: npx -y @anthropic-ai/mcpb@2.1.2 validate manifest.json
       - name: Package contents
         run: npm pack --dry-run
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build the hosted connector image
+        run: docker build -t vobiz-mcp:ci .
+      - name: Start it and check health and OAuth metadata
+        run: |
+          docker run -d --name mcp -p 3000:3000 -e VOBIZ_HOSTED_URL=https://mcp.example.test -e VOBIZ_HOSTED_SECRET=ci-secret-ci-secret-ci-secret-ci-secret vobiz-mcp:ci
+          for i in $(seq 1 20); do curl -fs localhost:3000/health && break; sleep 1; done
+          curl -fs localhost:3000/.well-known/oauth-protected-resource/mcp | grep -q '"resource":"https://mcp.example.test/mcp"'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST localhost:3000/mcp)" = "401"

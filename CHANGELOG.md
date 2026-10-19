@@ -15,7 +15,7 @@ First public release, published as `@vobiz/mcp`.
 
 - SMS, MMS and RCS tools: `send_message`, `preview_message_cost`, `list_messages`, `get_message`, `list_conversations`, `get_conversation_messages`, `list_messaging_numbers`, `list_broadcasts`, `get_broadcast`, `check_opt_out`, `list_opt_outs`, `add_opt_out`, `remove_opt_out`.
 - The 15 Vobiz Agent Skills bundled as tools (`list_vobiz_skills`, `get_vobiz_skill`), prompts and `vobiz://skills/*` resources.
-- A hosted multi-tenant connector (`vobiz-mcp-hosted`, Docker). It includes OAuth 2.1 with PKCE, dynamic client registration and Client ID Metadata Documents; stateless sealed tokens; per-account limits; read-only consent; and Origin checks.
+- A hosted multi-tenant connector (`vobiz-mcp hosted`, Docker). It includes OAuth 2.1 with PKCE, dynamic client registration and Client ID Metadata Documents; stateless sealed tokens; per-account limits; read-only consent; and Origin checks.
 - Distribution: npm package with `bin`, an `.mcpb` desktop extension manifest, `server.json` for the MCP Registry, and release automation.
 
 **Changed:**

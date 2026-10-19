@@ -1,6 +1,6 @@
 {
   "name": "@vobiz/mcp",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Official Vobiz MCP server: voice calls, in-call control, VobizXML IVRs, call records, recordings, phone numbers, SIP trunks, SMS/MMS/RCS and the Vobiz Agent Skills for Claude and any MCP client.",
   "mcpName": "io.github.vobiz-ai/vobiz-mcp",
   "keywords": [
@@ -31,9 +31,7 @@
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "vobiz-mcp": "dist/index.js",
-    "vobiz-mcp-http": "dist/http.js",
-    "vobiz-mcp-hosted": "dist/hosted.js"
+    "vobiz-mcp": "dist/index.js"
   },
   "files": [
     "dist/**/*.js",
@@ -72,17 +70,23 @@
     "test:live:hosted": "npm run build && node --env-file-if-exists=.env scripts/live-hosted.mjs",
     "skills:sync": "node scripts/sync-skills.mjs",
     "prepublishOnly": "npm run check",
-    "pack:mcpb": "npm run build && npx -y @anthropic-ai/mcpb@2.1.2 pack . vobiz-mcp.mcpb"
+    "pack:mcpb": "npm run build && npx -y @anthropic-ai/mcpb@2.1.2 pack . vobiz-mcp.mcpb",
+    "prepare": "tsc -p tsconfig.json",
+    "clients:gen": "node scripts/gen-clients.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.1",
-    "express": "5.2.1",
+    "express": "5.3.0",
     "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/express": "^5.0.6",
-    "@types/node": "^26.6.5",
+    "@types/node": "^24.19.2",
     "typescript": "^7.0.2",
-    "vitest": "^5.0.4"
-  }
+    "vitest": "^5.0.5"
+  },
+  "config": {
+    "hostedUrl": "https://mcp.vobiz.ai/mcp"
+  },
+  "publishedToNpm": false
 }

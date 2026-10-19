@@ -269,3 +269,12 @@ describe("errors and redaction", () => {
     expect(redact({ a: { auth_token: "x", list: [{ password: "p", name: "n" }] } })).toEqual({ a: { auth_token: "[redacted]", list: [{ password: "[redacted]", name: "n" }] } });
   });
 });
+
+describe("client placeholders", () => {
+  it("treats unexpanded ${VAR} placeholders from MCP clients as unset", () => {
+    const cfg = loadConfig({ VOBIZ_AUTH_ID: "${user_config.auth_id}", VOBIZ_AUTH_TOKEN: "$VOBIZ_AUTH_TOKEN", VOBIZ_ENABLE_CALLS: "${user_config.enable_calls}" });
+    expect(cfg.authId).toBeUndefined();
+    expect(cfg.authToken).toBeUndefined();
+    expect(cfg.enableCalls).toBe(false);
+  });
+});
