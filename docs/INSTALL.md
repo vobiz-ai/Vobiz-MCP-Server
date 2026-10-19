@@ -19,8 +19,8 @@ Calling, messaging and account changes are off by default. To turn them on, add 
 | [OpenAI Codex](#openai-codex) | `codex mcp add vobiz …` or `codex plugin marketplace add vobiz-ai/Vobiz-MCP-Server` |
 | [ChatGPT](#chatgpt) | Plugins → + → Add custom MCP server → `https://mcp.vobiz.ai/mcp` |
 | [Gemini CLI](#gemini-cli) | `gemini extensions install https://github.com/vobiz-ai/Vobiz-MCP-Server` |
-| [Cursor](#cursor) | [One-click install](cursor://anysphere.cursor-deeplink/mcp/install?name=vobiz&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsImdpdGh1Yjp2b2Jpei1haS9Wb2Jpei1NQ1AtU2VydmVyI3YxLjEuMCJdLCJlbnYiOnsiVk9CSVpfQVVUSF9JRCI6IiR7ZW52OlZPQklaX0FVVEhfSUR9IiwiVk9CSVpfQVVUSF9UT0tFTiI6IiR7ZW52OlZPQklaX0FVVEhfVE9LRU59In19) |
-| [VS Code / GitHub Copilot](#vs-code--github-copilot) | [One-click install](vscode:mcp/install?%7B%22name%22%3A%22vobiz%22%2C%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22github%3Avobiz-ai%2FVobiz-MCP-Server%23v1.1.0%22%5D%2C%22env%22%3A%7B%22VOBIZ_AUTH_ID%22%3A%22%24%7Benv%3AVOBIZ_AUTH_ID%7D%22%2C%22VOBIZ_AUTH_TOKEN%22%3A%22%24%7Benv%3AVOBIZ_AUTH_TOKEN%7D%22%7D%7D) |
+| [Cursor](#cursor) | [One-click install](https://cursor.com/en/install-mcp?name=vobiz&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsImdpdGh1Yjp2b2Jpei1haS9Wb2Jpei1NQ1AtU2VydmVyI3YxLjEuMCJdLCJlbnYiOnsiVk9CSVpfQVVUSF9JRCI6IiR7ZW52OlZPQklaX0FVVEhfSUR9IiwiVk9CSVpfQVVUSF9UT0tFTiI6IiR7ZW52OlZPQklaX0FVVEhfVE9LRU59In19) |
+| [VS Code / GitHub Copilot](#vs-code--github-copilot) | [One-click install](https://insiders.vscode.dev/redirect/mcp/install?name=vobiz&config=%7B%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22github%3Avobiz-ai%2FVobiz-MCP-Server%23v1.1.0%22%5D%2C%22env%22%3A%7B%22VOBIZ_AUTH_ID%22%3A%22%24%7Benv%3AVOBIZ_AUTH_ID%7D%22%2C%22VOBIZ_AUTH_TOKEN%22%3A%22%24%7Benv%3AVOBIZ_AUTH_TOKEN%7D%22%7D%7D) |
 | [Windsurf / Devin Desktop](#windsurf--devin-desktop) | `mcp_config.json` |
 | [Zed](#zed) | `context_servers` in settings |
 | [Cline](#cline) | `cline mcp add vobiz …` |
@@ -123,7 +123,7 @@ gemini mcp add -s user --transport http vobiz https://mcp.vobiz.ai/mcp
 
 ## Cursor
 
-[Install in Cursor](cursor://anysphere.cursor-deeplink/mcp/install?name=vobiz&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsImdpdGh1Yjp2b2Jpei1haS9Wb2Jpei1NQ1AtU2VydmVyI3YxLjEuMCJdLCJlbnYiOnsiVk9CSVpfQVVUSF9JRCI6IiR7ZW52OlZPQklaX0FVVEhfSUR9IiwiVk9CSVpfQVVUSF9UT0tFTiI6IiR7ZW52OlZPQklaX0FVVEhfVE9LRU59In19). The link reads `VOBIZ_AUTH_ID` and `VOBIZ_AUTH_TOKEN` from your environment. You can also add the server to `~/.cursor/mcp.json` (global) or `.cursor/mcp.json` (project):
+[Install in Cursor](https://cursor.com/en/install-mcp?name=vobiz&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsImdpdGh1Yjp2b2Jpei1haS9Wb2Jpei1NQ1AtU2VydmVyI3YxLjEuMCJdLCJlbnYiOnsiVk9CSVpfQVVUSF9JRCI6IiR7ZW52OlZPQklaX0FVVEhfSUR9IiwiVk9CSVpfQVVUSF9UT0tFTiI6IiR7ZW52OlZPQklaX0FVVEhfVE9LRU59In19) (or open the deeplink `cursor://anysphere.cursor-deeplink/mcp/install?name=vobiz&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsImdpdGh1Yjp2b2Jpei1haS9Wb2Jpei1NQ1AtU2VydmVyI3YxLjEuMCJdLCJlbnYiOnsiVk9CSVpfQVVUSF9JRCI6IiR7ZW52OlZPQklaX0FVVEhfSUR9IiwiVk9CSVpfQVVUSF9UT0tFTiI6IiR7ZW52OlZPQklaX0FVVEhfVE9LRU59In19`). The link reads `VOBIZ_AUTH_ID` and `VOBIZ_AUTH_TOKEN` from your environment. You can also add the server to `~/.cursor/mcp.json` (global) or `.cursor/mcp.json` (project):
 
 ```json
 {
@@ -148,7 +148,7 @@ Remote: `{ "mcpServers": { "vobiz": { "url": "https://mcp.vobiz.ai/mcp" } } }`.
 
 ## VS Code / GitHub Copilot
 
-- **Install links:** [Install in VS Code](vscode:mcp/install?%7B%22name%22%3A%22vobiz%22%2C%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22github%3Avobiz-ai%2FVobiz-MCP-Server%23v1.1.0%22%5D%2C%22env%22%3A%7B%22VOBIZ_AUTH_ID%22%3A%22%24%7Benv%3AVOBIZ_AUTH_ID%7D%22%2C%22VOBIZ_AUTH_TOKEN%22%3A%22%24%7Benv%3AVOBIZ_AUTH_TOKEN%7D%22%7D%7D) (local, reads your environment) or [Install remote connector](vscode:mcp/install?%7B%22name%22%3A%22vobiz%22%2C%22type%22%3A%22http%22%2C%22url%22%3A%22https%3A%2F%2Fmcp.vobiz.ai%2Fmcp%22%7D).
+- **Install links:** [Install in VS Code](https://insiders.vscode.dev/redirect/mcp/install?name=vobiz&config=%7B%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22github%3Avobiz-ai%2FVobiz-MCP-Server%23v1.1.0%22%5D%2C%22env%22%3A%7B%22VOBIZ_AUTH_ID%22%3A%22%24%7Benv%3AVOBIZ_AUTH_ID%7D%22%2C%22VOBIZ_AUTH_TOKEN%22%3A%22%24%7Benv%3AVOBIZ_AUTH_TOKEN%7D%22%7D%7D) (local, reads your environment) or [Install remote connector](vscode:mcp/install?%7B%22name%22%3A%22vobiz%22%2C%22type%22%3A%22http%22%2C%22url%22%3A%22https%3A%2F%2Fmcp.vobiz.ai%2Fmcp%22%7D).
 - **CLI:** `code --add-mcp '{"name":"vobiz","command":"npx","args":["-y","github:vobiz-ai/Vobiz-MCP-Server#v1.1.0"]}'`
 
 To have VS Code prompt for the token and store it securely, add `.vscode/mcp.json`:

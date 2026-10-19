@@ -142,7 +142,7 @@ You need a Vobiz account, plus its **Auth ID** and **Auth Token** from the overv
 | Gemini CLI | \`gemini extensions install ${repo}\` |
 | Cursor | [One-click install](${links.cursor}) |
 | VS Code / Copilot | [One-click install](${links.vscode}) |
-| Goose | `goose configure` → Add Extension → `npx -y ${spec}` ([deeplink](docs/INSTALL.md#goose)) |
+| Goose | \`goose configure\` → Add Extension → \`npx -y ${spec}\` ([deeplink](docs/INSTALL.md#goose)) |
 | Windsurf, Zed, Cline, JetBrains, Continue, LM Studio, Warp, ChatGPT | [docs/INSTALL.md](docs/INSTALL.md) |
 
 Any other MCP client:

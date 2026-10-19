@@ -72,9 +72,9 @@ You need a Vobiz account, plus its **Auth ID** and **Auth Token** from the overv
 | Claude Code | `/plugin install vobiz --marketplace vobiz-ai/Vobiz-MCP-Server` (MCP server + skills) |
 | OpenAI Codex | `codex mcp add vobiz --env VOBIZ_AUTH_ID=MA_XXXXXXXX --env VOBIZ_AUTH_TOKEN=YOUR_AUTH_TOKEN -- npx -y github:vobiz-ai/Vobiz-MCP-Server#v1.1.0` |
 | Gemini CLI | `gemini extensions install https://github.com/vobiz-ai/Vobiz-MCP-Server` |
-| Cursor | [One-click install](cursor://anysphere.cursor-deeplink/mcp/install?name=vobiz&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsImdpdGh1Yjp2b2Jpei1haS9Wb2Jpei1NQ1AtU2VydmVyI3YxLjEuMCJdLCJlbnYiOnsiVk9CSVpfQVVUSF9JRCI6IiR7ZW52OlZPQklaX0FVVEhfSUR9IiwiVk9CSVpfQVVUSF9UT0tFTiI6IiR7ZW52OlZPQklaX0FVVEhfVE9LRU59In19) |
-| VS Code / Copilot | [One-click install](vscode:mcp/install?%7B%22name%22%3A%22vobiz%22%2C%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22github%3Avobiz-ai%2FVobiz-MCP-Server%23v1.1.0%22%5D%2C%22env%22%3A%7B%22VOBIZ_AUTH_ID%22%3A%22%24%7Benv%3AVOBIZ_AUTH_ID%7D%22%2C%22VOBIZ_AUTH_TOKEN%22%3A%22%24%7Benv%3AVOBIZ_AUTH_TOKEN%7D%22%7D%7D) |
-| Goose | [One-click install](goose://extension?cmd=npx&arg=-y&arg=github%3Avobiz-ai%2FVobiz-MCP-Server%23v1.1.0&id=vobiz&name=Vobiz&description=Vobiz%20calls%2C%20numbers%2C%20SIP%20and%20messaging&env=VOBIZ_AUTH_ID%3DVobiz%20Auth%20ID&env=VOBIZ_AUTH_TOKEN%3DVobiz%20Auth%20Token&timeout=300) |
+| Cursor | [One-click install](https://cursor.com/en/install-mcp?name=vobiz&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsImdpdGh1Yjp2b2Jpei1haS9Wb2Jpei1NQ1AtU2VydmVyI3YxLjEuMCJdLCJlbnYiOnsiVk9CSVpfQVVUSF9JRCI6IiR7ZW52OlZPQklaX0FVVEhfSUR9IiwiVk9CSVpfQVVUSF9UT0tFTiI6IiR7ZW52OlZPQklaX0FVVEhfVE9LRU59In19) |
+| VS Code / Copilot | [One-click install](https://insiders.vscode.dev/redirect/mcp/install?name=vobiz&config=%7B%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22github%3Avobiz-ai%2FVobiz-MCP-Server%23v1.1.0%22%5D%2C%22env%22%3A%7B%22VOBIZ_AUTH_ID%22%3A%22%24%7Benv%3AVOBIZ_AUTH_ID%7D%22%2C%22VOBIZ_AUTH_TOKEN%22%3A%22%24%7Benv%3AVOBIZ_AUTH_TOKEN%7D%22%7D%7D) |
+| Goose | `goose configure` → Add Extension → `npx -y github:vobiz-ai/Vobiz-MCP-Server#v1.1.0` ([deeplink](docs/INSTALL.md#goose)) |
 | Windsurf, Zed, Cline, JetBrains, Continue, LM Studio, Warp, ChatGPT | [docs/INSTALL.md](docs/INSTALL.md) |
 
 Any other MCP client:
