@@ -37,18 +37,20 @@ jobs:
           done
           [ "$(node -p "require('./server.json').packages[0].version")" = "$TAG" ] || { echo "server.json packages[0].version must be $TAG"; exit 1; }
       - run: npm run check
-      - name: Publish to npm
-        if: env.HAS_NPM_TOKEN == 'true'
-        run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-      - name: Publish to the MCP Registry
+      # The NPM_TOKEN is a stage-only token: the release is staged on npm and goes live once a maintainer
+      # approves it with 2FA (npmjs.com, or `npm stage approve <id>`). Then run the "MCP Registry" workflow.
+      - name: Stage the npm release (approve with 2FA to publish)
         if: env.HAS_NPM_TOKEN == 'true'
         run: |
-          curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_linux_amd64.tar.gz" | tar xz mcp-publisher
-          ./mcp-publisher login github-oidc
-          ./mcp-publisher publish
+          npx -y npm@12 stage publish . --provenance --access public | tee stage.txt
+          {
+            echo "### npm release staged: @vobiz/mcp@${GITHUB_REF_NAME#v}"
+            echo
+            echo "Approve it with 2FA on npmjs.com (Packages → @vobiz/mcp → Staged) or run \`npm stage list @vobiz/mcp\` then \`npm stage approve <id>\`."
+            echo "After approval, run the **MCP Registry** workflow."
+          } >> "$GITHUB_STEP_SUMMARY"
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Build the desktop extension (.mcpb)
         run: |

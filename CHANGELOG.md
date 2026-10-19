@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.4
+
+- First npm release of `@vobiz/mcp`. Releases are staged on npm and go live after maintainer 2FA approval. The new **MCP Registry** workflow then lists the server.
+- `server.json` lists the hosted connector `https://mcp.vobiz.ai/mcp` as a remote.
+
 ## 1.1.3
 
 - Fix: **Allow access** on the hosted sign-in page now completes in browsers. The page's `form-action` policy now allows the client's callback origin, because browsers apply it to the redirect after the form post.

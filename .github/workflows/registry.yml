@@ -1,0 +1,29 @@
+name: MCP Registry
+
+# Publishes server.json to the official MCP Registry (io.github.vobiz-ai/vobiz-mcp).
+# Run it after the npm release for the same version has been approved and is live.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    if: github.repository == 'vobiz-ai/Vobiz-MCP-Server'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: The npm package for this version must be live
+        run: |
+          V=$(node -p "require('./server.json').packages[0].version")
+          npm view "@vobiz/mcp@$V" version || { echo "@vobiz/mcp@$V is not on npm yet: approve the staged release first."; exit 1; }
+      - name: Publish to the MCP Registry
+        run: |
+          curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_linux_amd64.tar.gz" | tar xz mcp-publisher
+          ./mcp-publisher login github-oidc
+          ./mcp-publisher publish
