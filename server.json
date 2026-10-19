@@ -3,15 +3,15 @@
   "name": "io.github.vobiz-ai/vobiz-mcp",
   "title": "Vobiz",
   "description": "Vobiz voice calls, IVRs, call records, numbers, SIP trunks, SMS/MMS/RCS and Vobiz skills.",
-  "version": "1.1.1",
-  "websiteUrl": "https://vobiz.ai/docs/resources/account-mcp",
+  "version": "1.1.2",
+  "websiteUrl": "https://www.vobiz.ai/docs/resources/vobiz-mcp",
   "repository": {
     "url": "https://github.com/vobiz-ai/Vobiz-MCP-Server",
     "source": "github"
   },
   "icons": [
     {
-      "src": "https://vobiz.ai/favicon.svg",
+      "src": "https://www.vobiz.ai/favicon.svg",
       "mimeType": "image/svg+xml",
       "sizes": [
         "any"
@@ -22,7 +22,7 @@
     {
       "registryType": "npm",
       "identifier": "@vobiz/mcp",
-      "version": "1.1.1",
+      "version": "1.1.2",
       "transport": {
         "type": "stdio"
       },

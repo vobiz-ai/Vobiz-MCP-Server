@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.2
+
+- Every Vobiz link uses `https://www.vobiz.ai`, the canonical host. The docs page is now `https://www.vobiz.ai/docs/resources/vobiz-mcp`.
+- `npm run test:live:remote` runs the OAuth sign-in, tools and token refresh against a deployed connector (default `https://mcp.vobiz.ai`).
+
 ## 1.1.1
 
 - Point the bundled Vobiz Docs MCP server at `https://www.vobiz.ai/docs/mcp`. MCP clients do not follow the apex-domain redirect on POST.

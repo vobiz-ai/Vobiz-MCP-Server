@@ -18,10 +18,10 @@ The other `vobiz-*` skills teach *how* to call an endpoint. This skill decides *
 
 - **Interview first, recommend second.** Do not propose an architecture until you know direction, who speaks on the call, where the callers are, and the volume. One wrong assumption here costs the customer weeks.
 - **Ask one question at a time**, and give your recommended answer with each question. Walk the decision tree branch by branch, resolving the dependencies between answers before moving to the next branch.
-- **Look it up instead of asking.** If the answer is in the Vobiz docs (an endpoint's shape, a limit, a page), search `https://vobiz.ai/docs` or the MCP server at `https://www.vobiz.ai/docs/mcp`. Ask the customer only what only they know.
-- **Vobiz is telephony infrastructure.** It carries calls, numbers, and audio for the customer's app or AI agent. Describe it as the rails that power their voice AI, never as "our agent". Lead with what fits. If a capability is not documented, say "confirm with Vobiz" and point to [contact support](https://vobiz.ai/docs/faq/contact-support); do not describe Vobiz as lacking it.
+- **Look it up instead of asking.** If the answer is in the Vobiz docs (an endpoint's shape, a limit, a page), search `https://www.vobiz.ai/docs` or the MCP server at `https://www.vobiz.ai/docs/mcp`. Ask the customer only what only they know.
+- **Vobiz is telephony infrastructure.** It carries calls, numbers, and audio for the customer's app or AI agent. Describe it as the rails that power their voice AI, never as "our agent". Lead with what fits. If a capability is not documented, say "confirm with Vobiz" and point to [contact support](https://www.vobiz.ai/docs/faq/contact-support); do not describe Vobiz as lacking it.
 - **Do not invent fields, endpoints, limits, or prices.** Everything you state must come from a docs page. Link the page. Prices and rates live on the pricing calculator and the SIP vs WebSockets page; point there instead of quoting numbers that go stale.
-- **Never list IP addresses.** Point to [IP Whitelisting](https://vobiz.ai/docs/concepts/ip-whitelisting) with the right anchor.
+- **Never list IP addresses.** Point to [IP Whitelisting](https://www.vobiz.ai/docs/concepts/ip-whitelisting) with the right anchor.
 - **Money and real calls need explicit confirmation.** Purchases, balance transfers, call placement, number release, and deletions are never presented as safe to run without the customer's own credentials and a yes.
 
 ## Step 1 - Classify the ask
@@ -50,10 +50,10 @@ Ask in this order. Each question lists why it matters and the default to recomme
 
 **"Will calls come in to a number, go out from your system, or both?"**
 
-- Inbound needs a **number routed somewhere** - an Application (`answer_url`) or an inbound trunk (primary origination URI). See [Receive an inbound call](https://vobiz.ai/docs/guides/receive-inbound-call).
+- Inbound needs a **number routed somewhere** - an Application (`answer_url`) or an inbound trunk (primary origination URI). See [Receive an inbound call](https://www.vobiz.ai/docs/guides/receive-inbound-call).
 - Outbound needs a **caller ID you own on Vobiz** and either the Call API, a campaign, or an outbound trunk with credentials.
 - Both on one AI platform usually means two configurations on the platform side: an inbound gateway allow-listing every Vobiz SIP signalling IP, and an outbound credential with your trunk's SIP domain. See `vobiz-ai-voice-agents`.
-- **Trial accounts are outbound-only.** Inbound needs KYC and a purchased number: [Trial inbound](https://vobiz.ai/docs/faq/trial-inbound).
+- **Trial accounts are outbound-only.** Inbound needs KYC and a purchased number: [Trial inbound](https://www.vobiz.ai/docs/faq/trial-inbound).
 
 Default: start with the direction that proves value fastest, which is usually outbound (no number routing to debug).
 
@@ -64,17 +64,17 @@ Default: start with the direction that proves value fastest, which is usually ou
 | Answer | Path |
 |---|---|
 | AI agent | Family A. Go to 2.3. |
-| Human agent in a browser or softphone | Endpoints + Applications; see [WebRTC setup](https://vobiz.ai/docs/integrations/webrtc-application-setup) and the CRM integrations (Zendesk, Freshdesk, HubSpot, Pipedrive, Zoho, Salesforce, ServiceNow, ClickUp) under `/integrations`. |
+| Human agent in a browser or softphone | Endpoints + Applications; see [WebRTC setup](https://www.vobiz.ai/docs/integrations/webrtc-application-setup) and the CRM integrations (Zendesk, Freshdesk, HubSpot, Pipedrive, Zoho, Salesforce, ServiceNow, ClickUp) under `/integrations`. |
 | Human agent on a PBX or desk phone | SIP trunk to the PBX; family D. |
-| Menu, prompts, DTMF, TTS | VobizXML: `<Gather>`, `<Speak>`, `<Play>`, `<Dial>`. See [Do you support IVR?](https://vobiz.ai/docs/faq/ivr). |
-| Nobody - a reminder, OTP, alert | VobizXML `<Speak>`/`<Play>` on an outbound call, or a campaign if it is bulk. Examples: [appointment reminder](https://vobiz.ai/docs/examples/vobiz-appointment-reminder-xml-python), [OTP call](https://vobiz.ai/docs/examples/vobiz-otp-call-xml-python). |
-| Mixed - AI first, human on escalation | AI path plus a transfer method (2.8). See [Call escalation](https://vobiz.ai/docs/solutions/call-escalation) and [agent-to-agent handoff](https://vobiz.ai/docs/solutions/agent-to-agent-handoff). |
+| Menu, prompts, DTMF, TTS | VobizXML: `<Gather>`, `<Speak>`, `<Play>`, `<Dial>`. See [Do you support IVR?](https://www.vobiz.ai/docs/faq/ivr). |
+| Nobody - a reminder, OTP, alert | VobizXML `<Speak>`/`<Play>` on an outbound call, or a campaign if it is bulk. Examples: [appointment reminder](https://www.vobiz.ai/docs/examples/vobiz-appointment-reminder-xml-python), [OTP call](https://www.vobiz.ai/docs/examples/vobiz-otp-call-xml-python). |
+| Mixed - AI first, human on escalation | AI path plus a transfer method (2.8). See [Call escalation](https://www.vobiz.ai/docs/solutions/call-escalation) and [agent-to-agent handoff](https://www.vobiz.ai/docs/solutions/agent-to-agent-handoff). |
 
 ### 2.3 AI agent: platform and transport (family A only)
 
 **"Do you already run an AI voice platform, or are you building the pipeline yourself?"**
 
-Then pick the transport. This is the single most consequential decision for an AI use case; read [SIP vs WebSockets](https://vobiz.ai/docs/concepts/sip-vs-websockets) before recommending.
+Then pick the transport. This is the single most consequential decision for an AI use case; read [SIP vs WebSockets](https://www.vobiz.ai/docs/concepts/sip-vs-websockets) before recommending.
 
 | Customer has | Transport | Why |
 |---|---|---|
@@ -85,13 +85,13 @@ Then pick the transport. This is the single most consequential decision for an A
 Questions that settle "not decided":
 
 - **"Is the team telephony/DevOps or Python/Node?"** SIP suits people comfortable with trunks and IP ACLs; WebSocket suits application engineers.
-- **"How many calls a month?"** The docs put the crossover around 50,000 calls/month: below it, a managed platform's premium is usually worth the saved engineering; above it, owning the pipeline over WebSocket pays off. Point to the [pricing calculator](https://vobiz.ai/docs/resources/calculator) for the customer's own numbers.
+- **"How many calls a month?"** The docs put the crossover around 50,000 calls/month: below it, a managed platform's premium is usually worth the saved engineering; above it, owning the pipeline over WebSocket pays off. Point to the [pricing calculator](https://www.vobiz.ai/docs/resources/calculator) for the customer's own numbers.
 - **"Do you need live transfer to a human, or a PBX in the loop?"** Both work on either path, but PBX integration is SIP-native.
 - **"Latency or Indian-language priorities?"** OpenAI Realtime for the shortest end-to-end loop over SIP; Bolna, Sarvam, or Ultravox for Indian-language coverage. See the "When to recommend which" list in `vobiz-ai-voice-agents`.
 
 Default: managed platform over SIP for a first deployment; WebSocket when the customer already has a pipeline or has outgrown platform fees.
 
-Recording an AI call is separate from the transport: `<Record>` with stream, or trunk recording with the `recording.completed` webhook. See [Stream with Record](https://vobiz.ai/docs/xml/record/stream-with-record) and [Trunk webhooks](https://vobiz.ai/docs/trunks/webhook).
+Recording an AI call is separate from the transport: `<Record>` with stream, or trunk recording with the `recording.completed` webhook. See [Stream with Record](https://www.vobiz.ai/docs/xml/record/stream-with-record) and [Trunk webhooks](https://www.vobiz.ai/docs/trunks/webhook).
 
 ### 2.4 Geography and compliance
 
@@ -99,7 +99,7 @@ Recording an AI call is separate from the transport: `<Record>` with stream, or 
 
 India changes the plan more than any other answer. Resolve all of this before provisioning anything:
 
-- **India-registered business calling India:** domestic routes. Requires **KYC** before renting numbers or placing calls, a **Vobiz India number as caller ID**, and **media anchoring** (both legs stay in India; a bridged international leg fails with hangup cause `2070` Violates Media Anchoring, shown as `violates_media_anchoring` on the regulations page). See [India calling regulations](https://vobiz.ai/docs/compliance/india/calling-regulations) and [Domestic calling](https://vobiz.ai/docs/faq/domestic-calling-india).
+- **India-registered business calling India:** domestic routes. Requires **KYC** before renting numbers or placing calls, a **Vobiz India number as caller ID**, and **media anchoring** (both legs stay in India; a bridged international leg fails with hangup cause `2070` Violates Media Anchoring, shown as `violates_media_anchoring` on the regulations page). See [India calling regulations](https://www.vobiz.ai/docs/compliance/india/calling-regulations) and [Domestic calling](https://www.vobiz.ai/docs/faq/domestic-calling-india).
 - **Business outside India calling India:** international routes and a non-Indian caller ID. Say this early; it changes the customer's expectations.
 - **Outbound commercial calls in India** must use the right number series, and the wrong series is itself a violation:
 
@@ -111,7 +111,7 @@ India changes the plan more than any other answer. Resolve all of this before pr
 | **1800** | Toll-free inbound | Inbound only |
 | Standard DID | Inbound, support lines, caller ID for non-regulated traffic | NDNC applies to all commercial outbound; promotional outreach from a standard number is itself a violation |
 
-Read [Number series](https://vobiz.ai/docs/faq/number-series), [DLT entity registration](https://vobiz.ai/docs/best-practices/dlt-registration) (organisation, once), [DID provisioning](https://vobiz.ai/docs/best-practices/did-provisioning) (per number), [140 & 160 acquisition](https://vobiz.ai/docs/best-practices/140-160-acquisition), and [UCC & NDNC](https://vobiz.ai/docs/compliance/india/ucc). 140, 160, and 92 series are requested through support, not the inventory API.
+Read [Number series](https://www.vobiz.ai/docs/faq/number-series), [DLT entity registration](https://www.vobiz.ai/docs/best-practices/dlt-registration) (organisation, once), [DID provisioning](https://www.vobiz.ai/docs/best-practices/did-provisioning) (per number), [140 & 160 acquisition](https://www.vobiz.ai/docs/best-practices/140-160-acquisition), and [UCC & NDNC](https://www.vobiz.ai/docs/compliance/india/ucc). 140, 160, and 92 series are requested through support, not the inventory API.
 
 - **Consent and DND:** Vobiz scrubs regulated outbound against NDNC and blocks DND numbers without documented consent. Consent records must be no older than 6 months. Ask how the customer collects and stores consent before they build a dialler.
 
@@ -121,10 +121,10 @@ Default: for an Indian business, sequence the project as KYC → DLT (if 140/160
 
 **"How many simultaneous calls at peak, and how many new calls per second?"**
 
-- **Concurrency** = simultaneous live calls. Exceeding it rejects the next call with `429` or SIP `503`. Size it as calls per hour × average call duration. See [Concurrency](https://vobiz.ai/docs/faq/concurrency).
-- **CPS** = new call attempts per second; flood protection. See [CPS](https://vobiz.ai/docs/faq/cps) and the [CPS & concurrency visualizer](https://vobiz.ai/docs/resources/cps-concurrency-visualizer).
-- Both are purchased: [Purchase concurrency and CPS](https://vobiz.ai/docs/faq/purchase-concurrency-cps). On a trunk they also exist as `cps_limit` and `concurrent_calls_limit`. 140 and 160 numbers use dedicated capacity provisioned separately from the central pool, per [140 & 160 acquisition](https://vobiz.ai/docs/best-practices/140-160-acquisition).
-- Campaign pacing (daily caps, cooldown, retries, caller-ID rotation) protects carrier reputation; read [How an outbound campaign manager works](https://vobiz.ai/docs/best-practices/outbound-campaign-manager) and [Number health](https://vobiz.ai/docs/best-practices/number-health-guide) before sizing a dialler.
+- **Concurrency** = simultaneous live calls. Exceeding it rejects the next call with `429` or SIP `503`. Size it as calls per hour × average call duration. See [Concurrency](https://www.vobiz.ai/docs/faq/concurrency).
+- **CPS** = new call attempts per second; flood protection. See [CPS](https://www.vobiz.ai/docs/faq/cps) and the [CPS & concurrency visualizer](https://www.vobiz.ai/docs/resources/cps-concurrency-visualizer).
+- Both are purchased: [Purchase concurrency and CPS](https://www.vobiz.ai/docs/faq/purchase-concurrency-cps). On a trunk they also exist as `cps_limit` and `concurrent_calls_limit`. 140 and 160 numbers use dedicated capacity provisioned separately from the central pool, per [140 & 160 acquisition](https://www.vobiz.ai/docs/best-practices/140-160-acquisition).
+- Campaign pacing (daily caps, cooldown, retries, caller-ID rotation) protects carrier reputation; read [How an outbound campaign manager works](https://www.vobiz.ai/docs/best-practices/outbound-campaign-manager) and [Number health](https://www.vobiz.ai/docs/best-practices/number-health-guide) before sizing a dialler.
 
 Default: start with the account defaults, measure with CDRs, then buy capacity. Do not let a customer launch a campaign against default limits without saying what will happen.
 
@@ -132,7 +132,7 @@ Default: start with the account defaults, measure with CDRs, then buy capacity. 
 
 **"Is this for one business, or do you serve many customers who each need their own numbers and billing?"**
 
-One business: skip. Many customers: read [Sub-accounts vs partner accounts](https://vobiz.ai/docs/concepts/sub-accounts-vs-partner-accounts) and decide on five things:
+One business: skip. Many customers: read [Sub-accounts vs partner accounts](https://www.vobiz.ai/docs/concepts/sub-accounts-vs-partner-accounts) and decide on five things:
 
 | | Sub-account (`SA_`) | Partner child account (`MA_` under a partner) |
 |---|---|---|
@@ -148,15 +148,15 @@ Default: sub-accounts for a SaaS that wants one bill and its own pricing; partne
 
 **"Is this voice only, or does WhatsApp belong in the flow?"**
 
-WhatsApp on Vobiz is a BSP integration with its own rules: the 24-hour service window, Meta-approved templates for the first message, a number attached to exactly one provider at a time, and `message.inbound` / `message.status` webhooks. See [WhatsApp introduction](https://vobiz.ai/docs/whatsapp/getting-started/introduction) and [Messaging](https://vobiz.ai/docs/whatsapp/messaging), then hand off to `vobiz-whatsapp`.
+WhatsApp on Vobiz is a BSP integration with its own rules: the 24-hour service window, Meta-approved templates for the first message, a number attached to exactly one provider at a time, and `message.inbound` / `message.status` webhooks. See [WhatsApp introduction](https://www.vobiz.ai/docs/whatsapp/getting-started/introduction) and [Messaging](https://www.vobiz.ai/docs/whatsapp/messaging), then hand off to `vobiz-whatsapp`.
 
 ### 2.8 Transfer, recording, and data
 
 Ask these three only when the earlier answers make them relevant.
 
-- **"Does a call ever need to move to another person or system?"** Three methods: `<Dial>` in XML (bridge to a number, SIP URI, or endpoint), the REST [transfer call](https://vobiz.ai/docs/call/transfer-call) endpoint for a live call, or SIP REFER for verified SIP trunks. See [Is call transfer supported?](https://vobiz.ai/docs/faq/call-transfer).
+- **"Does a call ever need to move to another person or system?"** Three methods: `<Dial>` in XML (bridge to a number, SIP URI, or endpoint), the REST [transfer call](https://www.vobiz.ai/docs/call/transfer-call) endpoint for a live call, or SIP REFER for verified SIP trunks. See [Is call transfer supported?](https://www.vobiz.ai/docs/faq/call-transfer).
 - **"Do you need recordings or transcripts?"** `<Record recordSession="true">` on an Application call, the REST record action mid-call, or recording on a trunk with the `recording.completed` webhook. Recordings are listed and downloaded under `/recording`. Check whether the customer's data policy allows storing audio.
-- **"What do you need after the call?"** CDRs arrive after a call completes with 43 fields including `mos`, `jitter`, `packet_loss`, `billsec`, and hangup attribution; real-time events come from trunk webhooks or the Application `hangup_url`. See `vobiz-cdr`, [Hangup causes](https://vobiz.ai/docs/concepts/hangup-causes), and [Post-call analytics](https://vobiz.ai/docs/solutions/post-call-analytics).
+- **"What do you need after the call?"** CDRs arrive after a call completes with 43 fields including `mos`, `jitter`, `packet_loss`, `billsec`, and hangup attribution; real-time events come from trunk webhooks or the Application `hangup_url`. See `vobiz-cdr`, [Hangup causes](https://www.vobiz.ai/docs/concepts/hangup-causes), and [Post-call analytics](https://www.vobiz.ai/docs/solutions/post-call-analytics).
 
 ### 2.9 Timeline and team
 
@@ -183,7 +183,7 @@ Every Vobiz design is some combination of these. Name which ones the customer ne
 
 Application vs trunk is the question customers get wrong most often. The rule: **Application when Vobiz asks your server what to do next; trunk when Vobiz hands the call to a SIP system that already knows.**
 
-Trunk field pair that causes silent calls: `transport` sets signalling (udp/tcp/tls) and `secure` sets SRTP media. A primary origination URI's transport overrides the trunk's. See [Trunk object](https://vobiz.ai/docs/trunks/trunk-object).
+Trunk field pair that causes silent calls: `transport` sets signalling (udp/tcp/tls) and `secure` sets SRTP media. A primary origination URI's transport overrides the trunk's. See [Trunk object](https://www.vobiz.ai/docs/trunks/trunk-object).
 
 ## Step 4 - Deliver the solution brief
 
@@ -226,25 +226,25 @@ If any line in "Open points" is empty because you guessed, go back and search th
 
 The ten asks that come up most. Each is a starting answer; still run the interview.
 
-**AI receptionist on a managed platform (Vapi, Retell, ElevenLabs).** Buy a DID → create an inbound trunk whose primary origination URI is the platform's SIP URI (the vendor integration page states the exact format to paste - copy it from there) → assign the number to the trunk → platform allow-lists the Vobiz gateway per [IP Whitelisting](https://vobiz.ai/docs/concepts/ip-whitelisting). Outbound from the same platform: outbound trunk + credentials, platform dials via `<trunk_id>.sip.vobiz.ai`. Pages: `/integrations/<vendor>-dashboard`, [Inbound AI agent guide](https://vobiz.ai/docs/guides/ai-voice-agent/inbound), [Outbound AI agent guide](https://vobiz.ai/docs/guides/ai-voice-agent/outbound). Skills: `vobiz-ai-voice-agents`, `vobiz-sip-trunking`.
+**AI receptionist on a managed platform (Vapi, Retell, ElevenLabs).** Buy a DID → create an inbound trunk whose primary origination URI is the platform's SIP URI (the vendor integration page states the exact format to paste - copy it from there) → assign the number to the trunk → platform allow-lists the Vobiz gateway per [IP Whitelisting](https://www.vobiz.ai/docs/concepts/ip-whitelisting). Outbound from the same platform: outbound trunk + credentials, platform dials via `<trunk_id>.sip.vobiz.ai`. Pages: `/integrations/<vendor>-dashboard`, [Inbound AI agent guide](https://www.vobiz.ai/docs/guides/ai-voice-agent/inbound), [Outbound AI agent guide](https://www.vobiz.ai/docs/guides/ai-voice-agent/outbound). Skills: `vobiz-ai-voice-agents`, `vobiz-sip-trunking`.
 
-**Self-hosted AI agent (Pipecat, custom).** Buy a DID → Application with `answer_url` → server returns `<Stream bidirectional="true" keepCallAlive="true">wss://…</Stream>` → attach number to the Application. Audio defaults to 8 kHz; match `start.mediaFormat`; the authoritative end-of-call signal is the `Event=Hangup` POST to `hangup_url`, not the socket closing. Pages: [Stream](https://vobiz.ai/docs/xml/stream), [Pipecat](https://vobiz.ai/docs/integrations/pipecat), [Gemini Live](https://vobiz.ai/docs/integrations/gemini-live), [WebSockets](https://vobiz.ai/docs/integrations/websockets). Skills: `vobiz-audio-streams`, `vobiz-applications-endpoints`.
+**Self-hosted AI agent (Pipecat, custom).** Buy a DID → Application with `answer_url` → server returns `<Stream bidirectional="true" keepCallAlive="true">wss://…</Stream>` → attach number to the Application. Audio defaults to 8 kHz; match `start.mediaFormat`; the authoritative end-of-call signal is the `Event=Hangup` POST to `hangup_url`, not the socket closing. Pages: [Stream](https://www.vobiz.ai/docs/xml/stream), [Pipecat](https://www.vobiz.ai/docs/integrations/pipecat), [Gemini Live](https://www.vobiz.ai/docs/integrations/gemini-live), [WebSockets](https://www.vobiz.ai/docs/integrations/websockets). Skills: `vobiz-audio-streams`, `vobiz-applications-endpoints`.
 
-**OpenAI Realtime.** SIP over TLS with SRTP: origination URI transport TLS, trunk `secure: true`. The symptom of a missed `secure` is a connected, billed, silent call. Page: [OpenAI Realtime](https://vobiz.ai/docs/integrations/openai-realtime).
+**OpenAI Realtime.** SIP over TLS with SRTP: origination URI transport TLS, trunk `secure: true`. The symptom of a missed `secure` is a connected, billed, silent call. Page: [OpenAI Realtime](https://www.vobiz.ai/docs/integrations/openai-realtime).
 
-**Cloud IVR with human fallback.** Application → `<Gather>` menu with `<Speak>` prompts → `<Dial>` to an endpoint, number, or SIP URI on the chosen option → fallback `<Speak>` + `<Hangup>`. Use `executionTimeout` on `<Gather>` (not `timeout`). Pages: [IVR example](https://vobiz.ai/docs/examples/vobiz-ivr-xml-python), [Cloud IVR](https://vobiz.ai/docs/solutions/cloud-ivr), [XML builder](https://vobiz.ai/docs/xml-builder). Skill: `vobiz-voice-xml`.
+**Cloud IVR with human fallback.** Application → `<Gather>` menu with `<Speak>` prompts → `<Dial>` to an endpoint, number, or SIP URI on the chosen option → fallback `<Speak>` + `<Hangup>`. Use `executionTimeout` on `<Gather>` (not `timeout`). Pages: [IVR example](https://www.vobiz.ai/docs/examples/vobiz-ivr-xml-python), [Cloud IVR](https://www.vobiz.ai/docs/solutions/cloud-ivr), [XML builder](https://www.vobiz.ai/docs/xml-builder). Skill: `vobiz-voice-xml`.
 
-**Appointment reminders, OTP by voice, surveys.** Call API with `answer_url` → `<Speak>`/`<Gather>` → `hangup_url` for the result. Add `machine_detection` for voicemail. In India, transactional traffic belongs on a 160-series caller ID where the customer is eligible (see [Number series](https://vobiz.ai/docs/faq/number-series)), never on a promotional 140 number. Pages: [Make a call](https://vobiz.ai/docs/call/make-call), [Machine detection](https://vobiz.ai/docs/call/machine-detection), the `/examples` pages for reminders, OTP, and survey. Skills: `vobiz-voice-calls`, `vobiz-voice-xml`.
+**Appointment reminders, OTP by voice, surveys.** Call API with `answer_url` → `<Speak>`/`<Gather>` → `hangup_url` for the result. Add `machine_detection` for voicemail. In India, transactional traffic belongs on a 160-series caller ID where the customer is eligible (see [Number series](https://www.vobiz.ai/docs/faq/number-series)), never on a promotional 140 number. Pages: [Make a call](https://www.vobiz.ai/docs/call/make-call), [Machine detection](https://www.vobiz.ai/docs/call/machine-detection), the `/examples` pages for reminders, OTP, and survey. Skills: `vobiz-voice-calls`, `vobiz-voice-xml`.
 
-**Bulk outbound campaign.** Campaign Agent (answer/hangup URLs, reused) → caller-ID pool with rotation → CSV contacts → CPS, concurrency, daily window, retry budget → launch; drive it by API through the Campaign Manager endpoints under `/campaign-manager`. In India: 140 series for promotional, 160 for service, DLT first, NDNC consent on file. Pages: [Campaigns](https://vobiz.ai/docs/platform/campaigns/list), [Campaign manager guide](https://vobiz.ai/docs/best-practices/outbound-campaign-manager), [Automated outbound calling](https://vobiz.ai/docs/solutions/automated-outbound-calling).
+**Bulk outbound campaign.** Campaign Agent (answer/hangup URLs, reused) → caller-ID pool with rotation → CSV contacts → CPS, concurrency, daily window, retry budget → launch; drive it by API through the Campaign Manager endpoints under `/campaign-manager`. In India: 140 series for promotional, 160 for service, DLT first, NDNC consent on file. Pages: [Campaigns](https://www.vobiz.ai/docs/platform/campaigns/list), [Campaign manager guide](https://www.vobiz.ai/docs/best-practices/outbound-campaign-manager), [Automated outbound calling](https://www.vobiz.ai/docs/solutions/automated-outbound-calling).
 
-**Browser or CRM calling for human agents.** Application for the call logic → Endpoint per agent (SIP username/password; a custom WebRTC client registers with those at `registrar.vobiz.ai`) → DID attached to the Application → XML `<Dial>` to the endpoint's `sip_uri` for inbound. For Zendesk, Freshdesk, HubSpot, Pipedrive, Zoho, Salesforce, ServiceNow, or ClickUp, use the ready integration page. Pages: [WebRTC setup](https://vobiz.ai/docs/integrations/webrtc-application-setup), [Contact centre](https://vobiz.ai/docs/solutions/contact-centre). Skill: `vobiz-applications-endpoints`.
+**Browser or CRM calling for human agents.** Application for the call logic → Endpoint per agent (SIP username/password; a custom WebRTC client registers with those at `registrar.vobiz.ai`) → DID attached to the Application → XML `<Dial>` to the endpoint's `sip_uri` for inbound. For Zendesk, Freshdesk, HubSpot, Pipedrive, Zoho, Salesforce, ServiceNow, or ClickUp, use the ready integration page. Pages: [WebRTC setup](https://www.vobiz.ai/docs/integrations/webrtc-application-setup), [Contact centre](https://www.vobiz.ai/docs/solutions/contact-centre). Skill: `vobiz-applications-endpoints`.
 
-**Connect a PBX, SBC, or existing carrier (BYOC).** Collect the customer's SIP signalling IPs and transport → trunk with IP ACL (static IPs) or credentials (dynamic IPs, NAT) → origination URIs with priority for failover and weight for load split → allow-list Vobiz per [IP Whitelisting](https://vobiz.ai/docs/concepts/ip-whitelisting). Every originating IP must be listed or calls fail with `403`. Pages: [BYOC](https://vobiz.ai/docs/concepts/bring-your-own-carrier), [SIP trunking](https://vobiz.ai/docs/concepts/sip-trunking), [3CX](https://vobiz.ai/docs/integrations/3cx). Skill: `vobiz-sip-trunking`.
+**Connect a PBX, SBC, or existing carrier (BYOC).** Collect the customer's SIP signalling IPs and transport → trunk with IP ACL (static IPs) or credentials (dynamic IPs, NAT) → origination URIs with priority for failover and weight for load split → allow-list Vobiz per [IP Whitelisting](https://www.vobiz.ai/docs/concepts/ip-whitelisting). Every originating IP must be listed or calls fail with `403`. Pages: [BYOC](https://www.vobiz.ai/docs/concepts/bring-your-own-carrier), [SIP trunking](https://www.vobiz.ai/docs/concepts/sip-trunking), [3CX](https://www.vobiz.ai/docs/integrations/3cx). Skill: `vobiz-sip-trunking`.
 
-**Multi-tenant platform.** Decide sub-account vs partner (2.6) → provision per customer with the parent credentials → `customer_use` sub-accounts or partner KYC sessions before calls → assign numbers per tenant → per-tenant CDRs for billing. Pages: [Sub-accounts vs partner accounts](https://vobiz.ai/docs/concepts/sub-accounts-vs-partner-accounts), [Partner flow](https://vobiz.ai/docs/partner/flow), [Sub-account onboarding](https://vobiz.ai/docs/sub-accounts/onboarding-flow). Skills: `vobiz-sub-accounts`, `vobiz-partner-api`.
+**Multi-tenant platform.** Decide sub-account vs partner (2.6) → provision per customer with the parent credentials → `customer_use` sub-accounts or partner KYC sessions before calls → assign numbers per tenant → per-tenant CDRs for billing. Pages: [Sub-accounts vs partner accounts](https://www.vobiz.ai/docs/concepts/sub-accounts-vs-partner-accounts), [Partner flow](https://www.vobiz.ai/docs/partner/flow), [Sub-account onboarding](https://www.vobiz.ai/docs/sub-accounts/onboarding-flow). Skills: `vobiz-sub-accounts`, `vobiz-partner-api`.
 
-**Number masking (marketplace, delivery).** Call API or inbound Application → `<Dial>` with the masked Vobiz number as caller ID → both parties see only the Vobiz number → CDR for the audit trail. Page: [Two-way number masking example](https://vobiz.ai/docs/examples/vobiz-two-way-number-masking-python), [Number masking](https://vobiz.ai/docs/solutions/number-masking).
+**Number masking (marketplace, delivery).** Call API or inbound Application → `<Dial>` with the masked Vobiz number as caller ID → both parties see only the Vobiz number → CDR for the audit trail. Page: [Two-way number masking example](https://www.vobiz.ai/docs/examples/vobiz-two-way-number-masking-python), [Number masking](https://www.vobiz.ai/docs/solutions/number-masking).
 
 ## Hand off to the domain skill
 
@@ -272,7 +272,7 @@ Once the path is chosen, load exactly the skills the build needs:
 - **Trial numbers do not take inbound calls.** Plan KYC and a purchased number before the inbound demo.
 - **India caller ID must be a Vobiz India number** on domestic routes; a non-Vobiz caller ID is processed best-effort and falls outside Vobiz support.
 - **Paste a platform's SIP URI into a Vobiz origination URI in exactly the format the vendor integration page states** - copy it from there; a wrong format causes immediate disconnects. Use the trunk's exact `<id>.sip.vobiz.ai`, never a generic `sip.vobiz.ai`.
-- **Trunk webhooks are one-way notifications.** Their response does not accept or reject a call, and they are not currently signed; verify by source IP via [IP Whitelisting](https://vobiz.ai/docs/concepts/ip-whitelisting#callbacks). Application callbacks carry HMAC signature headers when the callback URL has auth credentials configured - fail closed if an expected signature is absent; see [Validating callbacks](https://vobiz.ai/docs/concepts/validating-callbacks).
+- **Trunk webhooks are one-way notifications.** Their response does not accept or reject a call, and they are not currently signed; verify by source IP via [IP Whitelisting](https://www.vobiz.ai/docs/concepts/ip-whitelisting#callbacks). Application callbacks carry HMAC signature headers when the callback URL has auth credentials configured - fail closed if an expected signature is absent; see [Validating callbacks](https://www.vobiz.ai/docs/concepts/validating-callbacks).
 - **CDRs appear after the call ends.** For live state use the Call API with `status=live`, or trunk webhooks.
 - **Capacity errors look like outages.** `429` or SIP `503` at peak is a concurrency or CPS ceiling, not a routing fault.
 - **WhatsApp's first message to a new contact must be an approved template.**

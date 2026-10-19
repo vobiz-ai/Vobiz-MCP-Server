@@ -2,16 +2,16 @@
   "manifest_version": "0.3",
   "name": "vobiz",
   "display_name": "Vobiz",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "Run Vobiz calls, conferences, IVRs, call records, numbers, SIP trunks and SMS/MMS/RCS from Claude.",
   "long_description": "The official Vobiz MCP server. Place and control calls and conferences, stream call audio to AI agents, build VobizXML IVRs, read call records, recordings and billing, manage phone numbers, SIP trunks, endpoints, credentials, IP allow-lists, voice applications and sub-accounts, and send SMS, MMS and RCS messages on your Vobiz account. Ships the Vobiz Agent Skills as tools, prompts and resources. Calling, messaging and account changes are off until you enable them.",
   "author": {
     "name": "Vobiz",
     "email": "support@vobiz.ai",
-    "url": "https://vobiz.ai"
+    "url": "https://www.vobiz.ai"
   },
-  "homepage": "https://vobiz.ai/docs/resources/account-mcp",
-  "documentation": "https://vobiz.ai/docs/resources/account-mcp",
+  "homepage": "https://www.vobiz.ai/docs/resources/vobiz-mcp",
+  "documentation": "https://www.vobiz.ai/docs/resources/vobiz-mcp",
   "support": "https://github.com/vobiz-ai/Vobiz-MCP-Server/issues",
   "repository": {
     "type": "git",
@@ -29,7 +29,7 @@
     "ivr"
   ],
   "privacy_policies": [
-    "https://vobiz.ai/privacy"
+    "https://www.vobiz.ai/privacy"
   ],
   "server": {
     "type": "node",

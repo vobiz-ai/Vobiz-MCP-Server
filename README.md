@@ -1,6 +1,6 @@
 # Vobiz MCP server
 
-The official [Model Context Protocol](https://modelcontextprotocol.io) server for [Vobiz](https://vobiz.ai). It lets Claude and any other MCP client run real work on your Vobiz account:
+The official [Model Context Protocol](https://modelcontextprotocol.io) server for [Vobiz](https://www.vobiz.ai). It lets Claude and any other MCP client run real work on your Vobiz account:
 
 - place and control voice calls, run conferences, and stream call audio to AI agents
 - build VobizXML IVRs
@@ -23,7 +23,7 @@ It also ships the **Vobiz Agent Skills**, so the model knows how each Vobiz prod
 | **Transports** | stdio (`npx`), Streamable HTTP for one account, hosted multi-tenant Streamable HTTP with OAuth 2.1 |
 | **Safety** | Calling, messaging and account changes are off until enabled. Every write is confirmed, rate-limited and idempotent. `VOBIZ_READ_ONLY` and `VOBIZ_TOOLSETS` narrow what the model can see. |
 
-> Looking for documentation search instead of account operations? Use the hosted [Vobiz Docs MCP server](https://vobiz.ai/docs/resources/mcp) (`https://www.vobiz.ai/docs/mcp`). The two servers work well side by side.
+> Looking for documentation search instead of account operations? Use the hosted [Vobiz Docs MCP server](https://www.vobiz.ai/docs/resources/mcp) (`https://www.vobiz.ai/docs/mcp`). The two servers work well side by side.
 
 ## Contents
 
@@ -68,13 +68,13 @@ You need a Vobiz account, plus its **Auth ID** and **Auth Token** from the overv
 | Client | Install |
 |---|---|
 | Claude (web, Desktop, mobile) | Settings → Connectors → Add custom connector → `https://mcp.vobiz.ai/mcp` |
-| Claude Desktop extension | Open `vobiz-mcp-v1.1.1.mcpb` from the [latest release](https://github.com/vobiz-ai/Vobiz-MCP-Server/releases/latest) |
+| Claude Desktop extension | Open `vobiz-mcp-v1.1.2.mcpb` from the [latest release](https://github.com/vobiz-ai/Vobiz-MCP-Server/releases/latest) |
 | Claude Code | `/plugin install vobiz --marketplace vobiz-ai/Vobiz-MCP-Server` (MCP server + skills) |
-| OpenAI Codex | `codex mcp add vobiz --env VOBIZ_AUTH_ID=MA_XXXXXXXX --env VOBIZ_AUTH_TOKEN=YOUR_AUTH_TOKEN -- npx -y github:vobiz-ai/Vobiz-MCP-Server#v1.1.1` |
+| OpenAI Codex | `codex mcp add vobiz --env VOBIZ_AUTH_ID=MA_XXXXXXXX --env VOBIZ_AUTH_TOKEN=YOUR_AUTH_TOKEN -- npx -y github:vobiz-ai/Vobiz-MCP-Server#v1.1.2` |
 | Gemini CLI | `gemini extensions install https://github.com/vobiz-ai/Vobiz-MCP-Server` |
-| Cursor | [One-click install](https://cursor.com/en/install-mcp?name=vobiz&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsImdpdGh1Yjp2b2Jpei1haS9Wb2Jpei1NQ1AtU2VydmVyI3YxLjEuMSJdLCJlbnYiOnsiVk9CSVpfQVVUSF9JRCI6IiR7ZW52OlZPQklaX0FVVEhfSUR9IiwiVk9CSVpfQVVUSF9UT0tFTiI6IiR7ZW52OlZPQklaX0FVVEhfVE9LRU59In19) |
-| VS Code / Copilot | [One-click install](https://insiders.vscode.dev/redirect/mcp/install?name=vobiz&config=%7B%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22github%3Avobiz-ai%2FVobiz-MCP-Server%23v1.1.1%22%5D%2C%22env%22%3A%7B%22VOBIZ_AUTH_ID%22%3A%22%24%7Benv%3AVOBIZ_AUTH_ID%7D%22%2C%22VOBIZ_AUTH_TOKEN%22%3A%22%24%7Benv%3AVOBIZ_AUTH_TOKEN%7D%22%7D%7D) |
-| Goose | `goose configure` → Add Extension → `npx -y github:vobiz-ai/Vobiz-MCP-Server#v1.1.1` ([deeplink](docs/INSTALL.md#goose)) |
+| Cursor | [One-click install](https://cursor.com/en/install-mcp?name=vobiz&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsImdpdGh1Yjp2b2Jpei1haS9Wb2Jpei1NQ1AtU2VydmVyI3YxLjEuMiJdLCJlbnYiOnsiVk9CSVpfQVVUSF9JRCI6IiR7ZW52OlZPQklaX0FVVEhfSUR9IiwiVk9CSVpfQVVUSF9UT0tFTiI6IiR7ZW52OlZPQklaX0FVVEhfVE9LRU59In19) |
+| VS Code / Copilot | [One-click install](https://insiders.vscode.dev/redirect/mcp/install?name=vobiz&config=%7B%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22github%3Avobiz-ai%2FVobiz-MCP-Server%23v1.1.2%22%5D%2C%22env%22%3A%7B%22VOBIZ_AUTH_ID%22%3A%22%24%7Benv%3AVOBIZ_AUTH_ID%7D%22%2C%22VOBIZ_AUTH_TOKEN%22%3A%22%24%7Benv%3AVOBIZ_AUTH_TOKEN%7D%22%7D%7D) |
+| Goose | `goose configure` → Add Extension → `npx -y github:vobiz-ai/Vobiz-MCP-Server#v1.1.2` ([deeplink](docs/INSTALL.md#goose)) |
 | Windsurf, Zed, Cline, JetBrains, Continue, LM Studio, Warp, ChatGPT | [docs/INSTALL.md](docs/INSTALL.md) |
 
 Any other MCP client:
@@ -86,7 +86,7 @@ Any other MCP client:
       "command": "npx",
       "args": [
         "-y",
-        "github:vobiz-ai/Vobiz-MCP-Server#v1.1.1"
+        "github:vobiz-ai/Vobiz-MCP-Server#v1.1.2"
       ],
       "env": {
         "VOBIZ_AUTH_ID": "MA_XXXXXXXX",
@@ -99,7 +99,7 @@ Any other MCP client:
 
 Calling, messaging and account changes stay off until you add `VOBIZ_ENABLE_CALLS`, `VOBIZ_ENABLE_MESSAGING` or `VOBIZ_ENABLE_PROVISIONING` set to `"true"` to `env`.
 
-To self-host the remote connector: `docker run -p 3000:3000 -e VOBIZ_HOSTED_URL=https://mcp.example.com -e VOBIZ_HOSTED_SECRET="$(openssl rand -hex 32)" ghcr.io/vobiz-ai/vobiz-mcp:v1.1.1` ([docs/HOSTING.md](docs/HOSTING.md)).
+To self-host the remote connector: `docker run -p 3000:3000 -e VOBIZ_HOSTED_URL=https://mcp.example.com -e VOBIZ_HOSTED_SECRET="$(openssl rand -hex 32)" ghcr.io/vobiz-ai/vobiz-mcp:v1.1.2` ([docs/HOSTING.md](docs/HOSTING.md)).
 <!-- install:end -->
 
 ## Tools
@@ -148,7 +148,7 @@ Every tool has a `title`, input validation, and annotations: `readOnlyHint: true
 
 ## Skills, prompts and resources
 
-The 15 [Vobiz Agent Skills](https://vobiz.ai/docs/resources/skills) ship inside the package (`skills/`) and are exposed three ways, so they work in every client:
+The 15 [Vobiz Agent Skills](https://www.vobiz.ai/docs/resources/skills) ship inside the package (`skills/`) and are exposed three ways, so they work in every client:
 
 | Surface | How to use it |
 |---|---|
@@ -247,7 +247,7 @@ Deployment, DNS, scaling and directory submission are covered in [docs/HOSTING.m
 
 ## Privacy policy
 
-This server is published by Vobiz (Ilaimitado Private Limited). The full policy is at <https://vobiz.ai/privacy>.
+This server is published by Vobiz (Ilaimitado Private Limited). The full policy is at <https://www.vobiz.ai/privacy>.
 
 **What it processes:**
 
@@ -264,7 +264,7 @@ This server is published by Vobiz (Ilaimitado Private Limited). The full policy 
 
 **Logs:** logs contain route templates, HTTP status codes and timings. They never contain tokens, message text or phone numbers.
 
-**Retention:** call records, recordings and messages remain in your Vobiz account under the Vobiz terms (<https://vobiz.ai/terms>).
+**Retention:** call records, recordings and messages remain in your Vobiz account under the Vobiz terms (<https://www.vobiz.ai/terms>).
 
 **Contact:** support@vobiz.ai
 
@@ -315,9 +315,9 @@ npm run skills:sync         # refresh bundled skills from the docs repository
 
 ## Built by Team Vobiz
 
-[Vobiz](https://vobiz.ai) is a global programmable telephony platform: SIP trunking, voice APIs, SMS, WhatsApp and AI voice agent integrations in 130+ countries.
+[Vobiz](https://www.vobiz.ai) is a global programmable telephony platform: SIP trunking, voice APIs, SMS, WhatsApp and AI voice agent integrations in 130+ countries.
 
-**Support:** support@vobiz.ai · [Documentation](https://vobiz.ai/docs) · [Issues](https://github.com/vobiz-ai/Vobiz-MCP-Server/issues) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Code of Conduct](CODE_OF_CONDUCT.md)
+**Support:** support@vobiz.ai · [Documentation](https://www.vobiz.ai/docs) · [Issues](https://github.com/vobiz-ai/Vobiz-MCP-Server/issues) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Code of Conduct](CODE_OF_CONDUCT.md)
 
 ## License
 

@@ -97,7 +97,7 @@ The authoritative "call is over" signal across all paths is the `Event=Hangup` P
 - "Ending the stream from your side" → `xml/stream/stop-event`
 - "Record and stream at the same time" → `xml/record/stream-with-record`
 - "Pipe audio to a model or framework" → `integrations/websockets`, `integrations/pipecat`, `integrations/gemini-live`, `integrations/deepgram`, `integrations/dograh`, `integrations/rapida-ai`
-- "Firewall rules for an IP-restricted WebSocket server" → https://vobiz.ai/docs/concepts/ip-whitelisting#websocket-streaming (inbound TCP 443 from the media fleet; the RTP rule does not cover it)
+- "Firewall rules for an IP-restricted WebSocket server" → https://www.vobiz.ai/docs/concepts/ip-whitelisting#websocket-streaming (inbound TCP 443 from the media fleet; the RTP rule does not cover it)
 
 ## Pitfalls
 
@@ -113,7 +113,7 @@ The authoritative "call is over" signal across all paths is the `Event=Hangup` P
 - **REST `bidirectional` is a string.** Send `"bidirectional": "true"`; a JSON boolean silently yields a one-way stream and your `playAudio` is discarded.
 - **Never detect end-of-call from `media.payload`.** All-`0xFF` (base64 all-`/`) bytes are just silence and appear mid-call. Use the WS `close` event.
 - **Chunk size matters for barge-in.** Send ~20-60 ms chunks so a `clearAudio` flush is responsive. Large chunks add latency that `clearAudio` cannot recover.
-- **`wss://` in production.** `ws://` is for local testing only. The URL must be publicly reachable; if it is IP-restricted, allow inbound TCP 443 from the media fleet per https://vobiz.ai/docs/concepts/ip-whitelisting#websocket-streaming.
+- **`wss://` in production.** `ws://` is for local testing only. The URL must be publicly reachable; if it is IP-restricted, allow inbound TCP 443 from the media fleet per https://www.vobiz.ai/docs/concepts/ip-whitelisting#websocket-streaming.
 - **`stop` is terminal.** After you send `stop`, the WS closes immediately - any queued `playAudio`/`checkpoint`/`clearAudio` sends are dropped. Send a farewell + `checkpoint`, wait for `playedStream`, then `stop`.
 - **Reconnects.** `maxRetries` (XML, 0-10, default 0) controls how many times Vobiz retries a failed/dropped WebSocket. Each retry replays a fresh `start` with a **new `streamId`** and the same `callId` - key per-call state on `callId` and make your `start` handler idempotent. With the default `0`, a dropped socket is terminal.
 - **`extraHeaders` are not socket credentials.** `integrations/deepgram` reports they surface only on `statusCallbackUrl` payloads (`X-VH-<key>`) and the `start` frame's `extra_headers` stays `"{}"`. Put a secret in the `wss://` URL path instead if you need to authenticate the socket.

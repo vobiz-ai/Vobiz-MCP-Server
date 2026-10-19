@@ -1,14 +1,14 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "vobiz",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "Vobiz calls, conferences, IVRs, call records, numbers, SIP trunks, sub-accounts, billing and SMS/MMS/RCS, plus the Vobiz Agent Skills.",
   "author": {
     "name": "Vobiz",
     "email": "support@vobiz.ai",
-    "url": "https://vobiz.ai"
+    "url": "https://www.vobiz.ai"
   },
-  "homepage": "https://vobiz.ai/docs/resources/account-mcp",
+  "homepage": "https://www.vobiz.ai/docs/resources/vobiz-mcp",
   "repository": "https://github.com/vobiz-ai/Vobiz-MCP-Server",
   "license": "MIT",
   "keywords": [
@@ -29,9 +29,9 @@
         "shortDescription": "Run Vobiz calls, numbers, SIP and messaging from your agent",
         "developerName": "Vobiz",
         "category": "Developer Tools",
-        "websiteURL": "https://vobiz.ai",
-        "privacyPolicyURL": "https://vobiz.ai/privacy",
-        "termsOfServiceURL": "https://vobiz.ai/terms",
+        "websiteURL": "https://www.vobiz.ai",
+        "privacyPolicyURL": "https://www.vobiz.ai/privacy",
+        "termsOfServiceURL": "https://www.vobiz.ai/terms",
         "defaultPrompt": [
           "Show my Vobiz balance and live calls.",
           "Build a VobizXML IVR: press 1 for sales, 2 for support."

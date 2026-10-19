@@ -70,7 +70,7 @@ The direction decides which Vobiz value the platform needs:
 | Direction | What the platform needs from Vobiz | Where in the Console |
 |-----------|-----------------------------------|----------------------|
 | **Outbound** (agent dials out) | **SIP domain** `<unique>.sip.vobiz.ai` + **username** + **password** from a credential attached to the trunk | SIP Trunk → Outbound Trunks → Trunks → **Authentication & Linking** |
-| **Inbound** (caller dials your number) | The platform must accept SIP from the **Vobiz SIP signaling IPs** (UDP/5060 unless the vendor says TLS) - current list at https://vobiz.ai/docs/concepts/ip-whitelisting#sip-signaling; then a Vobiz **Inbound Trunk** whose **Primary URI** (an Origination URI) points at the platform's SIP host, e.g. `<trunk_id>.sip.vapi.ai`, `<id>.sip.livekit.cloud`, `sip.retellai.com`, `sip.rtc.elevenlabs.io:5060`, `sbc-ap-south.viblinx.com` (Agora), `sip.api.openai.com:5061` | SIP Trunk → Inbound Trunks (Origination URIs at `console.vobiz.ai/app/sip/in/uri`, trunks at `/app/sip/in/trunks`), then **Link Numbers** |
+| **Inbound** (caller dials your number) | The platform must accept SIP from the **Vobiz SIP signaling IPs** (UDP/5060 unless the vendor says TLS) - current list at https://www.vobiz.ai/docs/concepts/ip-whitelisting#sip-signaling; then a Vobiz **Inbound Trunk** whose **Primary URI** (an Origination URI) points at the platform's SIP host, e.g. `<trunk_id>.sip.vapi.ai`, `<id>.sip.livekit.cloud`, `sip.retellai.com`, `sip.rtc.elevenlabs.io:5060`, `sbc-ap-south.viblinx.com` (Agora), `sip.api.openai.com:5061` | SIP Trunk → Inbound Trunks (Origination URIs at `console.vobiz.ai/app/sip/in/uri`, trunks at `/app/sip/in/trunks`), then **Link Numbers** |
 
 Rules of thumb that hold across platforms:
 - Use the **exact** `sip_domain` (`<id>.sip.vobiz.ai`), never a generic `sip.vobiz.ai`. Each trunk has its own domain.
@@ -116,8 +116,8 @@ Per `integrations` (overview table) and `concepts/sip-vs-websockets`:
 
 - **Generic SIP domain.** `sip.vobiz.ai` will silently fail - use your unique `<id>.sip.vobiz.ai`.
 - **Leftover `sip:` prefix** in a Console URI field, Termination URI, Address, or `inbound_destination` → immediate disconnect or the call never routes.
-- **Inbound with no IP allow-list.** If the platform does not accept SIP from the Vobiz signaling IPs (https://vobiz.ai/docs/concepts/ip-whitelisting#sip-signaling), inbound calls are rejected. Whitelist all of them - Vobiz can send from any.
-- **RTP is a separate rule.** SIP signaling IPs are not the media IPs; if your network filters RTP, allow UDP 5000-65535 from the RTP media list (https://vobiz.ai/docs/concepts/ip-whitelisting#rtp-media). Do not add RTP ranges as SIP gateways.
+- **Inbound with no IP allow-list.** If the platform does not accept SIP from the Vobiz signaling IPs (https://www.vobiz.ai/docs/concepts/ip-whitelisting#sip-signaling), inbound calls are rejected. Whitelist all of them - Vobiz can send from any.
+- **RTP is a separate rule.** SIP signaling IPs are not the media IPs; if your network filters RTP, allow UDP 5000-65535 from the RTP media list (https://www.vobiz.ai/docs/concepts/ip-whitelisting#rtp-media). Do not add RTP ranges as SIP gateways.
 - **401 Unauthorized (outbound).** Username/password mismatch between the Vobiz outbound trunk credential and the platform trunk, or the credential is not attached to the trunk.
 - **Insufficient balance.** Outbound calls need Vobiz credit; check the Console.
 - **Caller ID must be a real Vobiz number** you own, in E.164 (Dograh wants it without the `+`).
@@ -135,6 +135,6 @@ Per `integrations` (overview table) and `concepts/sip-vs-websockets`:
 - "Inbound vs outbound setup end-to-end" → `guides/ai-voice-agent/inbound`, `guides/ai-voice-agent/outbound`
 - "SIP or WebSocket for my case" → `concepts/sip-vs-websockets`
 - "Stream verb attributes / custom WebSocket" → `xml/stream`, `integrations/websockets`, `concepts/streaming-websockets`
-- "Which IPs to whitelist" → https://vobiz.ai/docs/concepts/ip-whitelisting
+- "Which IPs to whitelist" → https://www.vobiz.ai/docs/concepts/ip-whitelisting
 - "Trunk fields (`transport`, `secure`, `primary_uri_uuid`, `inbound_destination`)" → `trunks/trunk-object`, `trunks/origination-uri/origination-uri-object`
 - "Recording AI agent calls" → `xml/record/stream-with-record`

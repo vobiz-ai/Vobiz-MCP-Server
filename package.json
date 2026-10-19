@@ -1,6 +1,6 @@
 {
   "name": "@vobiz/mcp",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "Official Vobiz MCP server: voice calls, in-call control, VobizXML IVRs, call records, recordings, phone numbers, SIP trunks, SMS/MMS/RCS and the Vobiz Agent Skills for Claude and any MCP client.",
   "mcpName": "io.github.vobiz-ai/vobiz-mcp",
   "keywords": [
@@ -17,7 +17,7 @@
     "claude",
     "ai-agents"
   ],
-  "homepage": "https://vobiz.ai/docs/resources/account-mcp",
+  "homepage": "https://www.vobiz.ai/docs/resources/vobiz-mcp",
   "bugs": {
     "url": "https://github.com/vobiz-ai/Vobiz-MCP-Server/issues",
     "email": "support@vobiz.ai"
@@ -25,7 +25,7 @@
   "author": {
     "name": "Vobiz",
     "email": "support@vobiz.ai",
-    "url": "https://vobiz.ai"
+    "url": "https://www.vobiz.ai"
   },
   "license": "MIT",
   "type": "module",
@@ -72,7 +72,8 @@
     "prepublishOnly": "npm run check",
     "pack:mcpb": "npm run build && npx -y @anthropic-ai/mcpb@2.1.2 pack . vobiz-mcp.mcpb",
     "prepare": "tsc -p tsconfig.json",
-    "clients:gen": "node scripts/gen-clients.mjs"
+    "clients:gen": "node scripts/gen-clients.mjs",
+    "test:live:remote": "node --env-file-if-exists=.env scripts/live-remote.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.1",
