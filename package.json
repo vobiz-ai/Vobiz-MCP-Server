@@ -90,5 +90,5 @@
   "config": {
     "hostedUrl": "https://mcp.vobiz.ai/mcp"
   },
-  "publishedToNpm": false
+  "publishedToNpm": true
 }
