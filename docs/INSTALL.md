@@ -45,9 +45,10 @@ Download `vobiz-mcp-v1.1.0.mcpb` from the [latest release](https://github.com/vo
 **Plugin.** Installs the MCP server, the Vobiz docs MCP server and all Vobiz skills. Claude Code asks for your Auth ID and keeps the Auth Token in your OS credential store.
 
 ```text
-/plugin marketplace add vobiz-ai/Vobiz-MCP-Server
-/plugin install vobiz@vobiz
+/plugin install vobiz --marketplace vobiz-ai/Vobiz-MCP-Server
 ```
+
+On older Claude Code versions, run `/plugin marketplace add vobiz-ai/Vobiz-MCP-Server` first, then `/plugin install vobiz@vobiz`.
 
 **MCP server only:**
 
