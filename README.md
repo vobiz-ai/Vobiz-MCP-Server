@@ -221,8 +221,8 @@ All settings are environment variables. Every one is optional except credentials
 | Mode | Command | For |
 |---|---|---|
 | **stdio** | `npx -y @vobiz/mcp` (or `node dist/index.js`) | Claude Desktop, Claude Code, Cursor and other local clients on one account |
-| **Single-account HTTP** | `vobiz-mcp-http` (or `npm run start:http`) | One account over Streamable HTTP behind a path secret; hosted IVR flows, gather, signed webhooks |
-| **Hosted multi-tenant** | `vobiz-mcp-hosted` (or `npm run start:hosted`, Docker) | Public connector: each user signs in with OAuth and acts only on their own account |
+| **Single-account HTTP** | `npx -y @vobiz/mcp http` (or `npm run start:http`) | One account over Streamable HTTP behind a path secret; hosted IVR flows, gather, signed webhooks |
+| **Hosted multi-tenant** | `npx -y @vobiz/mcp hosted` (or `npm run start:hosted`, Docker) | Public connector: each user signs in with OAuth and acts only on their own account |
 | **Dashboard** | `npm run dashboard` → http://127.0.0.1:5178 | Read-only local browser view built on the same tools |
 
 ### Single-account HTTP endpoints
@@ -241,7 +241,7 @@ All settings are environment variables. Every one is optional except credentials
 
 ## Hosted connector (OAuth)
 
-`vobiz-mcp-hosted` is a complete OAuth 2.1 authorization server and MCP resource server in one process. It is built for Claude's connector directory and works with any remote MCP client.
+`vobiz-mcp hosted` is a complete OAuth 2.1 authorization server and MCP resource server in one process. It is built for Claude's connector directory and works with any remote MCP client.
 
 **Sign-in flow:**
 

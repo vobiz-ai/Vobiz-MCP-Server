@@ -204,7 +204,7 @@ export function createHttpHandler(opts: HttpOptions): http.RequestListener {
   };
 }
 
-async function main(): Promise<void> {
+export async function runHttp(): Promise<void> {
   let cfg: Config;
   try {
     cfg = loadConfig();
@@ -267,7 +267,7 @@ async function main(): Promise<void> {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  main().catch(() => {
+  runHttp().catch(() => {
     process.stderr.write("[vobiz-mcp] fatal error during startup\n");
     process.exit(1);
   });

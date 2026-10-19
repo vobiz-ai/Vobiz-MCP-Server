@@ -7,8 +7,8 @@ import { createServer, SERVER_VERSION, TOOLSET_NAMES } from "./server.js";
 const HELP = `Vobiz MCP server ${SERVER_VERSION} (stdio)
 
 Usage: npx -y @vobiz/mcp            run over stdio for an MCP client
-       vobiz-mcp-http               single-account Streamable HTTP server
-       vobiz-mcp-hosted             hosted multi-tenant connector (OAuth)
+       npx -y @vobiz/mcp http       single-account Streamable HTTP server
+       npx -y @vobiz/mcp hosted     hosted multi-tenant connector (OAuth)
 
 Required: VOBIZ_AUTH_ID, VOBIZ_AUTH_TOKEN
 Enable actions: VOBIZ_ENABLE_CALLS, VOBIZ_ENABLE_MESSAGING, VOBIZ_ENABLE_PROVISIONING
@@ -26,6 +26,8 @@ async function main(): Promise<void> {
     process.stdout.write(HELP);
     return;
   }
+  if (arg === "http") return (await import("./http.js")).runHttp();
+  if (arg === "hosted") return (await import("./hosted.js")).runHosted();
   let cfg;
   try {
     cfg = loadConfig();

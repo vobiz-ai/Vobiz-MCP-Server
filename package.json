@@ -31,9 +31,7 @@
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "vobiz-mcp": "dist/index.js",
-    "vobiz-mcp-http": "dist/http.js",
-    "vobiz-mcp-hosted": "dist/hosted.js"
+    "vobiz-mcp": "dist/index.js"
   },
   "files": [
     "dist/**/*.js",

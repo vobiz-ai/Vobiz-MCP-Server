@@ -347,7 +347,7 @@ export function createHostedApp(o: HostedOptions): express.Express {
   return app;
 }
 
-async function main(): Promise<void> {
+export async function runHosted(): Promise<void> {
   let cfg: Config;
   try {
     cfg = loadConfig({ VOBIZ_ALLOW_ANY_URL_HOST: "true", ...process.env, VOBIZ_AUTH_ID: undefined, VOBIZ_AUTH_TOKEN: undefined });
@@ -401,7 +401,7 @@ async function main(): Promise<void> {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  main().catch((err) => {
+  runHosted().catch((err) => {
     process.stderr.write(`[vobiz-mcp] fatal error during startup: ${err instanceof Error ? err.message : "unknown"}\n`);
     process.exit(1);
   });
