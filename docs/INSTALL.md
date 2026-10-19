@@ -9,7 +9,27 @@ Every client runs the same server. Pick one of two connection types:
 
 You need your **Auth ID** and **Auth Token** from the overview page of the [Vobiz console](https://console.vobiz.ai), plus Node.js 22.9 or newer for the local option.
 
-Calling, messaging and account changes are off by default. To turn them on, add `VOBIZ_ENABLE_CALLS`, `VOBIZ_ENABLE_MESSAGING` or `VOBIZ_ENABLE_PROVISIONING` set to `"true"` in `env`. To trim the tool list, set `VOBIZ_TOOLSETS`, for example `calls,records,messaging,skills`.
+## Connect in one step
+
+| Client | One step | Then |
+|---|---|---|
+| Claude (web, Desktop, mobile) | **Settings → Connectors → Add custom connector** → `https://mcp.vobiz.ai/mcp` | Click **Connect** and sign in ([5 steps](#claude-web-desktop-mobile)) |
+| Claude Code | `claude mcp add --transport http vobiz https://mcp.vobiz.ai/mcp` | Run `/mcp`, pick **vobiz**, sign in |
+| Claude Code (plugin: server + skills) | `/plugin install vobiz --marketplace vobiz-ai/Vobiz-MCP-Server` | Enter your Auth ID and Auth Token when asked |
+| Claude Desktop (local extension) | Open `vobiz-mcp-v1.1.4.mcpb` from the [latest release](https://github.com/vobiz-ai/Vobiz-MCP-Server/releases/latest) | Enter your Auth ID and Auth Token |
+| OpenAI Codex (CLI, IDE, app) | `codex mcp add vobiz --url https://mcp.vobiz.ai/mcp` | The Vobiz sign-in opens automatically |
+| ChatGPT | **Plugins → + → Add custom MCP server** → `https://mcp.vobiz.ai/mcp` | Sign in, then use **@Vobiz** |
+| Gemini CLI | `gemini mcp add -s user --transport http vobiz https://mcp.vobiz.ai/mcp` | Run `/mcp auth vobiz` |
+| Cursor | [Add to Cursor](https://cursor.com/en/install-mcp?name=vobiz&config=eyJ1cmwiOiJodHRwczovL21jcC52b2Jpei5haS9tY3AifQ%3D%3D) | Click **Connect** in Cursor's MCP settings |
+| VS Code / GitHub Copilot | [Add to VS Code](https://insiders.vscode.dev/redirect/mcp/install?name=vobiz&config=%7B%22type%22%3A%22http%22%2C%22url%22%3A%22https%3A%2F%2Fmcp.vobiz.ai%2Fmcp%22%7D) | Start the server and sign in |
+| Windsurf / Devin | `devin mcp add -s user vobiz https://mcp.vobiz.ai/mcp` | `devin mcp login vobiz` |
+| Cline | `cline mcp add vobiz https://mcp.vobiz.ai/mcp --transport http --yes` | Choose **Authorize OAuth** |
+| Goose | Open `goose://extension?url=…` ([link](#goose)) | Sign in |
+| Zed, JetBrains, Warp, LM Studio, Continue | Add `{ "url": "https://mcp.vobiz.ai/mcp" }` as a server ([guide](#zed)) | Sign in |
+
+Every remote option signs in with OAuth on a Vobiz page, so no Auth Token is written to a config file. To run the server on your own machine instead, use the local options below.
+
+With a local install, calling, messaging and account changes are off by default. To turn them on, add `VOBIZ_ENABLE_CALLS`, `VOBIZ_ENABLE_MESSAGING` or `VOBIZ_ENABLE_PROVISIONING` set to `"true"` in `env`. To trim the tool list, set `VOBIZ_TOOLSETS`, for example `calls,records,messaging,skills`.
 
 | Client | Fastest way |
 |---|---|
@@ -270,7 +290,9 @@ For a local server, add the `vobiz` entry below under **MCP Servers → Configur
 
 ## Goose
 
-[Install in Goose](goose://extension?cmd=npx&arg=-y&arg=github%3Avobiz-ai%2FVobiz-MCP-Server%23v1.1.4&id=vobiz&name=Vobiz&description=Vobiz%20calls%2C%20numbers%2C%20SIP%20and%20messaging&env=VOBIZ_AUTH_ID%3DVobiz%20Auth%20ID&env=VOBIZ_AUTH_TOKEN%3DVobiz%20Auth%20Token&timeout=300). Goose prompts for the Auth ID and Auth Token and stores them in the system keyring. You can also run `goose configure` → **Add Extension** → **Command-line Extension** with `npx -y github:vobiz-ai/Vobiz-MCP-Server#v1.1.4`.
+Hosted (OAuth): open `goose://extension?url=https%3A%2F%2Fmcp.vobiz.ai%2Fmcp&type=streamable_http&id=vobiz&name=Vobiz&description=Vobiz%20calls%2C%20numbers%2C%20SIP%20and%20messaging&timeout=300`.
+
+Local: [Install in Goose](goose://extension?cmd=npx&arg=-y&arg=github%3Avobiz-ai%2FVobiz-MCP-Server%23v1.1.4&id=vobiz&name=Vobiz&description=Vobiz%20calls%2C%20numbers%2C%20SIP%20and%20messaging&env=VOBIZ_AUTH_ID%3DVobiz%20Auth%20ID&env=VOBIZ_AUTH_TOKEN%3DVobiz%20Auth%20Token&timeout=300). Goose prompts for the Auth ID and Auth Token and stores them in the system keyring. You can also run `goose configure` → **Add Extension** → **Command-line Extension** with `npx -y github:vobiz-ai/Vobiz-MCP-Server#v1.1.4`.
 
 ## JetBrains AI Assistant
 

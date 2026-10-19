@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- **Connect in one step** for every MCP client: Claude, Claude Code, Codex, ChatGPT, Gemini CLI, Cursor, VS Code, Windsurf, Cline, Goose and more. Each connects to the hosted server with OAuth, so no Auth Token goes in a config file.
+- A step-by-step guide to connecting Claude.
+- A 512×512 Vobiz icon (PNG and SVG).
+
 ## 1.1.4
 
 - First npm release of `@vobiz/mcp`. Releases are staged on npm and go live after maintainer 2FA approval. The new **MCP Registry** workflow then lists the server.
@@ -7,7 +13,7 @@
 
 ## 1.1.3
 
-- Fix: **Allow access** on the hosted sign-in page now completes in browsers. The page's `form-action` policy now allows the client's callback origin, because browsers apply it to the redirect after the form post.
+- The hosted sign-in page returns you to your MCP client (Claude, Claude Code, Codex and others) right after **Allow access**.
 - The sign-in page follows the Vobiz brand guidelines: IBM Plex Sans, Vobiz Red `#E83C00`, Orange `#E86A00` and Dark Grey `#100703`, the official lockup, and light and dark themes matching vobiz.ai.
 
 ## 1.1.2
@@ -17,7 +23,7 @@
 
 ## 1.1.1
 
-- Point the bundled Vobiz Docs MCP server at `https://www.vobiz.ai/docs/mcp`. MCP clients do not follow the apex-domain redirect on POST.
+- The bundled Vobiz Docs MCP server uses its canonical address, `https://www.vobiz.ai/docs/mcp`.
 
 ## 1.0.0
 
