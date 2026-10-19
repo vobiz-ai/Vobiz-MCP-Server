@@ -9,7 +9,27 @@ Every client runs the same server. Pick one of two connection types:
 
 You need your **Auth ID** and **Auth Token** from the overview page of the [Vobiz console](https://console.vobiz.ai), plus Node.js 22.9 or newer for the local option.
 
-Calling, messaging and account changes are off by default. To turn them on, add `VOBIZ_ENABLE_CALLS`, `VOBIZ_ENABLE_MESSAGING` or `VOBIZ_ENABLE_PROVISIONING` set to `"true"` in `env`. To trim the tool list, set `VOBIZ_TOOLSETS`, for example `calls,records,messaging,skills`.
+## Connect in one step
+
+| Client | One step | Then |
+|---|---|---|
+| Claude (web, Desktop, mobile) | **Settings → Connectors → Add custom connector** → `https://mcp.vobiz.ai/mcp` | Click **Connect** and sign in ([5 steps](#claude-web-desktop-mobile)) |
+| Claude Code | `claude mcp add --transport http vobiz https://mcp.vobiz.ai/mcp` | Run `/mcp`, pick **vobiz**, sign in |
+| Claude Code (plugin: server + skills) | `/plugin install vobiz --marketplace vobiz-ai/Vobiz-MCP-Server` | Enter your Auth ID and Auth Token when asked |
+| Claude Desktop (local extension) | Open `vobiz-mcp-v1.1.4.mcpb` from the [latest release](https://github.com/vobiz-ai/Vobiz-MCP-Server/releases/latest) | Enter your Auth ID and Auth Token |
+| OpenAI Codex (CLI, IDE, app) | `codex mcp add vobiz --url https://mcp.vobiz.ai/mcp` | The Vobiz sign-in opens automatically |
+| ChatGPT | **Plugins → + → Add custom MCP server** → `https://mcp.vobiz.ai/mcp` | Sign in, then use **@Vobiz** |
+| Gemini CLI | `gemini mcp add -s user --transport http vobiz https://mcp.vobiz.ai/mcp` | Run `/mcp auth vobiz` |
+| Cursor | [Add to Cursor](https://cursor.com/en/install-mcp?name=vobiz&config=eyJ1cmwiOiJodHRwczovL21jcC52b2Jpei5haS9tY3AifQ%3D%3D) | Click **Connect** in Cursor's MCP settings |
+| VS Code / GitHub Copilot | [Add to VS Code](https://insiders.vscode.dev/redirect/mcp/install?name=vobiz&config=%7B%22type%22%3A%22http%22%2C%22url%22%3A%22https%3A%2F%2Fmcp.vobiz.ai%2Fmcp%22%7D) | Start the server and sign in |
+| Windsurf / Devin | `devin mcp add -s user vobiz https://mcp.vobiz.ai/mcp` | `devin mcp login vobiz` |
+| Cline | `cline mcp add vobiz https://mcp.vobiz.ai/mcp --transport http --yes` | Choose **Authorize OAuth** |
+| Goose | Open `goose://extension?url=…` ([link](#goose)) | Sign in |
+| Zed, JetBrains, Warp, LM Studio, Continue | Add `{ "url": "https://mcp.vobiz.ai/mcp" }` as a server ([guide](#zed)) | Sign in |
+
+Every remote option signs in with OAuth on a Vobiz page, so no Auth Token is written to a config file. To run the server on your own machine instead, use the local options below.
+
+With a local install, calling, messaging and account changes are off by default. To turn them on, add `VOBIZ_ENABLE_CALLS`, `VOBIZ_ENABLE_MESSAGING` or `VOBIZ_ENABLE_PROVISIONING` set to `"true"` in `env`. To trim the tool list, set `VOBIZ_TOOLSETS`, for example `calls,records,messaging,skills`.
 
 | Client | Fastest way |
 |---|---|
@@ -32,9 +52,15 @@ Calling, messaging and account changes are off by default. To turn them on, add 
 
 ## Claude (web, Desktop, mobile)
 
-1. Open **Settings → Connectors** and click **Add custom connector**.
-2. Enter `https://mcp.vobiz.ai/mcp` and click **Add**, then **Connect**.
-3. Sign in with your Auth ID and Auth Token. Tick **Read-only access** if you want Claude to look but not act.
+The hosted connector needs no install: you add a URL and sign in with your Vobiz credentials.
+
+1. **Copy your credentials.** In the [Vobiz console](https://console.vobiz.ai) overview page, copy your **Auth ID** (`MA_…`, or `SA_…` for a sub-account) and **Auth Token**.
+2. **Open Connectors.** In claude.ai or Claude Desktop, go to **Settings → Connectors → Add custom connector**. On Team and Enterprise plans an Owner adds it under **Admin settings → Connectors**, then each member connects their own account.
+3. **Add the server.** Name it `Vobiz` and enter `https://mcp.vobiz.ai/mcp`. Leave the advanced OAuth fields empty and click **Add**.
+4. **Connect and sign in.** Click **Connect**. On the Vobiz sign-in page, paste your Auth ID and Auth Token, optionally tick **Read-only access**, and click **Allow access**. You return to Claude, connected.
+5. **Use it.** In a new chat, enable **Vobiz** in the tools menu and ask: _"What's my Vobiz balance, and how many calls are live right now?"_
+
+To change between read-only and full access, disconnect and connect again. To revoke every app at once, rotate your Auth Token in the console.
 
 ## Claude Desktop extension
 
@@ -264,7 +290,9 @@ For a local server, add the `vobiz` entry below under **MCP Servers → Configur
 
 ## Goose
 
-[Install in Goose](goose://extension?cmd=npx&arg=-y&arg=github%3Avobiz-ai%2FVobiz-MCP-Server%23v1.1.4&id=vobiz&name=Vobiz&description=Vobiz%20calls%2C%20numbers%2C%20SIP%20and%20messaging&env=VOBIZ_AUTH_ID%3DVobiz%20Auth%20ID&env=VOBIZ_AUTH_TOKEN%3DVobiz%20Auth%20Token&timeout=300). Goose prompts for the Auth ID and Auth Token and stores them in the system keyring. You can also run `goose configure` → **Add Extension** → **Command-line Extension** with `npx -y github:vobiz-ai/Vobiz-MCP-Server#v1.1.4`.
+Hosted (OAuth): open `goose://extension?url=https%3A%2F%2Fmcp.vobiz.ai%2Fmcp&type=streamable_http&id=vobiz&name=Vobiz&description=Vobiz%20calls%2C%20numbers%2C%20SIP%20and%20messaging&timeout=300`.
+
+Local: [Install in Goose](goose://extension?cmd=npx&arg=-y&arg=github%3Avobiz-ai%2FVobiz-MCP-Server%23v1.1.4&id=vobiz&name=Vobiz&description=Vobiz%20calls%2C%20numbers%2C%20SIP%20and%20messaging&env=VOBIZ_AUTH_ID%3DVobiz%20Auth%20ID&env=VOBIZ_AUTH_TOKEN%3DVobiz%20Auth%20Token&timeout=300). Goose prompts for the Auth ID and Auth Token and stores them in the system keyring. You can also run `goose configure` → **Add Extension** → **Command-line Extension** with `npx -y github:vobiz-ai/Vobiz-MCP-Server#v1.1.4`.
 
 ## JetBrains AI Assistant
 

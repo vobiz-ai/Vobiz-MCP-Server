@@ -40,7 +40,8 @@
     "assets/icon.png",
     "README.md",
     "LICENSE",
-    "server.json"
+    "server.json",
+    "assets/icon.svg"
   ],
   "engines": {
     "node": ">=22.9"
