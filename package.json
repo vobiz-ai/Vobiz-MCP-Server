@@ -72,7 +72,8 @@
     "test:live:hosted": "npm run build && node --env-file-if-exists=.env scripts/live-hosted.mjs",
     "skills:sync": "node scripts/sync-skills.mjs",
     "prepublishOnly": "npm run check",
-    "pack:mcpb": "npm run build && npx -y @anthropic-ai/mcpb@2.1.2 pack . vobiz-mcp.mcpb"
+    "pack:mcpb": "npm run build && npx -y @anthropic-ai/mcpb@2.1.2 pack . vobiz-mcp.mcpb",
+    "prepare": "tsc -p tsconfig.json"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.1",
