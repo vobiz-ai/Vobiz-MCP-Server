@@ -20,8 +20,8 @@ jobs:
       # npm and MCP Registry publishing run only once the NPM_TOKEN secret exists; the GitHub release and Docker image always run.
       HAS_NPM_TOKEN: ${{ secrets.NPM_TOKEN != '' }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
@@ -53,17 +53,17 @@ jobs:
           mkdir -p bundle && cp -R dist skills assets manifest.json package.json package-lock.json LICENSE README.md bundle/
           rm -rf bundle/dist/dashboard
           (cd bundle && npm ci --omit=dev --ignore-scripts && npx -y @anthropic-ai/mcpb@2.1.2 pack . "../vobiz-mcp-${GITHUB_REF_NAME}.mcpb")
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: vobiz-mcp-*.mcpb
           generate_release_notes: true
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@v7
         with:
           context: .
           push: true
