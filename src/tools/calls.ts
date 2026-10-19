@@ -1,0 +1,426 @@
+import { z } from "zod";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { digitsOnly } from "../config.js";
+import type { ToolContext } from "../context.js";
+import { VobizError } from "../errors.js";
+import { IdempotencyStore, withIdempotency } from "../idempotency.js";
+import { classifyHangup } from "../outcomes.js";
+import { assertDestinationAllowed, effectiveTimeLimit } from "../policy.js";
+import { assertAllowedUrl, callId, handler, idempotencyKey, ok, phoneNumber, toE164 } from "../util.js";
+
+type Rec = Record<string, unknown>;
+
+/** Looks a call up in a given live state; returns undefined on 404. */
+async function findLiveOrQueued(ctx: ToolContext, uuid: string, status: "live" | "queued"): Promise<Rec | undefined> {
+  try {
+    const res = await ctx.client.request<Rec>("GET", ctx.client.accountPath(`/Call/${encodeURIComponent(uuid)}/`), {
+      query: { status },
+      route: `GET Call/{uuid}?status=${status}`,
+    });
+    return res.data ?? {};
+  } catch (err) {
+    if (err instanceof VobizError && err.kind === "not_found") return undefined;
+    throw err;
+  }
+}
+
+async function findCdr(ctx: ToolContext, uuid: string): Promise<Rec | undefined> {
+  try {
+    const res = await ctx.client.request<Rec>("GET", ctx.client.accountPath(`/cdr/${encodeURIComponent(uuid)}`), {
+      route: "GET cdr/{uuid}",
+    });
+    const data = (res.data?.data ?? res.data) as Rec | undefined;
+    return data && typeof data === "object" ? data : undefined;
+  } catch (err) {
+    if (err instanceof VobizError && err.kind === "not_found") return undefined;
+    throw err;
+  }
+}
+
+/** Confirms `from` is an active, voice-capable number owned by the account. Fails closed. */
+async function assertCallerIdOwned(ctx: ToolContext, from: string): Promise<void> {
+  const wanted = digitsOnly(from);
+  const res = await ctx.client.request<{ items?: Rec[] }>("GET", ctx.client.accountPath("/numbers"), {
+    query: { search: toE164(from), per_page: 25 },
+    route: "GET numbers?search",
+  });
+  const items = Array.isArray(res.data?.items) ? res.data.items : [];
+  const match = items.find((n) => typeof n.e164 === "string" && digitsOnly(n.e164) === wanted);
+  if (!match) {
+    throw new VobizError(
+      "not_allowed",
+      "The caller ID is not a phone number on this Vobiz account. Use list_phone_numbers to see the numbers you can call from.",
+    );
+  }
+  const voiceOff =
+    match.voice_enabled === false || (match.capabilities as Rec | undefined)?.voice === false || match.is_blocked === true;
+  if (match.status !== "active" || voiceOff) {
+    throw new VobizError(
+      "not_allowed",
+      `The caller ID exists on this account but cannot place calls (status: ${String(match.status)}, voice enabled: ${!voiceOff}).`,
+    );
+  }
+}
+
+/** Classifies how a finished call ended (busy, no answer, invalid number...) from its hangup cause. */
+export function outcomeFields(cdr: Rec): Rec {
+  const c = classifyHangup(cdr.hangup_cause ?? cdr.hangup_cause_name, cdr.billsec);
+  return { outcome: c.outcome, typical_sip_code: c.typical_sip_code, retry_may_succeed: c.retryable };
+}
+
+/** Refuses to start a call when this server's concurrency cap or the account balance floor is reached. */
+async function assertCapacity(ctx: ToolContext): Promise<void> {
+  const { policy } = ctx.cfg;
+  const live = await ctx.client.request<Rec>("GET", ctx.client.accountPath("/Call/"), {
+    query: { status: "live" },
+    route: "GET Call/?status=live",
+  });
+  const queued = await ctx.client.request<Rec>("GET", ctx.client.accountPath("/Call/"), {
+    query: { status: "queued" },
+    route: "GET Call/?status=queued",
+  });
+  const count = (Array.isArray(live.data?.calls) ? live.data.calls.length : 0) + (Array.isArray(queued.data?.calls) ? queued.data.calls.length : 0);
+  if (count >= policy.maxConcurrentCalls) {
+    throw new VobizError(
+      "rate_limited",
+      `${count} calls are already live or queued on this account; this server allows at most ${policy.maxConcurrentCalls} at once (VOBIZ_MAX_CONCURRENT_CALLS).`,
+    );
+  }
+  if (policy.checkBalance) {
+    // Use the configured currency's wallet when the account has one, otherwise its first (billing) wallet.
+    const bal = await ctx.client.request<Rec>("GET", ctx.client.accountPath("/balance"), { route: "GET balance" });
+    const wallets = Array.isArray(bal.data?.balances) ? (bal.data.balances as Rec[]) : [];
+    const wallet = wallets.find((w) => String(w.currency).toUpperCase() === policy.balanceCurrency) ?? wallets[0];
+    const available = Number(wallet?.available_balance ?? wallet?.balance);
+    if (!wallet || !Number.isFinite(available)) {
+      throw new VobizError("unexpected_response", "Could not read the account balance, so the call was not placed (VOBIZ_CHECK_BALANCE).");
+    }
+    if (wallet.is_postpaid !== true && available <= policy.minBalance) {
+      throw new VobizError(
+        "insufficient_balance",
+        `Available balance ${available} ${String(wallet.currency)} is at or below this server's floor of ${policy.minBalance} (VOBIZ_MIN_BALANCE).`,
+      );
+    }
+  }
+}
+
+async function placeCall(
+  ctx: ToolContext,
+  p: {
+    fromDigits: string;
+    to: string;
+    answerUrl: string;
+    timeLimit: number;
+    args: { answer_method?: string; hangup_url?: string; caller_name?: string; ring_timeout?: number };
+  },
+): Promise<Record<string, unknown>> {
+  const body: Record<string, unknown> = {
+    from: p.fromDigits,
+    to: toE164(p.to),
+    answer_url: p.answerUrl,
+    answer_method: p.args.answer_method ?? "POST",
+    time_limit: p.timeLimit,
+  };
+  if (p.args.hangup_url) body.hangup_url = p.args.hangup_url;
+  if (p.args.caller_name) body.caller_name = p.args.caller_name;
+  if (p.args.ring_timeout !== undefined) body.ring_timeout = String(p.args.ring_timeout);
+
+  const res = await ctx.client.request<Rec>("POST", ctx.client.accountPath("/Call/"), {
+    body,
+    sideEffect: true,
+    route: "POST Call/",
+  });
+  const requestUuid = res.data?.request_uuid;
+  if (typeof requestUuid !== "string" || !requestUuid) {
+    throw new VobizError(
+      "outcome_unknown",
+      "Vobiz returned success but no request_uuid, so the call may or may not have been placed. Do NOT retry; check list_live_calls and list_call_records.",
+      res.status,
+    );
+  }
+  return {
+    ok: true,
+    accepted: true,
+    connected: false,
+    request_uuid: requestUuid,
+    time_limit: p.timeLimit,
+    backend_message: res.data.message ?? null,
+    api_id: res.data.api_id ?? null,
+    http_status: res.status,
+    note: "Vobiz accepted the call request. This does not mean the call connected. Use get_call_status with call_uuid = request_uuid to follow it.",
+  };
+}
+
+export function registerCallTools(server: McpServer, ctx: ToolContext): void {
+  // ── make_call ────────────────────────────────────────────────
+  server.registerTool(
+    "make_call",
+    {
+      title: "Place an outbound call",
+      description:
+        "Initiate ONE outbound call through Vobiz (POST /Account/{auth_id}/Call/). " +
+        "Required: `to` (destination, E.164), `from` (caller ID: must be an active number on this account), and `confirm: true` after the user has explicitly approved this exact call. " +
+        "`answer_url` is required unless the server has VOBIZ_DEFAULT_ANSWER_URL configured; Vobiz fetches call-control XML from it when the call is answered. " +
+        "Success means Vobiz ACCEPTED/QUEUED the request and returned a request_uuid; it does NOT mean the call connected. " +
+        "Follow up with get_call_status using the returned request_uuid as call_uuid. Never call this twice for the same intent: if the outcome is unknown, check list_live_calls / list_call_records instead. " +
+        "Pass a unique idempotency_key per intended call: repeating a key replays the first result instead of dialling again. " +
+        "Server policy (enforced, not negotiable by the model): allowed destination countries, blocked prefixes, max duration, per-minute/hour caps, max concurrent calls, minimum balance.",
+      inputSchema: {
+        to: phoneNumber.describe("Destination number in E.164, e.g. +919876543210. One number only."),
+        from: phoneNumber.describe("Caller ID: a Vobiz number on this account, E.164."),
+        confirm: z
+          .boolean()
+          .describe("Must be true, set only after the user explicitly confirmed this call (destination and caller ID)."),
+        answer_url: z
+          .string()
+          .url()
+          .optional()
+          .describe("URL that returns Vobiz XML when the call is answered. Defaults to the server's VOBIZ_DEFAULT_ANSWER_URL."),
+        answer_method: z.enum(["GET", "POST"]).optional().describe("HTTP method for answer_url (default POST)."),
+        hangup_url: z.string().url().optional().describe("URL notified when the call hangs up (defaults to answer_url)."),
+        caller_name: z.string().max(50).optional().describe("Caller name shown where supported (max 50 chars)."),
+        time_limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(86400)
+          .optional()
+          .describe("Maximum call duration in seconds. Defaults to, and may not exceed, the server's VOBIZ_MAX_CALL_DURATION_SEC."),
+        ring_timeout: z.number().int().min(5).max(120).optional().describe("Seconds to ring before giving up (default 120)."),
+        idempotency_key: idempotencyKey.optional(),
+      },
+      annotations: { destructiveHint: true, idempotentHint: false, openWorldHint: true, readOnlyHint: false },
+    },
+    handler(async (args) => {
+      const { cfg } = ctx;
+      if (!cfg.enableCalls) {
+        throw new VobizError(
+          "calls_disabled",
+          "Outbound calling is disabled on this MCP server. An administrator must set VOBIZ_ENABLE_CALLS=true.",
+        );
+      }
+      const toDigits = digitsOnly(args.to);
+      const fromDigits = digitsOnly(args.from);
+      if (args.confirm !== true) {
+        throw new VobizError(
+          "confirmation_required",
+          `Ask the user to confirm calling ${toE164(args.to)} from ${toE164(args.from)}, then call make_call again with confirm: true.`,
+        );
+      }
+      assertDestinationAllowed(cfg, args.to);
+      if (cfg.allowedCallerIds.length && !cfg.allowedCallerIds.includes(fromDigits)) {
+        throw new VobizError("not_allowed", "This caller ID is not in the server's VOBIZ_ALLOWED_CALLER_IDS allowlist.");
+      }
+      const answerUrl = args.answer_url ?? cfg.defaultAnswerUrl;
+      if (!answerUrl) {
+        throw new VobizError(
+          "invalid_input",
+          "answer_url is required (Vobiz needs it to control the call once answered) and no VOBIZ_DEFAULT_ANSWER_URL is configured.",
+        );
+      }
+      if (args.answer_url) assertAllowedUrl(cfg, args.answer_url, "answer_url");
+      if (args.hangup_url) assertAllowedUrl(cfg, args.hangup_url, "hangup_url");
+      const timeLimit = effectiveTimeLimit(cfg, args.time_limit);
+
+      const fingerprint = IdempotencyStore.fingerprint({ op: "make_call", from: fromDigits, to: toDigits, answerUrl, timeLimit });
+      // Without an explicit key, identical calls inside the duplicate window share one automatic key.
+      const key = args.idempotency_key ? `key:${args.idempotency_key}` : `auto:${fingerprint}`;
+      if (!args.idempotency_key) {
+        // Automatic records only block identical calls inside the duplicate window
+        // (records with an unknown outcome stay blocking for the full idempotency TTL).
+        ctx.idempotency.dropIfOlder(key, cfg.duplicateCallWindowSec * 1000);
+      }
+
+      return ok(
+        await withIdempotency(ctx.idempotency, key, fingerprint, async () => {
+          if (cfg.verifyCallerId) await assertCallerIdOwned(ctx, args.from);
+          await assertCapacity(ctx);
+          if (!ctx.callLimiter.wouldAllow()) {
+            throw new VobizError("rate_limited", `This MCP server allows at most ${cfg.maxCallsPerMinute} call initiations per minute.`);
+          }
+          if (!ctx.hourlyCallLimiter.wouldAllow()) {
+            throw new VobizError("rate_limited", `This MCP server allows at most ${cfg.policy.maxCallsPerHour} call initiations per hour.`);
+          }
+          ctx.callLimiter.tryAcquire();
+          ctx.hourlyCallLimiter.tryAcquire();
+          return placeCall(ctx, { fromDigits, to: args.to, answerUrl, timeLimit, args });
+        }).then((r) =>
+          r.replayed && !args.idempotency_key
+            ? (() => {
+                throw new VobizError(
+                  "duplicate_blocked",
+                  `An identical call (same caller ID and destination) was placed in the last ${cfg.duplicateCallWindowSec}s (request_uuid ${String(r.request_uuid)}). ` +
+                    "If the user really wants a second call, pass a new idempotency_key.",
+                );
+              })()
+            : r,
+        ),
+      );
+    }),
+  );
+
+  // ── get_call_status ──────────────────────────────────────────
+  server.registerTool(
+    "get_call_status",
+    {
+      title: "Get call status",
+      description:
+        "Return the current lifecycle state of one call: queued (accepted, not yet dialed), live (ringing / in-progress), or completed (from the call detail record). " +
+        "Use the request_uuid returned by make_call, or any call_uuid. Read-only.",
+      inputSchema: { call_uuid: callId.describe("Call UUID or the request_uuid from make_call.") },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    handler(async ({ call_uuid }) => {
+      const live = await findLiveOrQueued(ctx, call_uuid, "live");
+      if (live) {
+        return ok({ ok: true, call_uuid, state: "live", call_status: live.call_status ?? null, source: "live_call", call: live });
+      }
+      const queued = await findLiveOrQueued(ctx, call_uuid, "queued");
+      if (queued) {
+        return ok({ ok: true, call_uuid, state: "queued", call_status: queued.call_status ?? "queued", source: "queued_call", call: queued });
+      }
+      const cdr = await findCdr(ctx, call_uuid);
+      if (cdr) {
+        return ok({
+          ok: true,
+          call_uuid,
+          state: "completed",
+          source: "call_detail_record",
+          hangup_cause: cdr.hangup_cause ?? null,
+          start_time: cdr.start_time ?? null,
+          answer_time: cdr.answer_time ?? null,
+          end_time: cdr.end_time ?? null,
+          duration: cdr.duration ?? null,
+          billsec: cdr.billsec ?? null,
+          answered: typeof cdr.billsec === "number" ? cdr.billsec > 0 : null,
+          ...outcomeFields(cdr),
+        });
+      }
+      throw new VobizError(
+        "not_found",
+        "No live, queued or completed call with this ID was found on this account. A just-ended call can take a short while to appear in call records.",
+      );
+    }),
+  );
+
+  // ── end_call ─────────────────────────────────────────────────
+  server.registerTool(
+    "end_call",
+    {
+      title: "Hang up a call",
+      description:
+        "Terminate an active or queued call (DELETE /Account/{auth_id}/Call/{call_uuid}/). Checks first that the call is live or queued on this account. " +
+        "Required: call_uuid and confirm: true after the user explicitly asked to end this call. Returns call_not_active if the call already ended.",
+      inputSchema: {
+        call_uuid: callId.describe("UUID of the call to end."),
+        confirm: z.boolean().describe("Must be true, set only after the user explicitly asked to end this call."),
+      },
+      annotations: { destructiveHint: true, idempotentHint: true, openWorldHint: true, readOnlyHint: false },
+    },
+    handler(async ({ call_uuid, confirm }) => {
+      if (confirm !== true) {
+        throw new VobizError(
+          "confirmation_required",
+          "Ask the user to confirm ending this call, then call end_call again with confirm: true.",
+        );
+      }
+      const live = await findLiveOrQueued(ctx, call_uuid, "live");
+      const queued = live ? undefined : await findLiveOrQueued(ctx, call_uuid, "queued");
+      if (!live && !queued) {
+        const cdr = await findCdr(ctx, call_uuid);
+        throw new VobizError(
+          cdr ? "call_not_active" : "not_found",
+          cdr ? "This call has already ended; there is nothing to hang up." : "No active call with this ID was found on this account.",
+        );
+      }
+      try {
+        const res = await ctx.client.request("DELETE", ctx.client.accountPath(`/Call/${encodeURIComponent(call_uuid)}/`), {
+          route: "DELETE Call/{uuid}",
+        });
+        return ok({
+          ok: true,
+          call_uuid,
+          terminated: true,
+          previous_state: live ? "live" : "queued",
+          http_status: res.status,
+          note: "Vobiz accepted the hangup. The final record appears in get_call_details shortly.",
+        });
+      } catch (err) {
+        if (err instanceof VobizError && err.kind === "not_found") {
+          throw new VobizError("call_not_active", "The call ended before the hangup request reached it.", err.status);
+        }
+        throw err;
+      }
+    }),
+  );
+
+  // ── list_live_calls ──────────────────────────────────────────
+  server.registerTool(
+    "list_live_calls",
+    {
+      title: "List live calls",
+      description:
+        "List the UUIDs of calls currently in progress on this account, and optionally calls still queued. Read-only. Use get_call_status for details of one call.",
+      inputSchema: {
+        include_queued: z.boolean().optional().describe("Also list queued (accepted, not yet dialed) calls. Default false."),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    handler(async ({ include_queued }) => {
+      const get = async (status: "live" | "queued") => {
+        const res = await ctx.client.request<Rec>("GET", ctx.client.accountPath("/Call/"), {
+          query: { status },
+          route: `GET Call/?status=${status}`,
+        });
+        const calls = res.data?.calls;
+        if (calls !== undefined && calls !== null && !Array.isArray(calls)) {
+          throw new VobizError("unexpected_response", "Vobiz returned an unexpected live-call list format.", res.status);
+        }
+        return (calls as string[] | null | undefined) ?? [];
+      };
+      const live = await get("live");
+      const out: Record<string, unknown> = { ok: true, live_calls: live, live_count: live.length };
+      if (include_queued) {
+        const queued = await get("queued");
+        out.queued_calls = queued;
+        out.queued_count = queued.length;
+      }
+      return ok(out);
+    }),
+  );
+
+  // ── send_dtmf ────────────────────────────────────────────────
+  server.registerTool(
+    "send_dtmf",
+    {
+      title: "Send DTMF digits",
+      description:
+        "Send keypad tones on a LIVE call (POST /Account/{auth_id}/Call/{call_uuid}/DTMF/). Digits 0-9, *, #; `w` = 0.5s pause, `W` = 1s pause. " +
+        "Use only when the user asked to press keys on an active call (e.g. navigating an IVR).",
+      inputSchema: {
+        call_uuid: callId.describe("UUID of the live call."),
+        digits: z
+          .string()
+          .regex(/^[0-9*#wW]{1,64}$/, "may contain only 0-9, *, #, w and W (max 64)")
+          .describe("Digits to send, e.g. 1w2#"),
+        legs: z.enum(["aleg", "bleg", "both"]).optional().describe("Which call leg hears the tones (default aleg)."),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+    },
+    handler(async ({ call_uuid, digits, legs }) => {
+      try {
+        const res = await ctx.client.request<Rec>(
+          "POST",
+          ctx.client.accountPath(`/Call/${encodeURIComponent(call_uuid)}/DTMF/`),
+          { body: { digits, legs: legs ?? "aleg" }, route: "POST Call/{uuid}/DTMF" },
+        );
+        return ok({ ok: true, call_uuid, sent: true, backend_message: res.data?.message ?? null, http_status: res.status });
+      } catch (err) {
+        if (err instanceof VobizError && err.kind === "not_found") {
+          throw new VobizError("call_not_active", "The call is not live, so DTMF could not be sent.", err.status);
+        }
+        throw err;
+      }
+    }),
+  );
+}

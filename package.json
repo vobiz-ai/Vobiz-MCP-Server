@@ -1,0 +1,88 @@
+{
+  "name": "@vobiz/mcp",
+  "version": "1.0.0",
+  "description": "Official Vobiz MCP server: voice calls, in-call control, VobizXML IVRs, call records, recordings, phone numbers, SIP trunks, SMS/MMS/RCS and the Vobiz Agent Skills for Claude and any MCP client.",
+  "mcpName": "io.github.vobiz-ai/vobiz-mcp",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "mcp-server",
+    "vobiz",
+    "voice-api",
+    "telephony",
+    "sip-trunking",
+    "sms",
+    "rcs",
+    "ivr",
+    "claude",
+    "ai-agents"
+  ],
+  "homepage": "https://vobiz.ai/docs/resources/account-mcp",
+  "bugs": {
+    "url": "https://github.com/vobiz-ai/Vobiz-MCP-Server/issues",
+    "email": "support@vobiz.ai"
+  },
+  "author": {
+    "name": "Vobiz",
+    "email": "support@vobiz.ai",
+    "url": "https://vobiz.ai"
+  },
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "vobiz-mcp": "dist/index.js",
+    "vobiz-mcp-http": "dist/http.js",
+    "vobiz-mcp-hosted": "dist/hosted.js"
+  },
+  "files": [
+    "dist/**/*.js",
+    "!dist/dashboard/**",
+    "skills/**",
+    "assets/icon.png",
+    "README.md",
+    "LICENSE",
+    "server.json"
+  ],
+  "engines": {
+    "node": ">=22.9"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vobiz-ai/Vobiz-MCP-Server.git"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:all": "npm run build && vitest run",
+    "test:live": "npm run build && node --env-file-if-exists=.env scripts/live-smoke.mjs",
+    "inspector": "npx @modelcontextprotocol/inspector node dist/index.js",
+    "dashboard": "npm run build && node --env-file-if-exists=.env dist/dashboard/server.js",
+    "start:http": "node --env-file-if-exists=.env dist/http.js",
+    "docs:tools": "npm run build && node scripts/gen-tool-docs.mjs",
+    "lint": "tsc -p tsconfig.json --noEmit --noUnusedLocals --noUnusedParameters",
+    "check": "npm run lint && npm run test:all",
+    "start:hosted": "node --env-file-if-exists=.env dist/hosted.js",
+    "test:live:hosted": "npm run build && node --env-file-if-exists=.env scripts/live-hosted.mjs",
+    "skills:sync": "node scripts/sync-skills.mjs",
+    "prepublishOnly": "npm run check",
+    "pack:mcpb": "npm run build && npx -y @anthropic-ai/mcpb@2.1.2 pack . vobiz-mcp.mcpb"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "express": "5.2.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.6.5",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.4"
+  }
+}

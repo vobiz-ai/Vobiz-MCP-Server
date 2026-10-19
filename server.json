@@ -1,0 +1,63 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.vobiz-ai/vobiz-mcp",
+  "title": "Vobiz",
+  "description": "Vobiz voice calls, IVRs, call records, numbers, SIP trunks, SMS/MMS/RCS and Vobiz skills.",
+  "version": "1.0.0",
+  "websiteUrl": "https://vobiz.ai/docs/resources/account-mcp",
+  "repository": {
+    "url": "https://github.com/vobiz-ai/Vobiz-MCP-Server",
+    "source": "github"
+  },
+  "icons": [
+    {
+      "src": "https://vobiz.ai/favicon.svg",
+      "mimeType": "image/svg+xml",
+      "sizes": [
+        "any"
+      ]
+    }
+  ],
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "@vobiz/mcp",
+      "version": "1.0.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "VOBIZ_AUTH_ID",
+          "description": "Your Vobiz Auth ID (MA_... or SA_...) from the console overview page.",
+          "isRequired": true,
+          "isSecret": false
+        },
+        {
+          "name": "VOBIZ_AUTH_TOKEN",
+          "description": "Your Vobiz Auth Token.",
+          "isRequired": true,
+          "isSecret": true
+        },
+        {
+          "name": "VOBIZ_ENABLE_CALLS",
+          "description": "Set to true to allow placing outbound calls (off by default).",
+          "isRequired": false,
+          "default": "false"
+        },
+        {
+          "name": "VOBIZ_ENABLE_MESSAGING",
+          "description": "Set to true to allow sending SMS/MMS/RCS and changing opt-outs (off by default).",
+          "isRequired": false,
+          "default": "false"
+        },
+        {
+          "name": "VOBIZ_ENABLE_PROVISIONING",
+          "description": "Set to true to allow buying numbers and changing trunks and applications (off by default).",
+          "isRequired": false,
+          "default": "false"
+        }
+      ]
+    }
+  ]
+}

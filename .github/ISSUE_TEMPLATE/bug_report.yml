@@ -1,0 +1,30 @@
+name: Bug report
+description: Something in the Vobiz MCP server does not work as documented
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Never paste your Auth Token or other secrets. Replace phone numbers with placeholders.
+  - type: input
+    id: version
+    attributes: { label: Version, description: "Output of `npx @vobiz/mcp --version` or the release you installed", placeholder: "1.0.0" }
+    validations: { required: true }
+  - type: dropdown
+    id: mode
+    attributes:
+      label: How you run it
+      options: [Hosted connector (mcp.vobiz.ai), Claude Desktop extension (.mcpb), npx / stdio, Single-account HTTP, Docker (self-hosted)]
+    validations: { required: true }
+  - type: input
+    id: client
+    attributes: { label: MCP client, placeholder: "Claude Desktop 1.x, Claude Code, Cursor…" }
+  - type: input
+    id: tool
+    attributes: { label: Tool, placeholder: "make_call" }
+  - type: textarea
+    id: what
+    attributes: { label: What happened, description: Include the tool error JSON (error kind and message) if there was one. }
+    validations: { required: true }
+  - type: textarea
+    id: expected
+    attributes: { label: What you expected }

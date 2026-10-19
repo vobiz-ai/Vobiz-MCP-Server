@@ -1,0 +1,13 @@
+src/
+test/
+scripts/
+docs/
+dashboard/
+.github/
+coverage/
+*.mcpb
+.env
+.env.*
+tsconfig.json
+Dockerfile
+.dockerignore

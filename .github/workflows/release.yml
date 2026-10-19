@@ -1,0 +1,72 @@
+name: Release
+
+# Publishes a tagged version (git tag v1.2.3 && git push --tags):
+#   npm (@vobiz/mcp, with provenance) → official MCP Registry → .mcpb desktop bundle on the GitHub release → Docker image on GHCR.
+# Needs the NPM_TOKEN secret. The registry step signs in with GitHub OIDC (no secret).
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+  packages: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      # npm and MCP Registry publishing run only once the NPM_TOKEN secret exists; the GitHub release and Docker image always run.
+      HAS_NPM_TOKEN: ${{ secrets.NPM_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          cache: npm
+      - run: npm ci
+      - name: Check versions match the tag
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          for f in package.json server.json manifest.json; do
+            V=$(node -p "require('./$f').version"); [ "$V" = "$TAG" ] || { echo "$f is $V, tag is $TAG"; exit 1; }
+          done
+          [ "$(node -p "require('./server.json').packages[0].version")" = "$TAG" ] || { echo "server.json packages[0].version must be $TAG"; exit 1; }
+      - run: npm run check
+      - name: Publish to npm
+        if: env.HAS_NPM_TOKEN == 'true'
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish to the MCP Registry
+        if: env.HAS_NPM_TOKEN == 'true'
+        run: |
+          curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_linux_amd64.tar.gz" | tar xz mcp-publisher
+          ./mcp-publisher login github-oidc
+          ./mcp-publisher publish
+
+      - name: Build the desktop extension (.mcpb)
+        run: |
+          mkdir -p bundle && cp -R dist skills assets manifest.json package.json package-lock.json LICENSE README.md bundle/
+          rm -rf bundle/dist/dashboard
+          (cd bundle && npm ci --omit=dev && npx -y @anthropic-ai/mcpb@2.1.2 pack . "../vobiz-mcp-${GITHUB_REF_NAME}.mcpb")
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: vobiz-mcp-*.mcpb
+          generate_release_notes: true
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/vobiz-ai/vobiz-mcp:${{ github.ref_name }}
+            ghcr.io/vobiz-ai/vobiz-mcp:latest

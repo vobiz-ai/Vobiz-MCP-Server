@@ -1,0 +1,110 @@
+{
+  "manifest_version": "0.3",
+  "name": "vobiz",
+  "display_name": "Vobiz",
+  "version": "1.0.0",
+  "description": "Run Vobiz calls, conferences, IVRs, call records, numbers, SIP trunks and SMS/MMS/RCS from Claude.",
+  "long_description": "The official Vobiz MCP server. Place and control calls and conferences, stream call audio to AI agents, build VobizXML IVRs, read call records, recordings and billing, manage phone numbers, SIP trunks, endpoints, credentials, IP allow-lists, voice applications and sub-accounts, and send SMS, MMS and RCS messages on your Vobiz account. Ships the Vobiz Agent Skills as tools, prompts and resources. Calling, messaging and account changes are off until you enable them.",
+  "author": {
+    "name": "Vobiz",
+    "email": "support@vobiz.ai",
+    "url": "https://vobiz.ai"
+  },
+  "homepage": "https://vobiz.ai/docs/resources/account-mcp",
+  "documentation": "https://vobiz.ai/docs/resources/account-mcp",
+  "support": "https://github.com/vobiz-ai/Vobiz-MCP-Server/issues",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vobiz-ai/Vobiz-MCP-Server"
+  },
+  "icon": "assets/icon.png",
+  "license": "MIT",
+  "keywords": [
+    "vobiz",
+    "voice",
+    "telephony",
+    "sip",
+    "sms",
+    "rcs",
+    "ivr"
+  ],
+  "privacy_policies": [
+    "https://vobiz.ai/privacy"
+  ],
+  "server": {
+    "type": "node",
+    "entry_point": "dist/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": [
+        "${__dirname}/dist/index.js"
+      ],
+      "env": {
+        "VOBIZ_AUTH_ID": "${user_config.auth_id}",
+        "VOBIZ_AUTH_TOKEN": "${user_config.auth_token}",
+        "VOBIZ_ENABLE_CALLS": "${user_config.enable_calls}",
+        "VOBIZ_ENABLE_MESSAGING": "${user_config.enable_messaging}",
+        "VOBIZ_ENABLE_PROVISIONING": "${user_config.enable_provisioning}",
+        "VOBIZ_ALLOWED_COUNTRY_CODES": "${user_config.allowed_country_codes}",
+        "VOBIZ_DEFAULT_ANSWER_URL": "${user_config.default_answer_url}"
+      }
+    }
+  },
+  "user_config": {
+    "auth_id": {
+      "type": "string",
+      "title": "Auth ID",
+      "description": "Your Vobiz Auth ID (MA_... or SA_...) from the console overview page.",
+      "required": true
+    },
+    "auth_token": {
+      "type": "string",
+      "title": "Auth Token",
+      "description": "Your Vobiz Auth Token.",
+      "sensitive": true,
+      "required": true
+    },
+    "enable_calls": {
+      "type": "boolean",
+      "title": "Allow outbound calls",
+      "description": "Let Claude place real phone calls after you confirm each one.",
+      "default": false
+    },
+    "enable_messaging": {
+      "type": "boolean",
+      "title": "Allow sending messages",
+      "description": "Let Claude send SMS, MMS and RCS messages and change opt-outs after you confirm each one.",
+      "default": false
+    },
+    "enable_provisioning": {
+      "type": "boolean",
+      "title": "Allow account changes",
+      "description": "Let Claude buy numbers and change SIP trunks and applications after you confirm each one.",
+      "default": false
+    },
+    "allowed_country_codes": {
+      "type": "string",
+      "title": "Allowed call destinations",
+      "description": "Comma-separated country calling codes Claude may call, e.g. 91,1. Leave empty to allow any country.",
+      "default": "91"
+    },
+    "default_answer_url": {
+      "type": "string",
+      "title": "Default answer URL",
+      "description": "Optional https URL that returns VobizXML when an outbound call is answered.",
+      "default": ""
+    }
+  },
+  "tools_generated": true,
+  "prompts_generated": true,
+  "compatibility": {
+    "platforms": [
+      "darwin",
+      "win32",
+      "linux"
+    ],
+    "runtimes": {
+      "node": ">=22.9.0"
+    }
+  }
+}

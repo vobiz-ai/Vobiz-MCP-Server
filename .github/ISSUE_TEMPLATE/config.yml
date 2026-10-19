@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Vobiz documentation
+    url: https://vobiz.ai/docs
+    about: API reference, guides and the Account MCP server page
+  - name: Vobiz support
+    url: mailto:support@vobiz.ai
+    about: Account, billing and number questions
+  - name: Report a security vulnerability
+    url: https://github.com/vobiz-ai/Vobiz-MCP-Server/blob/main/SECURITY.md
+    about: Please report vulnerabilities privately
