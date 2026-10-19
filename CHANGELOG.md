@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.3
+
+- Fix: **Allow access** on the hosted sign-in page now completes in browsers. The page's `form-action` policy now allows the client's callback origin, because browsers apply it to the redirect after the form post.
+- The sign-in page follows the Vobiz brand guidelines: IBM Plex Sans, Vobiz Red `#E83C00`, Orange `#E86A00` and Dark Grey `#100703`, the official lockup, and light and dark themes matching vobiz.ai.
+
 ## 1.1.2
 
 - Every Vobiz link uses `https://www.vobiz.ai`, the canonical host. The docs page is now `https://www.vobiz.ai/docs/resources/vobiz-mcp`.

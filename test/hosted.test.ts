@@ -58,6 +58,8 @@ async function authorize(clientId: string, challenge: string, creds: { id: strin
   const q = new URLSearchParams({ response_type: "code", client_id: clientId, redirect_uri: CLAUDE_CB, code_challenge: challenge, code_challenge_method: "S256", state: "st-1", resource: "https://mcp.example.test/mcp" });
   const page = await fetch(`${base}/authorize?${q}`);
   expect(page.status).toBe(200);
+  // Browsers apply form-action to the post-submit redirect: the client's callback origin must be allowed.
+  expect(page.headers.get("content-security-policy")).toContain("form-action 'self' https://claude.ai;");
   const html = await page.text();
   expect(html).toContain("Connect your Vobiz account");
   const txn = /name="txn" value="([^"]+)"/.exec(html)![1];
