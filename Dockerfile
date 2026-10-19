@@ -1,13 +1,13 @@
 # Hosted Vobiz MCP connector (multi-tenant, OAuth). Build: docker build -t vobiz-mcp .
 # Run: docker run -p 3000:3000 -e VOBIZ_HOSTED_URL=https://mcp.example.com -e VOBIZ_HOSTED_SECRET=... vobiz-mcp
-FROM node:24-alpine AS build
+FROM node:26-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json tsconfig.json ./
 RUN npm ci
 COPY src ./src
 RUN npm run build && npm prune --omit=dev
 
-FROM node:24-alpine
+FROM node:26-alpine
 LABEL io.modelcontextprotocol.server.name="io.github.vobiz-ai/vobiz-mcp" \
       org.opencontainers.image.source="https://github.com/vobiz-ai/Vobiz-MCP-Server" \
       org.opencontainers.image.description="Official Vobiz MCP server (hosted OAuth connector)" \
