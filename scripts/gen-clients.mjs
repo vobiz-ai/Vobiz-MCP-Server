@@ -57,7 +57,7 @@ write(".claude-plugin/plugin.json", {
         VOBIZ_ENABLE_PROVISIONING: "${user_config.enable_provisioning}",
       },
     },
-    "vobiz-docs": { type: "http", url: "https://vobiz.ai/docs/mcp" },
+    "vobiz-docs": { type: "http", url: "https://www.vobiz.ai/docs/mcp" },
   },
 });
 write(".claude-plugin/marketplace.json", {
@@ -97,7 +97,7 @@ write("mcp.json", {
   $schema: "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
   mcpServers: {
     vobiz: { type: "streamable-http", url: hosted, extensions: { "com.openai": { auth: { type: "oauth" } } } },
-    "vobiz-docs": { type: "streamable-http", url: "https://vobiz.ai/docs/mcp" },
+    "vobiz-docs": { type: "streamable-http", url: "https://www.vobiz.ai/docs/mcp" },
   },
 });
 write(".agents/plugins/marketplace.json", {

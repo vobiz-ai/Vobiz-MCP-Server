@@ -2,7 +2,7 @@
 name: vobiz-forward-deployed-engineer
 description: Scope a customer use case on Vobiz the way a forward-deployed engineer would - interview the user one question at a time, resolve every branch of the design (direction, who talks, AI or human, India compliance, scale, tenancy, channel), then recommend the Vobiz integration path with the exact pages and skills to build it. Use for "which method should I use", discovery calls, solution design, customer onboarding, architecture reviews, or any request that names a business outcome rather than an endpoint.
 license: MIT
-compatibility: Vobiz REST API v1, VobizXML, SIP trunking, WebSocket streams, WhatsApp Business API. Pairs with the other vobiz-* skills and the Vobiz MCP server at https://vobiz.ai/docs/mcp.
+compatibility: Vobiz REST API v1, VobizXML, SIP trunking, WebSocket streams, WhatsApp Business API. Pairs with the other vobiz-* skills and the Vobiz MCP server at https://www.vobiz.ai/docs/mcp.
 metadata:
   author: vobiz
   version: "1.0"
@@ -18,7 +18,7 @@ The other `vobiz-*` skills teach *how* to call an endpoint. This skill decides *
 
 - **Interview first, recommend second.** Do not propose an architecture until you know direction, who speaks on the call, where the callers are, and the volume. One wrong assumption here costs the customer weeks.
 - **Ask one question at a time**, and give your recommended answer with each question. Walk the decision tree branch by branch, resolving the dependencies between answers before moving to the next branch.
-- **Look it up instead of asking.** If the answer is in the Vobiz docs (an endpoint's shape, a limit, a page), search `https://vobiz.ai/docs` or the MCP server at `https://vobiz.ai/docs/mcp`. Ask the customer only what only they know.
+- **Look it up instead of asking.** If the answer is in the Vobiz docs (an endpoint's shape, a limit, a page), search `https://vobiz.ai/docs` or the MCP server at `https://www.vobiz.ai/docs/mcp`. Ask the customer only what only they know.
 - **Vobiz is telephony infrastructure.** It carries calls, numbers, and audio for the customer's app or AI agent. Describe it as the rails that power their voice AI, never as "our agent". Lead with what fits. If a capability is not documented, say "confirm with Vobiz" and point to [contact support](https://vobiz.ai/docs/faq/contact-support); do not describe Vobiz as lacking it.
 - **Do not invent fields, endpoints, limits, or prices.** Everything you state must come from a docs page. Link the page. Prices and rates live on the pricing calculator and the SIP vs WebSockets page; point there instead of quoting numbers that go stale.
 - **Never list IP addresses.** Point to [IP Whitelisting](https://vobiz.ai/docs/concepts/ip-whitelisting) with the right anchor.

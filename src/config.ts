@@ -222,7 +222,7 @@ export function loadConfig(rawEnv: NodeJS.ProcessEnv = process.env): Config {
       console: httpsLink("VOBIZ_CONSOLE_URL", env.VOBIZ_CONSOLE_URL, "https://console.vobiz.ai"),
       privacy: httpsLink("VOBIZ_PRIVACY_URL", env.VOBIZ_PRIVACY_URL, "https://vobiz.ai/privacy"),
       docs: httpsLink("VOBIZ_DOCS_URL", env.VOBIZ_DOCS_URL, "https://vobiz.ai/docs/resources/account-mcp"),
-      docsMcp: httpsLink("VOBIZ_DOCS_MCP_URL", env.VOBIZ_DOCS_MCP_URL, "https://vobiz.ai/docs/mcp"),
+      docsMcp: httpsLink("VOBIZ_DOCS_MCP_URL", env.VOBIZ_DOCS_MCP_URL, "https://www.vobiz.ai/docs/mcp"),
     },
     enableMessaging: bool(env.VOBIZ_ENABLE_MESSAGING, false),
     messaging: {
