@@ -1,0 +1,29 @@
+{
+  "name": "vobiz",
+  "owner": {
+    "name": "Vobiz",
+    "email": "support@vobiz.ai"
+  },
+  "metadata": {
+    "description": "Official Vobiz plugin: the Vobiz MCP server and Agent Skills"
+  },
+  "plugins": [
+    {
+      "name": "vobiz",
+      "source": "./",
+      "description": "Vobiz calls, conferences, IVRs, call records, numbers, SIP trunks, sub-accounts, billing and SMS/MMS/RCS, plus the Vobiz Agent Skills.",
+      "category": "development",
+      "tags": [
+        "vobiz",
+        "telephony",
+        "voice-api",
+        "sip-trunking",
+        "sms",
+        "rcs",
+        "ivr",
+        "voice-agents",
+        "mcp"
+      ]
+    }
+  ]
+}

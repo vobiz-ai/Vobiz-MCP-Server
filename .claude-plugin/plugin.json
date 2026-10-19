@@ -1,0 +1,77 @@
+{
+  "name": "vobiz",
+  "version": "1.1.0",
+  "description": "Vobiz calls, conferences, IVRs, call records, numbers, SIP trunks, sub-accounts, billing and SMS/MMS/RCS, plus the Vobiz Agent Skills.",
+  "author": {
+    "name": "Vobiz",
+    "email": "support@vobiz.ai",
+    "url": "https://vobiz.ai"
+  },
+  "homepage": "https://vobiz.ai/docs/resources/account-mcp",
+  "repository": "https://github.com/vobiz-ai/Vobiz-MCP-Server",
+  "license": "MIT",
+  "keywords": [
+    "vobiz",
+    "telephony",
+    "voice-api",
+    "sip-trunking",
+    "sms",
+    "rcs",
+    "ivr",
+    "voice-agents",
+    "mcp"
+  ],
+  "userConfig": {
+    "auth_id": {
+      "type": "string",
+      "title": "Vobiz Auth ID",
+      "description": "Your Auth ID (MA_... or SA_...) from the Vobiz console overview page.",
+      "required": true
+    },
+    "auth_token": {
+      "type": "string",
+      "title": "Vobiz Auth Token",
+      "description": "Your Vobiz Auth Token. Stored in your OS credential store.",
+      "required": true,
+      "sensitive": true
+    },
+    "enable_calls": {
+      "type": "boolean",
+      "title": "Allow outbound calls",
+      "description": "Let Claude place real calls after you confirm each one.",
+      "default": false
+    },
+    "enable_messaging": {
+      "type": "boolean",
+      "title": "Allow sending messages",
+      "description": "Let Claude send SMS, MMS and RCS and change opt-outs after you confirm each one.",
+      "default": false
+    },
+    "enable_provisioning": {
+      "type": "boolean",
+      "title": "Allow account changes",
+      "description": "Let Claude change numbers, trunks, SIP settings, applications and sub-accounts after you confirm each one.",
+      "default": false
+    }
+  },
+  "mcpServers": {
+    "vobiz": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "github:vobiz-ai/Vobiz-MCP-Server#v1.1.0"
+      ],
+      "env": {
+        "VOBIZ_AUTH_ID": "${user_config.auth_id}",
+        "VOBIZ_AUTH_TOKEN": "${user_config.auth_token}",
+        "VOBIZ_ENABLE_CALLS": "${user_config.enable_calls}",
+        "VOBIZ_ENABLE_MESSAGING": "${user_config.enable_messaging}",
+        "VOBIZ_ENABLE_PROVISIONING": "${user_config.enable_provisioning}"
+      }
+    },
+    "vobiz-docs": {
+      "type": "http",
+      "url": "https://vobiz.ai/docs/mcp"
+    }
+  }
+}

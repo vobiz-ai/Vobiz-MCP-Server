@@ -1,0 +1,32 @@
+{
+  "name": "vobiz",
+  "version": "1.1.0",
+  "description": "Vobiz calls, conferences, IVRs, call records, numbers, SIP trunks, sub-accounts, billing and SMS/MMS/RCS, plus the Vobiz Agent Skills.",
+  "contextFileName": "GEMINI.md",
+  "mcpServers": {
+    "vobiz": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "github:vobiz-ai/Vobiz-MCP-Server#v1.1.0"
+      ],
+      "env": {
+        "VOBIZ_AUTH_ID": "$VOBIZ_AUTH_ID",
+        "VOBIZ_AUTH_TOKEN": "$VOBIZ_AUTH_TOKEN"
+      }
+    }
+  },
+  "settings": [
+    {
+      "name": "Vobiz Auth ID",
+      "description": "Your Auth ID (MA_... or SA_...) from the Vobiz console overview page.",
+      "envVar": "VOBIZ_AUTH_ID"
+    },
+    {
+      "name": "Vobiz Auth Token",
+      "description": "Your Vobiz Auth Token.",
+      "envVar": "VOBIZ_AUTH_TOKEN",
+      "sensitive": true
+    }
+  ]
+}

@@ -127,7 +127,13 @@ function list(v: string | undefined): string[] {
     .filter((s) => s.length > 0);
 }
 
-export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
+/** A client that does not expand `${VAR}` / `$VAR` placeholders passes them through literally: treat those as unset. */
+function unexpanded(v: string | undefined): boolean {
+  return !!v && /^\$\{?[A-Za-z_:.][\w:.]*\}?$/.test(v.trim());
+}
+
+export function loadConfig(rawEnv: NodeJS.ProcessEnv = process.env): Config {
+  const env: NodeJS.ProcessEnv = Object.fromEntries(Object.entries(rawEnv).filter(([, v]) => !unexpanded(v)));
   const authId = env.VOBIZ_AUTH_ID?.trim() || undefined;
   const authToken = env.VOBIZ_AUTH_TOKEN?.trim() || undefined;
   if (authId && !AUTH_ID_RE.test(authId)) {
