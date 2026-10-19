@@ -53,7 +53,7 @@ jobs:
           mkdir -p bundle && cp -R dist skills assets manifest.json package.json package-lock.json LICENSE README.md bundle/
           rm -rf bundle/dist/dashboard
           (cd bundle && npm ci --omit=dev && npx -y @anthropic-ai/mcpb@2.1.2 pack . "../vobiz-mcp-${GITHUB_REF_NAME}.mcpb")
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: vobiz-mcp-*.mcpb
           generate_release_notes: true
