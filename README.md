@@ -13,6 +13,7 @@ It also ships the **Vobiz Agent Skills**, so the model knows how each Vobiz prod
 
 [![CI](https://github.com/vobiz-ai/Vobiz-MCP-Server/actions/workflows/ci.yml/badge.svg)](https://github.com/vobiz-ai/Vobiz-MCP-Server/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@vobiz/mcp)](https://www.npmjs.com/package/@vobiz/mcp)
+[![MCP Registry](https://img.shields.io/badge/MCP_Registry-io.github.vobiz--ai%2Fvobiz--mcp-E83C00)](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.vobiz-ai/vobiz-mcp)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
 | | |
@@ -113,11 +114,11 @@ Local options run the server on your machine with `npx` and need Node.js 22.9 or
 | Claude (web, Desktop, mobile) | Settings → Connectors → Add custom connector → `https://mcp.vobiz.ai/mcp` |
 | Claude Desktop extension | Open `vobiz-mcp-v1.1.4.mcpb` from the [latest release](https://github.com/vobiz-ai/Vobiz-MCP-Server/releases/latest) |
 | Claude Code | `/plugin install vobiz --marketplace vobiz-ai/Vobiz-MCP-Server` (MCP server + skills) |
-| OpenAI Codex | `codex mcp add vobiz --env VOBIZ_AUTH_ID=MA_XXXXXXXX --env VOBIZ_AUTH_TOKEN=YOUR_AUTH_TOKEN -- npx -y github:vobiz-ai/Vobiz-MCP-Server#v1.1.4` |
+| OpenAI Codex | `codex mcp add vobiz --env VOBIZ_AUTH_ID=MA_XXXXXXXX --env VOBIZ_AUTH_TOKEN=YOUR_AUTH_TOKEN -- npx -y @vobiz/mcp@1.1.4` |
 | Gemini CLI | `gemini extensions install https://github.com/vobiz-ai/Vobiz-MCP-Server` |
-| Cursor | [One-click install](https://cursor.com/en/install-mcp?name=vobiz&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsImdpdGh1Yjp2b2Jpei1haS9Wb2Jpei1NQ1AtU2VydmVyI3YxLjEuNCJdLCJlbnYiOnsiVk9CSVpfQVVUSF9JRCI6IiR7ZW52OlZPQklaX0FVVEhfSUR9IiwiVk9CSVpfQVVUSF9UT0tFTiI6IiR7ZW52OlZPQklaX0FVVEhfVE9LRU59In19) |
-| VS Code / Copilot | [One-click install](https://insiders.vscode.dev/redirect/mcp/install?name=vobiz&config=%7B%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22github%3Avobiz-ai%2FVobiz-MCP-Server%23v1.1.4%22%5D%2C%22env%22%3A%7B%22VOBIZ_AUTH_ID%22%3A%22%24%7Benv%3AVOBIZ_AUTH_ID%7D%22%2C%22VOBIZ_AUTH_TOKEN%22%3A%22%24%7Benv%3AVOBIZ_AUTH_TOKEN%7D%22%7D%7D) |
-| Goose | `goose configure` → Add Extension → `npx -y github:vobiz-ai/Vobiz-MCP-Server#v1.1.4` ([deeplink](docs/INSTALL.md#goose)) |
+| Cursor | [One-click install](https://cursor.com/en/install-mcp?name=vobiz&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsIkB2b2Jpei9tY3BAMS4xLjQiXSwiZW52Ijp7IlZPQklaX0FVVEhfSUQiOiIke2VudjpWT0JJWl9BVVRIX0lEfSIsIlZPQklaX0FVVEhfVE9LRU4iOiIke2VudjpWT0JJWl9BVVRIX1RPS0VOfSJ9fQ%3D%3D) |
+| VS Code / Copilot | [One-click install](https://insiders.vscode.dev/redirect/mcp/install?name=vobiz&config=%7B%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22%40vobiz%2Fmcp%401.1.4%22%5D%2C%22env%22%3A%7B%22VOBIZ_AUTH_ID%22%3A%22%24%7Benv%3AVOBIZ_AUTH_ID%7D%22%2C%22VOBIZ_AUTH_TOKEN%22%3A%22%24%7Benv%3AVOBIZ_AUTH_TOKEN%7D%22%7D%7D) |
+| Goose | `goose configure` → Add Extension → `npx -y @vobiz/mcp@1.1.4` ([deeplink](docs/INSTALL.md#goose)) |
 | Windsurf, Zed, Cline, JetBrains, Continue, LM Studio, Warp, ChatGPT | [docs/INSTALL.md](docs/INSTALL.md) |
 
 Any other MCP client:
@@ -129,7 +130,7 @@ Any other MCP client:
       "command": "npx",
       "args": [
         "-y",
-        "github:vobiz-ai/Vobiz-MCP-Server#v1.1.4"
+        "@vobiz/mcp@1.1.4"
       ],
       "env": {
         "VOBIZ_AUTH_ID": "MA_XXXXXXXX",

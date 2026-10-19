@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `@vobiz/mcp` is on npm and listed in the official MCP Registry as `io.github.vobiz-ai/vobiz-mcp`. Every local install snippet now uses `npx -y @vobiz/mcp@<version>`.
 - **Connect in one step** for every MCP client: Claude, Claude Code, Codex, ChatGPT, Gemini CLI, Cursor, VS Code, Windsurf, Cline, Goose and more. Each connects to the hosted server with OAuth, so no Auth Token goes in a config file.
 - A step-by-step guide to connecting Claude.
 - A 512×512 Vobiz icon (PNG and SVG).

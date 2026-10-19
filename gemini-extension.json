@@ -8,7 +8,7 @@
       "command": "npx",
       "args": [
         "-y",
-        "github:vobiz-ai/Vobiz-MCP-Server#v1.1.4"
+        "@vobiz/mcp@1.1.4"
       ],
       "env": {
         "VOBIZ_AUTH_ID": "$VOBIZ_AUTH_ID",
