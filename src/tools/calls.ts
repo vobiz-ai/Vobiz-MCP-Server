@@ -38,7 +38,7 @@ async function findCdr(ctx: ToolContext, uuid: string): Promise<Rec | undefined>
 }
 
 /** Confirms `from` is an active, voice-capable number owned by the account. Fails closed. */
-async function assertCallerIdOwned(ctx: ToolContext, from: string): Promise<void> {
+export async function assertCallerIdOwned(ctx: ToolContext, from: string): Promise<void> {
   const wanted = digitsOnly(from);
   const res = await ctx.client.request<{ items?: Rec[] }>("GET", ctx.client.accountPath("/numbers"), {
     query: { search: toE164(from), per_page: 25 },
