@@ -1,7 +1,8 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ToolContext } from "../context.js";
-import { outcomeFields } from "./calls.js";
+import { CALL_UNTRUSTED_FIELDS, outcomeFields } from "./calls.js";
+import { UNTRUSTED_DESCRIPTION, markUntrusted, withUntrustedNotice } from "../guard/untrusted.js";
 import { VobizError } from "../errors.js";
 import { PAGINATION_NOTE, callId, handler, isoDate, listField, ok, pageInfo, phoneNumber } from "../util.js";
 
@@ -18,7 +19,7 @@ export function registerRecordTools(server: McpServer, ctx: ToolContext): void {
       title: "Get call details",
       description:
         "Return the full call detail record (CDR) of a COMPLETED call: direction, numbers, start/answer/end time, duration, billed seconds, hangup cause, cost, quality (MOS, jitter). " +
-        "For a call still in progress use get_call_status. Read-only.",
+        "For a call still in progress use get_call_status. Read-only." + UNTRUSTED_DESCRIPTION,
       inputSchema: { call_uuid: callId.describe("UUID of the call.") },
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
@@ -31,7 +32,7 @@ export function registerRecordTools(server: McpServer, ctx: ToolContext): void {
         if (!record || typeof record !== "object") {
           throw new VobizError("unexpected_response", "Vobiz returned a call record in an unexpected format.", res.status);
         }
-        return ok({ ok: true, call_uuid, ...outcomeFields(record), record });
+        return ok(withUntrustedNotice({ ok: true, call_uuid, ...outcomeFields(record), record: markUntrusted(record) }, CALL_UNTRUSTED_FIELDS));
       } catch (err) {
         if (err instanceof VobizError && err.kind === "not_found") {
           throw new VobizError(
@@ -55,7 +56,8 @@ export function registerRecordTools(server: McpServer, ctx: ToolContext): void {
         `Optional filters: start_date/end_date (YYYY-MM-DD, max ${MAX_CDR_RANGE_DAYS} days apart), call_direction, from_number, to_number, hangup_cause, min/max duration. ` +
         "Filter by hangup_cause (e.g. NORMAL_CLEARING for answered, NO_ANSWER, USER_BUSY) to find answered, missed or busy calls. " +
         PAGINATION_NOTE +
-        " Read-only.",
+        " Read-only." +
+        UNTRUSTED_DESCRIPTION,
       inputSchema: {
         start_date: isoDate.optional().describe("Start of range, YYYY-MM-DD."),
         end_date: isoDate.optional().describe("End of range, YYYY-MM-DD (inclusive)."),
@@ -122,13 +124,18 @@ export function registerRecordTools(server: McpServer, ctx: ToolContext): void {
       if (!records) {
         throw new VobizError("unexpected_response", "Vobiz returned call records in an unexpected format.", res.status);
       }
-      return ok({
-        ok: true,
-        count: records.length,
-        records,
-        pagination: pageInfo(page, perPage, records.length, (data.pagination as Rec | undefined)?.total),
-        summary: data.summary ?? null,
-      });
+      return ok(
+        withUntrustedNotice(
+          {
+            ok: true,
+            count: records.length,
+            records: records.map(markUntrusted),
+            pagination: pageInfo(page, perPage, records.length, (data.pagination as Rec | undefined)?.total),
+            summary: data.summary ?? null,
+          },
+          CALL_UNTRUSTED_FIELDS,
+        ),
+      );
     }),
   );
 

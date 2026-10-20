@@ -22,6 +22,7 @@ import type { ToolContext } from "../context.js";
 import { VobizError } from "../errors.js";
 import { handler, listField, ok } from "../util.js";
 import { audioUrl } from "./control.js";
+import { UNTRUSTED_DESCRIPTION, markUntrusted, withUntrustedNotice } from "../guard/untrusted.js";
 
 type Rec = Record<string, unknown>;
 
@@ -139,7 +140,7 @@ export function registerConferenceTools(server: McpServer, ctx: ToolContext): vo
       title: "Get a live conference",
       description:
         "Get one running Vobiz conference room by name (GET /Conference/{name}/): run time, member count and each member's member_id, call_uuid, caller, mute and deaf state. " +
-        "Use it to find the member_id values that the mute, deafen, kick, hang-up and play tools need.",
+        "Use it to find the member_id values that the mute, deafen, kick, hang-up and play tools need." + UNTRUSTED_DESCRIPTION,
       inputSchema: { conference_name: conferenceName },
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
@@ -157,14 +158,19 @@ export function registerConferenceTools(server: McpServer, ctx: ToolContext): vo
       }
       const members = listField<Rec>(d, "members");
       if (members === undefined) throw new VobizError("unexpected_response", "Vobiz returned an unexpected conference object.", res.status);
-      return ok({
-        ok: true,
-        conference_name: str(d.conference_name) ?? conference_name,
-        details_available: true,
-        run_time_seconds: num(d.conference_run_time),
-        member_count: num(d.conference_member_count) ?? members.length,
-        members: members.map(tidyMember),
-      });
+      return ok(
+        withUntrustedNotice(
+          {
+            ok: true,
+            conference_name: str(d.conference_name) ?? conference_name,
+            details_available: true,
+            run_time_seconds: num(d.conference_run_time),
+            member_count: num(d.conference_member_count) ?? members.length,
+            members: members.map((m) => markUntrusted(tidyMember(m))),
+          },
+          ["caller_name"],
+        ),
+      );
     }),
   );
 

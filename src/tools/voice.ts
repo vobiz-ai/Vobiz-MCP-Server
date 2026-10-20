@@ -9,6 +9,7 @@ import { VobizError } from "../errors.js";
 import { assertAllowedUrl, callId, handler, listField, ok } from "../util.js";
 import { buildResponseXml, xmlAction, xmlActions, type XmlAction } from "../xml.js";
 import { callAction } from "./control.js";
+import { UNTRUSTED_DESCRIPTION, markUntrusted, withUntrustedNotice } from "../guard/untrusted.js";
 
 type Rec = Record<string, unknown>;
 
@@ -121,7 +122,7 @@ export function registerVoiceTools(server: McpServer, ctx: ToolContext): void {
     "get_gather_result",
     {
       title: "Get collected keypad input",
-      description: "Return the DTMF input received for a gather_dtmf / hosted flow (digits, call_uuid, whether the callback signature was verified). Read-only.",
+      description: "Return the DTMF input received for a gather_dtmf / hosted flow (digits, call_uuid, whether the callback signature was verified). Read-only." + UNTRUSTED_DESCRIPTION,
       inputSchema: { flow_id: z.string().regex(/^[0-9a-f]{32}$/, "must be a flow_id from gather_dtmf") },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -129,7 +130,12 @@ export function registerVoiceTools(server: McpServer, ctx: ToolContext): void {
       needHosting(ctx);
       const r = ctx.flows.results(flow_id);
       if (!r.exists) throw new VobizError("not_found", "No hosted flow with this ID (it may have expired after 24h or the server restarted).");
-      return ok({ ok: true, flow_id, received: r.results.length > 0, results: r.results, status: r.results.length ? "input_received" : "waiting" });
+      return ok(
+        withUntrustedNotice(
+          { ok: true, flow_id, received: r.results.length > 0, results: r.results.map(markUntrusted), status: r.results.length ? "input_received" : "waiting" },
+          ["digits", "speech"],
+        ),
+      );
     }),
   );
 
@@ -140,7 +146,7 @@ export function registerVoiceTools(server: McpServer, ctx: ToolContext): void {
       title: "List received Vobiz callbacks",
       description:
         "List callbacks Vobiz delivered to this server's /webhooks/vobiz endpoint and hosted flows (call answered/hung up, Gather digits, recording events), newest first. " +
-        "Duplicates are collapsed and unsigned/invalid requests are rejected per VOBIZ_WEBHOOK_SIGNATURE. HTTP mode only. Read-only.",
+        "Duplicates are collapsed and unsigned/invalid requests are rejected per VOBIZ_WEBHOOK_SIGNATURE. HTTP mode only. Read-only." + UNTRUSTED_DESCRIPTION,
       inputSchema: {
         call_uuid: callId.optional(),
         event: z.string().regex(/^[A-Za-z]{2,40}$/).optional().describe("e.g. StartApp, Hangup, Redirect"),
@@ -151,7 +157,12 @@ export function registerVoiceTools(server: McpServer, ctx: ToolContext): void {
     handler(async (f) => {
       needHosting(ctx);
       const events = ctx.events.list(f);
-      return ok({ ok: true, count: events.length, events, endpoint: `${ctx.cfg.publicUrl}/webhooks/vobiz` });
+      return ok(
+        withUntrustedNotice(
+          { ok: true, count: events.length, events: events.map(markUntrusted), endpoint: `${ctx.cfg.publicUrl}/webhooks/vobiz` },
+          ["fields.CallerName", "fields.Speech", "fields.Digits", "fields.From"],
+        ),
+      );
     }),
   );
 

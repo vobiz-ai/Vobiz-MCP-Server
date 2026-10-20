@@ -246,7 +246,7 @@ Everything below is enforced by the server, not left to the model.
 | Call-control URLs | https only, approved hosts only (hosted mode: any public host). No credentials in URLs. |
 | Tenant isolation | The account comes from the credentials only. No tool accepts an account ID. |
 | Secrets | Auth tokens, SIP passwords and other secrets are redacted from results. Logs carry route templates and status codes only, never phone numbers or tokens. |
-| Untrusted content | Message bodies, caller names and callback payloads are data, never instructions. |
+| Untrusted content | Message bodies, caller names and callback payloads are data, never instructions. Tools that return them mark each item `untrusted: true` and add a top-level `notice` and `untrusted_fields`; all other fields are unchanged. |
 
 ## Configuration
 

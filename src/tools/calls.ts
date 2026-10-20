@@ -6,9 +6,13 @@ import { VobizError } from "../errors.js";
 import { IdempotencyStore, withIdempotency } from "../idempotency.js";
 import { classifyHangup } from "../outcomes.js";
 import { assertDestinationAllowed, effectiveTimeLimit } from "../policy.js";
+import { UNTRUSTED_DESCRIPTION, markUntrusted, withUntrustedNotice } from "../guard/untrusted.js";
 import { assertAllowedUrl, callId, handler, idempotencyKey, ok, phoneNumber, toE164 } from "../util.js";
 
 type Rec = Record<string, unknown>;
+
+/** Call and CDR fields a caller can set (caller ID name, SIP headers, free-text fields). */
+export const CALL_UNTRUSTED_FIELDS = ["caller_name", "from_name", "caller_id_name", "sip_headers", "extra_headers", "notes"];
 
 /** Looks a call up in a given live state; returns undefined on 404. */
 async function findLiveOrQueued(ctx: ToolContext, uuid: string, status: "live" | "queued"): Promise<Rec | undefined> {
@@ -266,18 +270,18 @@ export function registerCallTools(server: McpServer, ctx: ToolContext): void {
       title: "Get call status",
       description:
         "Return the current lifecycle state of one call: queued (accepted, not yet dialed), live (ringing / in-progress), or completed (from the call detail record). " +
-        "Use the request_uuid returned by make_call, or any call_uuid. Read-only.",
+        "Use the request_uuid returned by make_call, or any call_uuid. Read-only." + UNTRUSTED_DESCRIPTION,
       inputSchema: { call_uuid: callId.describe("Call UUID or the request_uuid from make_call.") },
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     handler(async ({ call_uuid }) => {
       const live = await findLiveOrQueued(ctx, call_uuid, "live");
       if (live) {
-        return ok({ ok: true, call_uuid, state: "live", call_status: live.call_status ?? null, source: "live_call", call: live });
+        return ok(withUntrustedNotice({ ok: true, call_uuid, state: "live", call_status: live.call_status ?? null, source: "live_call", call: markUntrusted(live) }, CALL_UNTRUSTED_FIELDS));
       }
       const queued = await findLiveOrQueued(ctx, call_uuid, "queued");
       if (queued) {
-        return ok({ ok: true, call_uuid, state: "queued", call_status: queued.call_status ?? "queued", source: "queued_call", call: queued });
+        return ok(withUntrustedNotice({ ok: true, call_uuid, state: "queued", call_status: queued.call_status ?? "queued", source: "queued_call", call: markUntrusted(queued) }, CALL_UNTRUSTED_FIELDS));
       }
       const cdr = await findCdr(ctx, call_uuid);
       if (cdr) {
