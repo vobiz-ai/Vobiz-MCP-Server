@@ -73,6 +73,21 @@ export interface Config {
     /** Reminder call attempts per destination per UTC day. */
     maxCallsPerDay: number;
   };
+  /** Audio library for reminder calls (hosted connector only): uploaded or imported files played with <Play>. */
+  media: {
+    /** VOBIZ_MEDIA_BUCKET: Google Cloud Storage bucket; when unset, files go to local disk. */
+    bucket?: string;
+    /** VOBIZ_MEDIA_DIR: local-disk directory (default: <os tmpdir>/vobiz-mcp-media). */
+    dir?: string;
+    /** Largest accepted input file, in MiB (before conversion). */
+    maxInputMb: number;
+    /** Longest accepted audio, in seconds. */
+    maxDurationSec: number;
+    /** Library entries per account. */
+    maxPerAccount: number;
+    /** Uploads and URL imports per account per UTC day. */
+    maxUploadsPerDay: number;
+  };
   /** Served verbatim at GET /.well-known/openai-apps-challenge (OpenAI Apps domain verification). */
   openaiAppsChallenge?: string;
 }
@@ -171,6 +186,18 @@ function remindersConfig(env: NodeJS.ProcessEnv): Config["reminders"] {
     firestoreCollection: opt("VOBIZ_FIRESTORE_COLLECTION", env.VOBIZ_FIRESTORE_COLLECTION, /^[A-Za-z0-9_-]{1,100}$/, "a Firestore collection id (letters, digits, _ and -)") ?? "reminders",
     maxActive: int("VOBIZ_MAX_ACTIVE_REMINDERS", env.VOBIZ_MAX_ACTIVE_REMINDERS, 20, 1, 1000),
     maxCallsPerDay: int("VOBIZ_MAX_REMINDER_CALLS_PER_DAY", env.VOBIZ_MAX_REMINDER_CALLS_PER_DAY, 10, 1, 1000),
+  };
+}
+
+function mediaConfig(env: NodeJS.ProcessEnv): Config["media"] {
+  return {
+    // GCS bucket names: 3-63 characters (up to 222 with dots), lowercase letters, digits, - _ and .
+    bucket: opt("VOBIZ_MEDIA_BUCKET", env.VOBIZ_MEDIA_BUCKET, /^[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]$/, "a Cloud Storage bucket name (lowercase letters, digits, -, _ and .)"),
+    dir: opt("VOBIZ_MEDIA_DIR", env.VOBIZ_MEDIA_DIR, /^[^\x00-\x1f]{1,1024}$/, "a directory path"),
+    maxInputMb: int("VOBIZ_MEDIA_MAX_INPUT_MB", env.VOBIZ_MEDIA_MAX_INPUT_MB, 15, 1, 100),
+    maxDurationSec: int("VOBIZ_MEDIA_MAX_DURATION_SEC", env.VOBIZ_MEDIA_MAX_DURATION_SEC, 300, 5, 1800),
+    maxPerAccount: int("VOBIZ_MEDIA_MAX_PER_ACCOUNT", env.VOBIZ_MEDIA_MAX_PER_ACCOUNT, 50, 1, 1000),
+    maxUploadsPerDay: int("VOBIZ_MEDIA_MAX_UPLOADS_PER_DAY", env.VOBIZ_MEDIA_MAX_UPLOADS_PER_DAY, 20, 1, 1000),
   };
 }
 
@@ -275,6 +302,7 @@ export function loadConfig(rawEnv: NodeJS.ProcessEnv = process.env): Config {
       verifySender: bool(env.VOBIZ_VERIFY_SENDER, true),
     },
     reminders: remindersConfig(env),
+    media: mediaConfig(env),
     openaiAppsChallenge: opt("VOBIZ_OPENAI_APPS_CHALLENGE", env.VOBIZ_OPENAI_APPS_CHALLENGE, /^[^\x00-\x1f\x7f]{1,1024}$/, "printable text (max 1024 characters)"),
     webhookSignature: signatureMode(env.VOBIZ_WEBHOOK_SIGNATURE),
     allowAnyUrlHost: bool(env.VOBIZ_ALLOW_ANY_URL_HOST, false),

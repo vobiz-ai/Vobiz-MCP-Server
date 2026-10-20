@@ -10,7 +10,10 @@ import { createServer } from "../dist/server.js";
 // The reminder tools register only when a ReminderService is present (hosted connector); a stub with the
 // default limits is enough to list them. Nothing is ever scheduled here.
 const reminders = { limits: { maxActive: 20, maxCallsPerDay: 10, maxDaysAhead: 30 } };
-const server = createServer(loadConfig({ VOBIZ_LOG_LEVEL: "silent" }), silentLogger, undefined, { reminders });
+// Likewise the audio library tools need a MediaService (limits only) and upload-link minting; nothing is stored.
+const media = { limits: { maxInputBytes: 15 * 1024 * 1024, maxDurationSec: 300, maxPerAccount: 50, maxUploadsPerDay: 20 } };
+const mediaUploads = { url: () => "https://mcp.vobiz.ai/upload/vbzu_example" };
+const server = createServer(loadConfig({ VOBIZ_LOG_LEVEL: "silent" }), silentLogger, undefined, { reminders, media, mediaUploads });
 const [a, b] = InMemoryTransport.createLinkedPair();
 const client = new Client({ name: "docs", version: "0" });
 await Promise.all([server.connect(a), client.connect(b)]);

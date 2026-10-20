@@ -7,6 +7,8 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { silentLogger } from "../src/logger.js";
 import { ASSISTANT_TOOLS, HOSTED_EXCLUDED_TOOLS, Sealer, createHostedApp } from "../src/hosted.js";
 import { FakeReminders } from "./fake-reminders.js";
+import { FakeMedia } from "./fake-media.js";
+import { createMediaRouter } from "../src/media/router.js";
 import { BASE, json, mockFetch, testConfig } from "./helpers.js";
 
 const GOOD_ID = "MA_GOOD1234";
@@ -15,6 +17,7 @@ const CLAUDE_CB = "https://claude.ai/api/mcp/auth_callback";
 const MY_PHONE = "+919811112222";
 const MY_DID = "+918012345678";
 const reminders = new FakeReminders();
+const media = new FakeMedia();
 
 const vobiz = mockFetch([
   {
@@ -44,6 +47,8 @@ beforeAll(async () => {
     fetchImpl: vobiz.impl,
     reminders,
     remindersRouter: express.Router().post("/jobs/fire", (_req, res) => res.json({ fired: false, reason: "router-mounted" })),
+    media,
+    mediaRouter: createMediaRouter(media, { baseUrl: "https://mcp.example.test", sealer: new Sealer("s".repeat(40)), log: silentLogger, links: testConfig().links }),
   });
   const srv = app.listen(0, "127.0.0.1");
   await new Promise((r) => srv.once("listening", r));
@@ -220,6 +225,8 @@ describe("hosted connector OAuth", () => {
     const u = `http://127.0.0.1:${(srv.address() as AddressInfo).port}`;
     expect((await fetch(`${u}/.well-known/openai-apps-challenge`)).status).toBe(404);
     expect((await fetch(`${u}/jobs/fire`, { method: "POST", body: "x" })).status).toBe(404);
+    expect((await fetch(`${u}/upload/vbzu_x`)).status).toBe(404);
+    expect((await fetch(`${u}/media/vbzm_x`)).status).toBe(404);
     srv.close();
   });
 });
@@ -287,6 +294,39 @@ describe("hosted connector scopes and reminder calls", () => {
     expect(names).toEqual(expect.arrayContaining(["list_reminder_calls", "get_reminder_call"]));
     expect(names).not.toContain("schedule_reminder_call");
     expect(names).not.toContain("make_call");
+    await client.close();
+  });
+
+  it("assistant scope adds audio end to end: upload link, PUT, list, schedule with audio", async () => {
+    const { tokens } = await fullFlow(false, { scope: "assistant", callMeOn: MY_PHONE, callFrom: MY_DID, tz: "Asia/Kolkata" });
+    const client = await mcpClient(tokens.access_token);
+    const names = (await client.listTools()).tools.map((t) => t.name);
+    for (const n of ["create_audio_upload_link", "import_audio_from_url", "list_audio", "delete_audio"]) expect(names).toContain(n);
+
+    const link = (await client.callTool({ name: "create_audio_upload_link", arguments: { name: "Wake tune" } })).structuredContent as Record<string, any>;
+    expect(link).toMatchObject({ ok: true, expires_in_minutes: 15 });
+    const url = new URL(link.upload_url as string);
+    expect(url.origin).toBe("https://mcp.example.test");
+    expect(url.pathname).toMatch(/^\/upload\/vbzu_/);
+    expect(link.how_to[1]).toContain(`-H "X-Audio-Name: Wake tune" --data-binary @<file> ${link.upload_url}`);
+
+    // The link is served by the mounted media router, and the upload lands in the signed-in account's library.
+    const page = await fetch(`${base}${url.pathname}`);
+    expect(page.status).toBe(200);
+    expect(await page.text()).toContain('value="Wake tune"');
+    const up = await fetch(`${base}${url.pathname}`, { method: "PUT", body: Buffer.from("ID3 tune"), headers: { "Content-Type": "audio/mpeg", "X-Audio-Name": "Wake tune" } });
+    expect(up.status).toBe(201);
+    expect((await media.list(GOOD_ID)).map((m) => m.name)).toEqual(["Wake tune"]);
+
+    const list = (await client.callTool({ name: "list_audio", arguments: {} })).structuredContent as Record<string, any>;
+    expect(list.audio.map((a: { name: string }) => a.name)).toEqual(["Wake tune"]);
+
+    const before = reminders.scheduled.length;
+    const r = await client.callTool({ name: "schedule_reminder_call", arguments: { at: "now", message: "Up!", audio: "wake TUNE", confirm: true } });
+    expect(r.isError).toBeFalsy();
+    const id = (await media.list(GOOD_ID))[0]!.id;
+    expect(reminders.scheduled[before]!.input).toMatchObject({ audioId: id, to: MY_PHONE });
+    expect((r.structuredContent as Record<string, any>).audio).toEqual({ id, name: "Wake tune", duration_sec: 0.8 });
     await client.close();
   });
 });

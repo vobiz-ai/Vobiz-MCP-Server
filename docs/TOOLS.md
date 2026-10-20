@@ -1,6 +1,6 @@
 # Vobiz MCP tool reference
 
-Generated from the tool registry (110 tools). Regenerate with `npm run docs:tools`.
+Generated from the tool registry (114 tools). Regenerate with `npm run docs:tools`.
 
 | Tool | Kind | Required inputs |
 |---|---|---|
@@ -112,6 +112,10 @@ Generated from the tool registry (110 tools). Regenerate with `npm run docs:tool
 | `list_reminder_calls` | read-only | — |
 | `get_reminder_call` | read-only | `reminder_id` |
 | `cancel_reminder_call` | **write, destructive** | `reminder_id`, `confirm` |
+| `create_audio_upload_link` | write | — |
+| `import_audio_from_url` | write | `url`, `name` |
+| `list_audio` | read-only | — |
+| `delete_audio` | **write, destructive** | `audio`, `confirm` |
 | `list_vobiz_skills` | read-only | — |
 | `get_vobiz_skill` | read-only | `name` |
 
@@ -1241,7 +1245,7 @@ Start a Vobiz-hosted KYC session for a sub-account. flow_type email (default) ha
 
 ## schedule_reminder_call
 
-Vobiz: use this when the user wants a PHONE CALL at a time — a wake-up call, a reminder call, 'call me at…'. Not for text or in-app reminders. The server places the call itself at that time, speaks the message, and lets the user press 1 to snooze, 2 to confirm, 9 to stop; it retries when there is no answer. Confirm the time (in the user's timezone), the message and the number with the user, then pass confirm: true. Call it ONCE per reminder: nothing has to stay open or be polled afterwards. `at` is ISO 8601 with an offset (2026-10-21T06:00:00+05:30), a local time without an offset (read in the timezone chosen at sign-in), or "now". `to` defaults to the user's own number from sign-in; `from` defaults to the caller ID chosen at sign-in, else the first voice number on the account. At most 30 days ahead.
+Vobiz: use this when the user wants a PHONE CALL at a time — a wake-up call, a reminder call, 'call me at…'. Not for text or in-app reminders. The server places the call itself at that time, speaks the message, and lets the user press 1 to snooze, 2 to confirm, 9 to stop; it retries when there is no answer. Confirm the time (in the user's timezone), the message and the number with the user, then pass confirm: true. Call it ONCE per reminder: nothing has to stay open or be polled afterwards. `at` is ISO 8601 with an offset (2026-10-21T06:00:00+05:30), a local time without an offset (read in the timezone chosen at sign-in), or "now". To play the user's own audio first, pass `audio` (a name from list_audio; add files with create_audio_upload_link or import_audio_from_url) or a public `audio_url`. `to` defaults to the user's own number from sign-in; `from` defaults to the caller ID chosen at sign-in, else the first voice number on the account. At most 30 days ahead.
 
 | Input | Type | Required | Notes |
 |---|---|---|---|
@@ -1252,6 +1256,8 @@ Vobiz: use this when the user wants a PHONE CALL at a time — a wake-up call, a
 | `from` | string |  | Caller ID: a voice number on this account, E.164.; pattern `^\+?[1-9]\d{6,14}$` |
 | `language` | `da-DK` | `nl-NL` | `en-AU` | `en-GB` | `en-US` | `en-IN` | `fr-FR` | `fr-CA` | `de-DE` | `it-IT` | `pl-PL` | `pt-PT` | `pt-BR` | `ru-RU` | `es-ES` | `es-US` | `sv-SE` | `hi-IN` |  | Speech language (default en-US). |
 | `voice` | `WOMAN` | `MAN` |  | Speech voice (default WOMAN). |
+| `audio_url` | string |  | Optional public https link to an MP3 or WAV file played at the start of the call, before the spoken message (for example the user's own recording or alarm sound). Not together with audio. |
+| `audio` | string |  | Optional audio from this account's library (its name or id, see list_audio) played at the start of the call, before the spoken message. Not together with audio_url. |
 | `snooze_minutes` | integer |  | Pressing 1 calls again after this many minutes (default 10).; min 1; max 60 |
 | `max_attempts` | integer |  | Total call attempts including retries (default 3).; min 1; max 5 |
 | `retry_minutes` | integer |  | Minutes between retries after no answer, busy or voicemail (default 5).; min 1; max 30 |
@@ -1283,6 +1289,39 @@ Cancel ONE scheduled or snoozed reminder call so no further calls are placed for
 |---|---|---|---|
 | `reminder_id` | string | yes | pattern `^[A-Za-z0-9_-]{4,100}$` |
 | `confirm` | boolean | yes | Must be true, set only after the user confirmed cancelling this reminder. |
+
+## create_audio_upload_link
+
+Vobiz: use this when the user wants their OWN audio file or recording played on a reminder or wake-up call (e.g. 'use this MP3 as my alarm', 'let me record the message'). Returns a one-time Vobiz upload link (valid 15 minutes) where the user picks or drops a file, or records from the microphone, and gives it a name. When the user attached the file in this chat and you can run code, upload it to the same link with the curl command in how_to instead. Up to 15 MB and 5 minutes per file. Any common format works (MP3, WAV, M4A, OGG, WEBM, AAC, FLAC); it is converted for phone calls. Afterwards pass the saved name as `audio` to schedule_reminder_call. For a public https link the user pastes, use import_audio_from_url.
+
+| Input | Type | Required | Notes |
+|---|---|---|---|
+| `name` | string |  | Suggested name for the audio, e.g. "Morning alarm"; prefilled on the upload page and used in the curl command.; pattern `^[\p{L}\p{N} _.()-]+$` |
+
+## import_audio_from_url
+
+Vobiz: save the audio at a public https link the user pastes (an MP3, WAV or other audio file) into this account's audio library under a name, for use on reminder and wake-up calls. Up to 15 MB and 5 minutes per file. Then pass the name as `audio` to schedule_reminder_call. For a file on the user's device, or a recording, use create_audio_upload_link.
+
+| Input | Type | Required | Notes |
+|---|---|---|---|
+| `url` | string | yes | Public https link to the audio file. |
+| `name` | string | yes | Name to save it under, e.g. "Morning alarm"; unique in this account's library.; pattern `^[\p{L}\p{N} _.()-]+$` |
+
+## list_audio
+
+List the audio files in this Vobiz account's library (newest first) that can be played on reminder and wake-up calls, with their names and lengths. Read-only.
+
+| Input | Type | Required | Notes |
+|---|---|---|---|
+
+## delete_audio
+
+Delete ONE audio file from this Vobiz account's library. Needs confirm: true after the user agrees. Reminder calls that use it still ring and speak their message, without the audio.
+
+| Input | Type | Required | Notes |
+|---|---|---|---|
+| `audio` | string | yes | The audio's name (as saved) or its id from list_audio. |
+| `confirm` | boolean | yes | Must be true, set only after the user confirmed deleting this audio. |
 
 ## list_vobiz_skills
 

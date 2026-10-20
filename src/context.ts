@@ -5,6 +5,15 @@ import type { IdempotencyStore } from "./idempotency.js";
 import type { EventStore } from "./webhooks.js";
 import type { Logger } from "./logger.js";
 import type { ReminderService } from "./reminders/types.js";
+import type { MediaService } from "./media/types.js";
+
+/** How the audio tools hand out upload links (hosted connector: sealed one-time /upload/:token URLs). */
+export interface MediaUploads {
+  /** A one-time upload URL for this account, valid 15 minutes; `name` prefills the name field on the page. */
+  url(authId: string, name?: string): string;
+  /** False when audio conversion (ffmpeg) is not installed: uploads and imports are refused with a clear message. */
+  available?: () => Promise<boolean>;
+}
 
 /** What the user chose at sign-in on the hosted connector (absent in stdio and single-account HTTP mode). */
 export interface ConnectionProfile {
@@ -39,6 +48,9 @@ export interface ToolContext {
   readOnly: boolean;
   /** Server-side reminder calls: present only on the hosted connector. */
   reminders?: ReminderService;
+  /** The account's audio library for reminder calls: present only on the hosted connector. */
+  media?: MediaService;
+  mediaUploads?: MediaUploads;
   profile?: ConnectionProfile;
 }
 

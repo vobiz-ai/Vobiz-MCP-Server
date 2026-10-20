@@ -63,6 +63,7 @@ const TRANSIENT_API: ErrorKind[] = ["service_unavailable", "backend_error", "rat
 const MEMORY_REDELIVERIES = 5;
 const MEMORY_REDELIVERY_MS = 60_000;
 const E164 = /^\+?[1-9]\d{7,14}$/;
+const AUDIO_ID = /^[A-Za-z0-9_-]{1,64}$/;
 
 export interface ReminderServiceOptions {
   store: ReminderStore;
@@ -76,6 +77,13 @@ export interface ReminderServiceOptions {
   fetchImpl?: typeof fetch;
   limits?: Partial<ReminderLimits>;
   now?: () => Date;
+  /**
+   * Audio library (src/media): mints the short-lived URL Vobiz fetches for a library file (GET /media/:token),
+   * called at answer time when the reminder has an audioId. Without it, audioId is refused at schedule time.
+   */
+  mediaUrl?: (account: ReminderAccount, audioId: string) => string;
+  /** True when the file is in the account's library: checked at schedule time and again at answer time. */
+  mediaExists?: (authId: string, id: string) => Promise<boolean>;
 }
 
 const invalid = (msg: string) => new VobizError("invalid_input", msg);
@@ -210,6 +218,10 @@ export function createReminderService(opts: ReminderServiceOptions): ReminderSer
       }
       if (!ok) throw invalid("audioUrl must be an https link to an .mp3 or .wav file.");
     }
+    if (input.audioId !== undefined) {
+      if (typeof input.audioId !== "string" || !AUDIO_ID.test(input.audioId)) throw invalid("audioId must be an id from the audio library.");
+      if (!opts.mediaUrl || !opts.mediaExists) throw invalid("This server has no audio library. Use audioUrl with a public https MP3 or WAV link instead.");
+    }
     return {
       kind: input.kind,
       message,
@@ -223,6 +235,7 @@ export function createReminderService(opts: ReminderServiceOptions): ReminderSer
       maxAttempts: intIn(input.maxAttempts, 1, 5, "maxAttempts"),
       retryMinutes: intIn(input.retryMinutes, 1, 30, "retryMinutes"),
       ...(input.audioUrl ? { audioUrl: input.audioUrl } : {}),
+      ...(input.audioId ? { audioId: input.audioId } : {}),
     };
   }
 
@@ -271,6 +284,9 @@ export function createReminderService(opts: ReminderServiceOptions): ReminderSer
     assertDestination(input.to);
     if (cfg.allowedCallerIds.length && !cfg.allowedCallerIds.includes(digitsOnly(input.from))) {
       throw new VobizError("not_allowed", "This caller ID is not in the server's VOBIZ_ALLOWED_CALLER_IDS allowlist.");
+    }
+    if (input.audioId && !(await opts.mediaExists!(account.authId, input.audioId))) {
+      throw new VobizError("not_found", "That audio is not in this account's audio library. Use list_audio to see the saved files.");
     }
     await assertLimits(account, input);
     if (cfg.verifyCallerId) await assertCallerIdOwned(account, input.from);
@@ -408,10 +424,26 @@ export function createReminderService(opts: ReminderServiceOptions): ReminderSer
 
   const inputUrl = (token: string) => `${baseUrl}/r/${token}/input`;
 
+  /**
+   * What <Play> fetches: a library file (audioId, a fresh /media/:token URL) wins over audioUrl. A file deleted
+   * since scheduling, or a library that cannot be reached, plays nothing rather than failing the call.
+   */
+  async function playUrl(r: Reminder, a: AnswerPayload): Promise<string | undefined> {
+    if (!r.audioId) return r.audioUrl;
+    if (!opts.mediaUrl) return undefined;
+    const exists = opts.mediaExists ? await opts.mediaExists(a.authId, r.audioId).catch(() => false) : true;
+    if (!exists) {
+      log.info(`reminder ${r.id}: audio no longer in the library, playing the message only`);
+      return undefined;
+    }
+    return opts.mediaUrl({ authId: a.authId, authToken: a.authToken }, r.audioId);
+  }
+
   async function answerXml(token: string): Promise<string | undefined> {
     const c = await current(token);
     if (!c) return undefined;
-    return answerScript(c.r, { actionUrl: inputUrl(token), retryInMinutes: canRetry(c.r, c.a.n) ? c.r.retryMinutes : null });
+    const audioUrl = await playUrl(c.r, c.a);
+    return answerScript({ ...c.r, audioUrl }, { actionUrl: inputUrl(token), retryInMinutes: canRetry(c.r, c.a.n) ? c.r.retryMinutes : null });
   }
 
   async function inputXml(token: string, digits: string): Promise<string | undefined> {
