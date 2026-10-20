@@ -80,10 +80,11 @@ async function firstVoiceNumber(ctx: ToolContext, to?: string): Promise<string> 
       x.is_blocked !== true,
   );
   const toDigits = to ? digitsOnly(to) : "";
+  // Shared country code: 1-digit codes exist only for +1 and +7, so a single matching digit counts only there.
   const common = (a: string) => {
     let i = 0;
     while (i < 3 && i < a.length && i < toDigits.length && a[i] === toDigits[i]) i++;
-    return i;
+    return i === 1 && !/^[17]/.test(toDigits) ? 0 : i;
   };
   const n = usable.map((x) => ({ x, score: toDigits ? common(digitsOnly(x.e164 as string)) : 0 })).sort((p, q) => q.score - p.score)[0]?.x;
   if (!n) {
