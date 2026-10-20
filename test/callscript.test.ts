@@ -403,3 +403,27 @@ describe("make_call say / play", () => {
     expect(Object.keys(t.inputSchema.properties ?? {})).toEqual(expect.arrayContaining(["say", "play", "loop", "order", "language", "voice"]));
   });
 });
+
+describe("hosted connector wiring", () => {
+  it("mounts /c/:token routes when call scripts are set, and keeps the /answer placeholder unchanged", async () => {
+    const { createHostedApp } = await import("../src/hosted.js");
+    const app = createHostedApp({
+      cfg: testConfig({ VOBIZ_AUTH_ID: undefined, VOBIZ_AUTH_TOKEN: undefined }),
+      log: silentLogger,
+      baseUrl: PUBLIC,
+      secret: "s".repeat(40),
+      callScripts: backend,
+    });
+    const srv = app.listen(0, "127.0.0.1");
+    await new Promise((r) => srv.once("listening", r));
+    const u = `http://127.0.0.1:${(srv.address() as AddressInfo).port}`;
+    try {
+      const a = await fetch(`${u}${new URL(backend.mint(script({ say: { text: "Mounted" } })).answerUrl).pathname}`, { method: "POST" });
+      expect(await a.text()).toContain("<Speak>Mounted</Speak>");
+      expect(await (await fetch(`${u}/c/nope/answer`, { method: "POST" })).text()).toContain(INACTIVE_CALL_TEXT);
+      expect(await (await fetch(`${u}/answer`, { method: "POST" })).text()).toContain("<Speak>Hello from Vobiz.</Speak>");
+    } finally {
+      srv.close();
+    }
+  });
+});
