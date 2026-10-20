@@ -1,34 +1,43 @@
 name: Release
 
 # Publishes a tagged version (git tag v1.2.3 && git push --tags):
-#   npm (@vobiz/mcp, with provenance) → official MCP Registry → .mcpb desktop bundle on the GitHub release → Docker image on GHCR.
-# Needs the NPM_TOKEN secret. The registry step signs in with GitHub OIDC (no secret).
+#   npm (@vobiz/mcp, with provenance) → .mcpb desktop bundle on the GitHub release → Docker image on GHCR.
+# Then run the "MCP Registry" workflow once the staged npm release is approved.
+# Needs the NPM_TOKEN secret. Each job gets only the token permissions it needs.
+#
+# Docker `:latest` is NOT retagged on every tag push. It moves only when the tag is a stable release
+# (vX.Y.Z, no prerelease suffix) AND it is the highest stable semver tag in the repository, so pushing a
+# backport tag (e.g. v1.2.4 after v1.3.0) or a prerelease (v1.4.0-rc.1) never moves it.
+# To (re)point `:latest` by hand, run this workflow from the tag (Run workflow → "Use workflow from" → the tag)
+# with "latest" ticked; the same stable + highest-semver check still applies.
 on:
   push:
     tags: ["v*.*.*"]
   workflow_dispatch:
+    inputs:
+      latest:
+        description: "Also tag the Docker image :latest (only honoured for the highest stable vX.Y.Z tag)"
+        type: boolean
+        default: false
 
-permissions:
-  contents: write
-  id-token: write
-  packages: write
+permissions: {}
 
 jobs:
-  release:
+  verify:
     # Only the public repository publishes; mirrors (e.g. the internal ops repo) never release.
-    if: github.repository == 'vobiz-ai/Vobiz-MCP-Server'
+    if: github.repository == 'vobiz-ai/Vobiz-MCP-Server' && github.ref_type == 'tag'
     runs-on: ubuntu-latest
-    env:
-      # npm and MCP Registry publishing run only once the NPM_TOKEN secret exists; the GitHub release and Docker image always run.
-      HAS_NPM_TOKEN: ${{ secrets.NPM_TOKEN != '' }}
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
-          registry-url: https://registry.npmjs.org
-          cache: npm
-      - run: npm ci
+          package-manager-cache: false # no shared cache in publishing workflows (cache poisoning)
+      - run: npm ci --ignore-scripts
       - name: Check versions match the tag
         run: |
           TAG="${GITHUB_REF_NAME#v}"
@@ -37,12 +46,35 @@ jobs:
           done
           [ "$(node -p "require('./server.json').packages[0].version")" = "$TAG" ] || { echo "server.json packages[0].version must be $TAG"; exit 1; }
       - run: npm run check
+
+  npm:
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # npm provenance
+    env:
+      # npm publishing runs only once the NPM_TOKEN secret exists; the GitHub release and Docker image always run.
+      HAS_NPM_TOKEN: ${{ secrets.NPM_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.HAS_NPM_TOKEN == 'true'
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: env.HAS_NPM_TOKEN == 'true'
+        with:
+          node-version: 24
+          package-manager-cache: false # no shared cache in publishing workflows (cache poisoning)
+          registry-url: https://registry.npmjs.org
+      - if: env.HAS_NPM_TOKEN == 'true'
+        run: npm ci --ignore-scripts && npm run build
       # The NPM_TOKEN is a stage-only token: the release is staged on npm and goes live once a maintainer
       # approves it with 2FA (npmjs.com, or `npm stage approve <id>`). Then run the "MCP Registry" workflow.
       - name: Stage the npm release (approve with 2FA to publish)
         if: env.HAS_NPM_TOKEN == 'true'
         run: |
-          npx -y npm@12 stage publish . --provenance --access public | tee stage.txt
+          npx -y npm@12.2.1 stage publish . --provenance --access public | tee stage.txt
           {
             echo "### npm release staged: @vobiz/mcp@${GITHUB_REF_NAME#v}"
             echo
@@ -52,25 +84,68 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
+  github-release:
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the GitHub release and upload the .mcpb
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false # no shared cache in publishing workflows (cache poisoning)
+      - run: npm ci --ignore-scripts && npm run build
       - name: Build the desktop extension (.mcpb)
         run: |
           mkdir -p bundle && cp -R dist skills assets manifest.json package.json package-lock.json LICENSE README.md bundle/
           rm -rf bundle/dist/dashboard
           (cd bundle && npm ci --omit=dev --ignore-scripts && npx -y @anthropic-ai/mcpb@2.1.2 pack . "../vobiz-mcp-${GITHUB_REF_NAME}.mcpb")
-      - uses: softprops/action-gh-release@v3
+      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           files: vobiz-mcp-*.mcpb
           generate_release_notes: true
 
-      - uses: docker/login-action@v4
+  docker:
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # push to ghcr.io/vobiz-ai/vobiz-mcp
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Decide the image tags (`:latest` only for the highest stable semver tag)
+        id: tags
+        env:
+          IMAGE: ghcr.io/vobiz-ai/vobiz-mcp
+          EVENT: ${{ github.event_name }}
+          LATEST_INPUT: ${{ inputs.latest }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          TAGS="$IMAGE:$GITHUB_REF_NAME"
+          HIGHEST=$(git ls-remote --tags --refs "$REPO_URL" 'refs/tags/v*' | sed 's#.*refs/tags/v##' \
+            | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1)
+          WANT_LATEST=false
+          if [ "$EVENT" = push ] || [ "$LATEST_INPUT" = true ]; then WANT_LATEST=true; fi
+          if [ "$WANT_LATEST" = true ] && echo "$GITHUB_REF_NAME" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+             && [ "v$HIGHEST" = "$GITHUB_REF_NAME" ]; then
+            TAGS="$TAGS"$'\n'"$IMAGE:latest"
+            echo "Also tagging :latest ($GITHUB_REF_NAME is the highest stable tag)." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Not tagging :latest (ref $GITHUB_REF_NAME, highest stable v$HIGHEST, requested $WANT_LATEST)." >> "$GITHUB_STEP_SUMMARY"
+          fi
+          { echo "tags<<EOF"; echo "$TAGS"; echo "EOF"; } >> "$GITHUB_OUTPUT"
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/build-push-action@v7
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           push: true
-          tags: |
-            ghcr.io/vobiz-ai/vobiz-mcp:${{ github.ref_name }}
-            ghcr.io/vobiz-ai/vobiz-mcp:latest
+          tags: ${{ steps.tags.outputs.tags }}

@@ -16,6 +16,8 @@ updates:
     schedule: { interval: weekly }
     groups:
       actions: { patterns: ["*"] }
+  # Bumps the node:24-alpine@sha256 digest pinned in the Dockerfile (both stages). When the new digest moves to a
+  # new Alpine release, also bump the pinned ffmpeg=<version> (see the comment in the Dockerfile) or the build fails.
   - package-ecosystem: docker
     directory: /
     schedule: { interval: weekly }
