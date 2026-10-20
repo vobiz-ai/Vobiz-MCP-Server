@@ -6,8 +6,9 @@
  *   POST /mcp                                   Streamable HTTP, Bearer token required
  *   GET  /.well-known/oauth-protected-resource/mcp   RFC 9728 metadata
  *   GET  /.well-known/oauth-authorization-server     RFC 8414 metadata (PKCE S256, DCR, CIMD)
- *   /authorize, /token, /register, /revoke      OAuth 2.1 authorization server
+ *   /authorize, /token, /register, /revoke      OAuth 2.1 authorization server (revoking a token ends its session)
  *   POST /oauth/login                           consent form: the user enters their Vobiz Auth ID + Auth Token
+ *   GET  /favicon.svg, /favicon.ico             the Vobiz logomark for the server-rendered pages
  *   GET|POST /answer                            default answer XML for make_call
  *   /jobs/fire, /r/:token/*                     reminder calls (when a reminders router is mounted)
  *   /upload/:token, /media/:token               audio library for reminder calls (when a media router is mounted)
@@ -17,6 +18,11 @@
  * Each user signs in with their own Vobiz credentials. They are sealed (AES-256-GCM) inside the
  * access/refresh tokens, so the server keeps no credential database and every request acts only on
  * the signed-in account. Rotating the Auth Token in the Vobiz console revokes every token at once.
+ *
+ * The only OAuth state kept is credential-free (src/oauth/grants.ts): one record per sign-in (refresh-token family:
+ * rotation, reuse detection, revocation, 90-day cap) and the ids of used authorization codes, in Firestore when a GCP
+ * project is configured and in memory otherwise. Clients are classified as verified, local or unverified
+ * (src/oauth/clients.ts) and the consent page says which (src/oauth/consent.ts).
  */
 import { randomBytes } from "node:crypto";
 import path from "node:path";
