@@ -167,11 +167,11 @@ export function safeErrorText(err: unknown): string {
   return msg ? `${name}: ${msg}` : name;
 }
 
-/** Wraps a tool handler so every thrown error becomes a structured MCP tool error. */
-export function handler<A>(fn: (args: A) => Promise<CallToolResult>): (args: A) => Promise<CallToolResult> {
-  return async (args: A) => {
+/** Wraps a tool handler so every thrown error becomes a structured MCP tool error (the request `extra` is passed through). */
+export function handler<A, E = unknown>(fn: (args: A, extra: E) => Promise<CallToolResult>): (args: A, extra: E) => Promise<CallToolResult> {
+  return async (args: A, extra: E) => {
     try {
-      return await fn(args);
+      return await fn(args, extra);
     } catch (err) {
       return fail(err);
     }

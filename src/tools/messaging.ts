@@ -9,6 +9,7 @@ import type { ToolContext } from "../context.js";
 import { VobizError } from "../errors.js";
 import { IdempotencyStore, withIdempotency } from "../idempotency.js";
 import { acquireMessageRate, sharedOf } from "../guard/capacity.js";
+import { CONFIRM_NOTE, requireApproval, supportsFormElicitation, type ToolExtra } from "../guard/confirm.js";
 import { UNTRUSTED_DESCRIPTION, markUntrusted, withUntrustedNotice } from "../guard/untrusted.js";
 import { handler, idempotencyKey, ok, phoneNumber, toE164 } from "../util.js";
 
@@ -125,11 +126,11 @@ export function registerMessagingTools(server: McpServer, ctx: ToolContext): voi
         dlt_header_id: z.string().max(64).optional().describe("India TRAI DLT sender header ID."),
         dlt_template_id: z.string().max(64).optional().describe("India TRAI DLT content template ID; text must match it."),
         idempotency_key: idempotencyKey,
-        confirm: z.boolean().describe("Must be true, set only after the user explicitly approved this send."),
+        confirm: z.boolean().describe("Must be true, set only after the user explicitly approved this send." + CONFIRM_NOTE),
       },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
-    handler(async (a) => {
+    handler(async (a, extra: ToolExtra) => {
       assertMessagingEnabled(ctx);
       const ch = a.channel ?? (a.media_urls?.length ? "mms" : "sms");
       const to = [...new Set(a.to.map(toE164))];
@@ -141,13 +142,15 @@ export function registerMessagingTools(server: McpServer, ctx: ToolContext): voi
       }
       if ((ch === "sms" || ch === "rcs") && !a.text) throw new VobizError("invalid_input", `text is required for ${ch} messages.`);
       if (ch === "mms" && !a.text && !a.media_urls?.length) throw new VobizError("invalid_input", "An MMS needs text or media_urls.");
-      if (a.confirm !== true) {
-        throw new VobizError(
-          "confirmation_required",
-          `Ask the user to confirm sending this ${ch.toUpperCase()} from ${a.from} to ${to.join(", ")}, then call send_message again with confirm: true.`,
-        );
-      }
+      const fallback = `Ask the user to confirm sending this ${ch.toUpperCase()} from ${a.from} to ${to.join(", ")}, then call send_message again with confirm: true.`;
+      if (a.confirm !== true && !supportsFormElicitation(server.server.getClientCapabilities())) throw new VobizError("confirmation_required", fallback);
       for (const r of to) assertRecipientAllowed(ctx, r);
+      const preview = a.text ? ` "${a.text.length > 120 ? a.text.slice(0, 117) + "..." : a.text}"` : "";
+      await requireApproval(server, extra, {
+        confirmed: a.confirm,
+        message: `Send a real, billed ${ch.toUpperCase()} from ${a.from} to ${to.length} recipient${to.length > 1 ? "s" : ""} (${to.join(", ")})${preview}${a.media_urls?.length ? ` with ${a.media_urls.length} media file(s)` : ""}${a.scheduled_at ? `, scheduled for ${a.scheduled_at}` : ""}. Each recipient is billed per segment. Approve?`,
+        fallback,
+      });
       const body: Rec = { from: ch === "rcs" ? a.from : toE164(a.from), to, channel: ch, idempotencyKey: a.idempotency_key };
       if (a.text) body.text = a.text;
       if (a.media_urls?.length) body.mediaUrls = a.media_urls;

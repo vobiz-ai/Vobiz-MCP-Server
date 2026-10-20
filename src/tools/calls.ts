@@ -7,6 +7,7 @@ import { IdempotencyStore, withIdempotency } from "../idempotency.js";
 import { classifyHangup } from "../outcomes.js";
 import { assertDestinationAllowed, effectiveTimeLimit } from "../policy.js";
 import { UNTRUSTED_DESCRIPTION, markUntrusted, withUntrustedNotice } from "../guard/untrusted.js";
+import { CONFIRM_NOTE, hostOf, requireApproval, supportsFormElicitation, type ToolExtra } from "../guard/confirm.js";
 import { acquireCallRate, reserveCallSlot, sharedOf, type CallSlot } from "../guard/capacity.js";
 import { assertAllowedUrl, callId, handler, idempotencyKey, ok, phoneNumber, toE164 } from "../util.js";
 
@@ -164,6 +165,8 @@ async function placeCall(
   };
 }
 
+const supportsElicitation = (server: McpServer) => supportsFormElicitation(server.server.getClientCapabilities());
+
 export function registerCallTools(server: McpServer, ctx: ToolContext): void {
   // ── make_call ────────────────────────────────────────────────
   server.registerTool(
@@ -183,7 +186,7 @@ export function registerCallTools(server: McpServer, ctx: ToolContext): void {
         from: phoneNumber.describe("Caller ID: a Vobiz number on this account, E.164."),
         confirm: z
           .boolean()
-          .describe("Must be true, set only after the user explicitly confirmed this call (destination and caller ID)."),
+          .describe("Must be true, set only after the user explicitly confirmed this call (destination and caller ID)." + CONFIRM_NOTE),
         answer_url: z
           .string()
           .url()
@@ -204,7 +207,7 @@ export function registerCallTools(server: McpServer, ctx: ToolContext): void {
       },
       annotations: { destructiveHint: true, idempotentHint: false, openWorldHint: true, readOnlyHint: false },
     },
-    handler(async (args) => {
+    handler(async (args, extra: ToolExtra) => {
       const { cfg } = ctx;
       if (!cfg.enableCalls) {
         throw new VobizError(
@@ -214,7 +217,7 @@ export function registerCallTools(server: McpServer, ctx: ToolContext): void {
       }
       const toDigits = digitsOnly(args.to);
       const fromDigits = digitsOnly(args.from);
-      if (args.confirm !== true) {
+      if (args.confirm !== true && !supportsElicitation(server)) {
         throw new VobizError(
           "confirmation_required",
           `Ask the user to confirm calling ${toE164(args.to)} from ${toE164(args.from)}, then call make_call again with confirm: true.`,
@@ -234,6 +237,12 @@ export function registerCallTools(server: McpServer, ctx: ToolContext): void {
       if (args.answer_url) assertAllowedUrl(cfg, args.answer_url, "answer_url");
       if (args.hangup_url) assertAllowedUrl(cfg, args.hangup_url, "hangup_url");
       const timeLimit = effectiveTimeLimit(cfg, args.time_limit);
+      // Policy checks first, so the user is never asked to approve something the server would refuse.
+      await requireApproval(server, extra, {
+        confirmed: args.confirm,
+        message: `Place a real, billed phone call to ${toE164(args.to)} from ${toE164(args.from)} (up to ${Math.round(timeLimit / 60)} min, per-minute rates apply). Call control comes from ${hostOf(answerUrl)}. Approve?`,
+        fallback: `Ask the user to confirm calling ${toE164(args.to)} from ${toE164(args.from)}, then call make_call again with confirm: true.`,
+      });
 
       const fingerprint = IdempotencyStore.fingerprint({ op: "make_call", from: fromDigits, to: toDigits, answerUrl, timeLimit });
       // Without an explicit key, identical calls inside the duplicate window share one automatic key.

@@ -20,11 +20,12 @@ import { VobizError } from "../errors.js";
 import { assertDestinationAllowed } from "../policy.js";
 import { assertAllowedUrl, callId, handler, ok } from "../util.js";
 import { SPEAK_LANGS } from "../xml.js";
+import { CONFIRM_NOTE, hostOf, requireApproval, supportsFormElicitation, type ToolExtra } from "../guard/confirm.js";
 
 type Rec = Record<string, unknown>;
 
 const legs = z.enum(["aleg", "bleg", "both"]).optional().describe("Which call leg: aleg (default), bleg or both.");
-const confirm = (what: string) => z.boolean().describe(`Must be true, set only after the user explicitly asked to ${what}.`);
+const confirm = (what: string) => z.boolean().describe(`Must be true, set only after the user explicitly asked to ${what}.` + CONFIRM_NOTE);
 
 /** https URL to an MP3 or WAV file (the formats Vobiz Play supports). */
 export const audioUrl = z
@@ -101,9 +102,11 @@ export function registerControlTools(server: McpServer, ctx: ToolContext): void 
       },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },
-    handler(async (a) => {
-      if (a.confirm !== true) throw new VobizError("confirmation_required", "Ask the user to confirm the transfer, then call again with confirm: true.");
+    handler(async (a, extra: ToolExtra) => {
       const l = a.legs ?? "aleg";
+      if (a.confirm !== true && !supportsFormElicitation(server.server.getClientCapabilities())) {
+        throw new VobizError("confirmation_required", "Ask the user to confirm the transfer, then call again with confirm: true.");
+      }
       const body: Rec = { legs: l };
       if (a.destination) {
         if (a.aleg_url || a.bleg_url) throw new VobizError("invalid_input", "Give either destination or aleg_url/bleg_url, not both.");
@@ -128,6 +131,15 @@ export function registerControlTools(server: McpServer, ctx: ToolContext): void 
           body.bleg_method = a.bleg_method ?? "POST";
         }
       }
+      // After validation and the destination policy, so the user only approves what would really run.
+      const target = a.destination
+        ? a.destination
+        : [a.aleg_url ? `A leg -> ${hostOf(a.aleg_url)}` : "", a.bleg_url ? `B leg -> ${hostOf(a.bleg_url)}` : ""].filter(Boolean).join(", ") || "(no target)";
+      await requireApproval(server, extra, {
+        confirmed: a.confirm,
+        message: `Transfer live call ${a.call_uuid} to ${target}${a.destination && /^\+?\d/.test(a.destination) ? " (an outbound, billed call leg)" : ""}. The call's current flow stops. Approve?`,
+        fallback: "Ask the user to confirm the transfer, then call again with confirm: true.",
+      });
       const res = await callAction(ctx, "POST", a.call_uuid, "", "POST Call/{uuid}/ (transfer)", { body });
       return ok({ ok: true, call_uuid: a.call_uuid, transferred: true, legs: l, backend_message: res.data.message ?? null, http_status: res.status });
     }),
@@ -149,8 +161,12 @@ export function registerControlTools(server: McpServer, ctx: ToolContext): void 
       },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
-    handler(async (a) => {
-      if (a.confirm !== true) throw new VobizError("confirmation_required", "Ask the user to confirm putting the call on hold, then call again with confirm: true.");
+    handler(async (a, extra: ToolExtra) => {
+      await requireApproval(server, extra, {
+        confirmed: a.confirm,
+        message: `Put live call ${a.call_uuid} on hold${a.music_url ? ` with music from ${hostOf(a.music_url)}` : ""}. Approve?`,
+        fallback: "Ask the user to confirm putting the call on hold, then call again with confirm: true.",
+      });
       const l = a.legs ?? "aleg";
       const flows = requireFlows(ctx);
       const url = flows.flowUrl(flows.create({ kind: "hold", musicUrl: a.music_url }));
@@ -177,9 +193,14 @@ export function registerControlTools(server: McpServer, ctx: ToolContext): void 
       },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
-    handler(async (a) => {
-      if (a.confirm !== true) throw new VobizError("confirmation_required", "Ask the user to confirm, then call again with confirm: true.");
+    handler(async (a, extra: ToolExtra) => {
+      if (a.confirm !== true && !supportsFormElicitation(server.server.getClientCapabilities())) throw new VobizError("confirmation_required", "Ask the user to confirm, then call again with confirm: true.");
       assertAllowedUrl(ctx.cfg, a.resume_url, "resume_url");
+      await requireApproval(server, extra, {
+        confirmed: a.confirm,
+        message: `Take live call ${a.call_uuid} off hold and hand it to call-control XML from ${hostOf(a.resume_url)}. Approve?`,
+        fallback: "Ask the user to confirm, then call again with confirm: true.",
+      });
       const l = a.legs ?? "aleg";
       const body: Rec = { legs: l };
       if (l !== "bleg") Object.assign(body, { aleg_url: a.resume_url, aleg_method: "POST" });
@@ -288,8 +309,12 @@ export function registerControlTools(server: McpServer, ctx: ToolContext): void 
       },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },
-    handler(async (a) => {
-      if (a.confirm !== true) throw new VobizError("confirmation_required", "Ask the user to confirm recording (and that consent is in place), then call again with confirm: true.");
+    handler(async (a, extra: ToolExtra) => {
+      await requireApproval(server, extra, {
+        confirmed: a.confirm,
+        message: `Start recording live call ${a.call_uuid}${a.time_limit ? ` for up to ${a.time_limit}s` : ""}. Recording may need the other party's consent; storage is billed. Approve?`,
+        fallback: "Ask the user to confirm recording (and that consent is in place), then call again with confirm: true.",
+      });
       const body: Rec = {};
       if (a.time_limit !== undefined) body.time_limit = a.time_limit;
       if (a.file_format) body.file_format = a.file_format;

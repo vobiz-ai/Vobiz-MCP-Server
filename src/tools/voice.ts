@@ -10,6 +10,7 @@ import { assertAllowedUrl, callId, handler, listField, ok } from "../util.js";
 import { buildResponseXml, xmlAction, xmlActions, type XmlAction } from "../xml.js";
 import { callAction } from "./control.js";
 import { assertDestinationAllowed } from "../policy.js";
+import { requireApproval, supportsFormElicitation, type ToolExtra } from "../guard/confirm.js";
 import { UNTRUSTED_DESCRIPTION, markUntrusted, withUntrustedNotice } from "../guard/untrusted.js";
 
 type Rec = Record<string, unknown>;
@@ -80,11 +81,12 @@ export function registerVoiceTools(server: McpServer, ctx: ToolContext): void {
       },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },
-    handler(async (a) => {
+    handler(async (a, extra: ToolExtra) => {
       needHosting(ctx);
       if (!a.prompt_text && !a.prompt_audio_url) throw new VobizError("invalid_input", "Give prompt_text or prompt_audio_url.");
-      if (a.call_uuid && a.confirm !== true) {
-        throw new VobizError("confirmation_required", "Moving a live call replaces its current flow. Ask the user, then call again with confirm: true.");
+      const fallback = "Moving a live call replaces its current flow. Ask the user, then call again with confirm: true.";
+      if (a.call_uuid && a.confirm !== true && !supportsFormElicitation(server.server.getClientCapabilities())) {
+        throw new VobizError("confirmation_required", fallback);
       }
       const prompt: XmlAction[] = [];
       if (a.prompt_text) prompt.push({ type: "speak", text: a.prompt_text, ...(a.language ? { language: a.language as never } : {}) });
@@ -109,6 +111,12 @@ export function registerVoiceTools(server: McpServer, ctx: ToolContext): void {
       const url = ctx.flows.flowUrl(id);
       let transferred = false;
       if (a.call_uuid) {
+        const dials = (a.then ?? []).flatMap((x) => (x.type === "dial" ? [x.number ?? x.sip_uri ?? ""] : []));
+        await requireApproval(server, extra, {
+          confirmed: a.confirm,
+          message: `Move live call ${a.call_uuid} into a keypad menu ("${(a.prompt_text ?? "audio prompt").slice(0, 80)}")${dials.length ? `, then dial ${dials.join(", ")}` : ""}. Its current flow stops. Approve?`,
+          fallback,
+        });
         await callAction(ctx, "POST", a.call_uuid, "", "POST Call/{uuid}/ (gather)", { body: { legs: "aleg", aleg_url: url, aleg_method: "POST" } });
         transferred = true;
       }
