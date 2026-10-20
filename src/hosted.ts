@@ -11,6 +11,7 @@
  *   GET|POST /answer                            default answer XML for make_call
  *   /jobs/fire, /r/:token/*                     reminder calls (when a reminders router is mounted)
  *   /upload/:token, /media/:token               audio library for reminder calls (when a media router is mounted)
+ *   /c/:token/answer|hangup                     make_call say/play call scripts (when call scripts are set)
  *   GET  /.well-known/openai-apps-challenge     OpenAI Apps domain verification (VOBIZ_OPENAI_APPS_CHALLENGE)
  *   GET  /health
  *
@@ -37,6 +38,7 @@ import { createReminderBackend, createReminderService, createRemindersRouter, re
 import type { MediaService } from "./media/types.js";
 import { createMediaBackend, createMediaService } from "./media/index.js";
 import { createMediaRouter, mintMediaUrl, mintUploadUrl } from "./media/router.js";
+import { createCallScriptBackend, type CallScriptBackend } from "./callscript/index.js";
 import { createLogger, type Logger } from "./logger.js";
 import { createServer, createSharedState } from "./server.js";
 import { SERVER_VERSION } from "./version.js";
@@ -132,6 +134,8 @@ export interface HostedOptions {
   mediaRouter?: express.Router;
   /** False while audio conversion (ffmpeg) is unavailable: upload links and URL imports are then refused. */
   mediaAvailable?: () => Promise<boolean>;
+  /** make_call say/play: sealed call scripts served at /c/:token/answer|hangup. */
+  callScripts?: CallScriptBackend;
 }
 
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] as string);
@@ -476,6 +480,7 @@ export function createHostedApp(o: HostedOptions): express.Express {
             mediaUploads: { url: (authId: string, name?: string) => mintUploadUrl(seal, base, authId, name), ...(o.mediaAvailable ? { available: o.mediaAvailable } : {}) },
           }
         : {}),
+      ...(o.callScripts ? { callScripts: o.callScripts } : {}),
       profile,
     });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
@@ -496,6 +501,8 @@ export function createHostedApp(o: HostedOptions): express.Express {
   if (o.remindersRouter) app.use(o.remindersRouter);
   // Audio library: the upload page and PUT (/upload/:token) and the <Play> source for Vobiz (/media/:token).
   if (o.mediaRouter) app.use(o.mediaRouter);
+  // make_call say/play: the call's VobizXML (/c/:token/answer) and hangup acknowledgement.
+  if (o.callScripts) app.use(o.callScripts.router);
 
   app.use((_req, res) => res.status(404).json({ error: "not_found" }));
   return app;
@@ -594,6 +601,13 @@ export async function runHosted(): Promise<void> {
       log,
     });
   }
+  const callScripts = createCallScriptBackend({
+    baseUrl,
+    sealer: new Sealer(secret),
+    media,
+    log,
+    signatureMode: reminderSignatureMode(process.env.VOBIZ_WEBHOOK_SIGNATURE, cfg.webhookSignature),
+  });
   const app = createHostedApp({
     cfg,
     log,
@@ -604,6 +618,7 @@ export async function runHosted(): Promise<void> {
     media,
     mediaRouter,
     mediaAvailable,
+    callScripts,
     cimdHosts: list(process.env.VOBIZ_CIMD_HOSTS),
     allowedOrigins: list(process.env.VOBIZ_ALLOWED_ORIGINS),
     excludeTools: process.env.VOBIZ_HOSTED_EXCLUDED_TOOLS === undefined ? undefined : (list(process.env.VOBIZ_HOSTED_EXCLUDED_TOOLS) ?? []),
