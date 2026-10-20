@@ -57,9 +57,26 @@ export class VobizError extends Error {
   }
 }
 
-/** Pull a human-readable message out of the several error shapes Vobiz services use. */
+/** Longest backend message ever passed on to the client. */
+export const MAX_BACKEND_MESSAGE = 300;
+
+/** Removes credential-looking fragments (auth headers, bearer tokens, token=... pairs) and caps the length. */
+function scrubBackendMessage(m: string | undefined): string | undefined {
+  if (!m) return undefined;
+  const out = m
+    .replace(/\b(x-auth-token|x-auth-id|authorization|auth[_-]?token|access[_-]?token|refresh[_-]?token|api[_-]?key|password|secret)\b(\s*["']?\s*[:=]\s*["']?)(bearer\s+)?[^\s"',;&]+/gi, "$1$2[redacted]")
+    .replace(/\bbearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, "Bearer [redacted]")
+    .slice(0, MAX_BACKEND_MESSAGE);
+  return out || undefined;
+}
+
+/** Pull a human-readable message out of the several error shapes Vobiz services use (scrubbed, max 300 chars). */
 export function extractBackendMessage(body: unknown): string | undefined {
-  if (!body || typeof body !== "object") return typeof body === "string" && body ? body.slice(0, 300) : undefined;
+  return scrubBackendMessage(rawBackendMessage(body));
+}
+
+function rawBackendMessage(body: unknown): string | undefined {
+  if (!body || typeof body !== "object") return typeof body === "string" && body ? body.slice(0, 2000) : undefined;
   const b = body as Record<string, unknown>;
   // api-voice / backend-apis: {"api_id","error":"..."}
   // account-service: {"error":"HTTPError","message":"..."}; prefer the sentence over the class name.

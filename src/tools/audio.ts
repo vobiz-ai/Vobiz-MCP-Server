@@ -10,7 +10,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ToolContext } from "../context.js";
 import { VobizError } from "../errors.js";
 import type { AudioMeta, MediaService } from "../media/types.js";
-import { handler, ok } from "../util.js";
+import { handler, ok, safeErrorText } from "../util.js";
 
 type Rec = Record<string, unknown>;
 
@@ -42,10 +42,10 @@ function authIdOf(ctx: ToolContext): string {
   return id;
 }
 
-/** Errors from storage (not VobizError) are logged by message only before they become internal_error. */
+/** Errors from storage (not VobizError) are logged (name and a short, URL-query-stripped message) before they become internal_error. */
 function logged<T>(ctx: ToolContext, op: string, p: Promise<T>): Promise<T> {
   return p.catch((err: unknown) => {
-    if (!(err instanceof VobizError)) ctx.log.info(`audio: ${op} failed: ${err instanceof Error ? err.message : String(err)}`);
+    if (!(err instanceof VobizError)) ctx.log.info(`audio: ${op} failed: ${safeErrorText(err)}`);
     throw err;
   });
 }

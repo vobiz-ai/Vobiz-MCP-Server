@@ -6,16 +6,16 @@ import { VobizError } from "../errors.js";
 import { assertDestinationAllowed } from "../policy.js";
 import type { Attempt, AttemptOutcome, Reminder, ReminderAccount, ReminderService, ReminderStatus } from "../reminders/types.js";
 import { DEFAULT_TIME_ZONE, formatLocal, parseWhen } from "../tz.js";
-import { handler, idempotencyKey, listField, ok, phoneNumber, toE164 } from "../util.js";
+import { handler, idempotencyKey, listField, ok, phoneNumber, safeErrorText, toE164 } from "../util.js";
 import { SPEAK_LANGS } from "../xml.js";
 import type { AudioMeta } from "../media/types.js";
 import { audioRef, registerAudioTools } from "./audio.js";
 import { assertCallerIdOwned } from "./calls.js";
 
-/** Errors from the store or scheduler (not VobizError) are logged by message only before they become internal_error. */
+/** Errors from the store or scheduler (not VobizError) are logged (name and a short, URL-query-stripped message) before they become internal_error. */
 function logged<T>(ctx: ToolContext, op: string, p: Promise<T>): Promise<T> {
   return p.catch((err: unknown) => {
-    if (!(err instanceof VobizError)) ctx.log.info(`reminders: ${op} failed: ${err instanceof Error ? err.message : String(err)}`);
+    if (!(err instanceof VobizError)) ctx.log.info(`reminders: ${op} failed: ${safeErrorText(err)}`);
     throw err;
   });
 }
