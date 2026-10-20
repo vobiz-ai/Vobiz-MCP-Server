@@ -6,8 +6,9 @@
  *   POST /mcp                                   Streamable HTTP, Bearer token required
  *   GET  /.well-known/oauth-protected-resource/mcp   RFC 9728 metadata
  *   GET  /.well-known/oauth-authorization-server     RFC 8414 metadata (PKCE S256, DCR, CIMD)
- *   /authorize, /token, /register, /revoke      OAuth 2.1 authorization server
+ *   /authorize, /token, /register, /revoke      OAuth 2.1 authorization server (revoking a token ends its session)
  *   POST /oauth/login                           consent form: the user enters their Vobiz Auth ID + Auth Token
+ *   GET  /favicon.svg, /favicon.ico             the Vobiz logomark for the server-rendered pages
  *   GET|POST /answer                            default answer XML for make_call
  *   /jobs/fire, /r/:token/*                     reminder calls (when a reminders router is mounted)
  *   /upload/:token, /media/:token               audio library for reminder calls (when a media router is mounted)
@@ -18,14 +19,22 @@
  * Each user signs in with their own Vobiz credentials. They are sealed (AES-256-GCM) inside the
  * access/refresh tokens, so the server keeps no credential database and every request acts only on
  * the signed-in account. Rotating the Auth Token in the Vobiz console revokes every token at once.
+ *
+ * The only OAuth state kept is credential-free (src/oauth/grants.ts): one record per sign-in (refresh-token family:
+ * rotation, reuse detection, revocation, 90-day cap) and the ids of used authorization codes, in Firestore when a GCP
+ * project is configured and in memory otherwise. Clients are classified as verified, local or unverified
+ * (src/oauth/clients.ts) and the consent page says which (src/oauth/consent.ts).
  */
 import { randomBytes } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express, { type Request, type Response } from "express";
+import { rateLimit } from "express-rate-limit";
 import { mcpAuthRouter, createOAuthMetadata, getOAuthProtectedResourceMetadataUrl } from "@modelcontextprotocol/sdk/server/auth/router.js";
 import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
-import { InvalidGrantError, InvalidTokenError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
+import { createHash } from "node:crypto";
+import { InvalidClientMetadataError, InvalidGrantError, InvalidTargetError, InvalidTokenError, ServerError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
+import { redirectUriMatches } from "@modelcontextprotocol/sdk/server/auth/handlers/authorize.js";
 import type { AuthorizationParams, OAuthServerProvider } from "@modelcontextprotocol/sdk/server/auth/provider.js";
 import type { OAuthRegisteredClientsStore } from "@modelcontextprotocol/sdk/server/auth/clients.js";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
@@ -42,9 +51,13 @@ import { createCallScriptBackend, type CallScriptBackend } from "./callscript/in
 import { createLogger, type Logger } from "./logger.js";
 import { createServer, createSharedState } from "./server.js";
 import { SERVER_VERSION } from "./version.js";
-import { BRAND_BASE_CSS, VOBIZ_LOGO_SVG } from "./brand.js";
+import { VOBIZ_FAVICON_SVG } from "./brand.js";
 import { Sealer } from "./sealer.js";
-import { COMMON_TIME_ZONES, DEFAULT_TIME_ZONE, isValidTimeZone } from "./tz.js";
+import { classifyClient, redirectUriProblem, verifiedCimdName, type TrustedClient } from "./oauth/clients.js";
+import { CidrMatcher, fetchCidrList } from "./oauth/cidr.js";
+import { FAMILY_MAX_AGE_MS, FirestoreGrantStore, MemoryGrantStore, authIdHash, familyExpired, type GrantFamily, type GrantStore } from "./oauth/grants.js";
+import { ERROR_CSP, consentCsp, consentPage, defaultChoice, errorPage, esc, type Choice, type Scope } from "./oauth/consent.js";
+import { DEFAULT_TIME_ZONE, isValidTimeZone } from "./tz.js";
 export { Sealer };
 
 /** Default exclusions (override with VOBIZ_HOSTED_EXCLUDED_TOOLS): tools that need this process to host callbacks for one account, or that buy things. */
@@ -65,7 +78,6 @@ export const ASSISTANT_TOOLS = [
   "delete_audio",
 ];
 
-type Scope = ConnectionProfile["scope"];
 const SCOPES: Scope[] = ["read", "assistant", "full"];
 const E164_RE = /^\+[1-9]\d{6,14}$/;
 /** Accepts "+91 98765-43210" style input; returns +digits, or undefined when it is not E.164. */
@@ -77,7 +89,25 @@ const e164 = (v: string): string | undefined => {
 const CODE_TTL = 300;
 const TXN_TTL = 900;
 const SCOPE = "vobiz";
+/** Access tokens never live longer than a day, whatever VOBIZ_ACCESS_TOKEN_TTL_SEC says. */
+export const MAX_ACCESS_TTL = 86400;
+const FAMILY_CACHE_MS = 30_000;
+const newId = () => randomBytes(16).toString("hex");
 const AUTH_ID_RE = /^(MA|SA)_[A-Za-z0-9]{4,40}$/;
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+/** Failed credential attempts allowed per sign-in transaction. */
+const MAX_LOGIN_ATTEMPTS = 5;
+
+/** The sealed sign-in transaction carried by the consent form; `n` counts failed credential attempts. */
+interface Txn {
+  cid: string;
+  redirect: string;
+  state: string | null;
+  challenge: string;
+  resource: string;
+  n?: number;
+  exp: number;
+}
 
 interface Grant {
   authId: string;
@@ -92,14 +122,10 @@ interface Grant {
   tz?: string;
 }
 
-/** What the sign-in form chose; also the form values echoed back when it is shown again with an error. */
-interface Choice {
-  scope: Scope;
-  callMeOn: string;
-  callFrom: string;
-  tz: string;
-}
-const DEFAULT_CHOICE: Choice = { scope: "full", callMeOn: "", callFrom: "", tz: DEFAULT_TIME_ZONE };
+/** Refresh tokens carry their family and token id; access tokens carry the family (absent on tokens from before families). */
+type RefreshGrant = Grant & { fam?: string; jti?: string };
+type AccessGrant = Grant & { fam?: string };
+
 
 /** Grant fields carried from the code into every access/refresh token; older tokens without a scope map from readOnly. */
 const profileOf = (g: Pick<Grant, "readOnly" | "scope" | "callMeOn" | "callFrom" | "tz">) => {
@@ -114,8 +140,12 @@ export interface HostedOptions {
   baseUrl: string;
   /** >= 32 characters; keep it stable across restarts and replicas. */
   secret: string;
-  /** Hosts allowed to serve OAuth Client ID Metadata Documents. */
-  cimdHosts?: string[];
+  /**
+   * DCR clients whose redirect URIs are all https on one of these hosts are shown as verified with this name
+   * (default cfg.oauth.trustedClients, from VOBIZ_TRUSTED_CLIENTS). CIMD client_ids are accepted only from the fixed
+   * VERIFIED_CIMD patterns (Claude, Claude Code, ChatGPT, Codex).
+   */
+  trustedClients?: TrustedClient[];
   /** Browser origins allowed to call /mcp (requests without Origin are always allowed). */
   allowedOrigins?: string[];
   /** Tool names the hosted connector never offers (default HOSTED_EXCLUDED_TOOLS). */
@@ -124,6 +154,15 @@ export interface HostedOptions {
   accessTtlSec?: number;
   refreshTtlSec?: number;
   fetchImpl?: typeof fetch;
+  /** POST /oauth/login attempts per client IP and per submitted Auth ID per 15 minutes (default cfg.oauth, 10 and 10). */
+  loginLimits?: { perIp?: number; perAuthId?: number };
+  /**
+   * Shared egress ranges of hosted clients (default cfg.oauth.trustedEgressCidrs). Requests from them skip the SDK's
+   * per-IP limits on /token and /register only.
+   */
+  trustedEgressCidrs?: string[];
+  /** Refresh-token families and used codes (default: in memory; runHosted passes Firestore when configured). */
+  grants?: GrantStore;
   /** Server-side reminder calls; the reminder tools are offered only when this is set. */
   reminders?: ReminderService;
   /** Express router serving /jobs/fire and /r/:token/* for reminder calls, mounted before the 404 handler. */
@@ -138,107 +177,38 @@ export interface HostedOptions {
   callScripts?: CallScriptBackend;
 }
 
-const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] as string);
-
-/**
- * CSP for the consent page: inline styles, IBM Plex Sans from Google Fonts, no scripts. Browsers apply form-action to
- * the redirect that follows the form post, so it must allow the client's registered redirect origin as well as 'self'
- * (otherwise the 302 back to e.g. https://claude.ai/api/mcp/auth_callback is silently blocked).
- */
-function consentCsp(redirectUri: string): string {
-  let origin = "";
-  try {
-    const u = new URL(redirectUri);
-    origin = u.protocol === "https:" || u.protocol === "http:" ? u.origin : `${u.protocol}`;
-  } catch {
-    /* unparsable redirect: 'self' only */
-  }
-  return `default-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; form-action 'self' ${origin}; frame-ancestors 'none'; base-uri 'none'`.replace(/\s+;/g, ";");
-}
-
-/** Sign-in page in the Vobiz brand: IBM Plex Sans, Vobiz Red #E83C00 / Orange #E86A00 / Dark Grey #100703, official lockup. */
-function consentPage(o: { txn: string; clientName: string; redirectHost: string; error?: string; links: Config["links"]; values?: Choice }): string {
-  const v = o.values ?? DEFAULT_CHOICE;
-  const radio = (scope: Scope, title: string, text: string) =>
-    `<label class="opt" for="scope_${scope}"><input id="scope_${scope}" name="scope" type="radio" value="${scope}"${v.scope === scope ? " checked" : ""}><span><strong>${title}</strong>${text}</span></label>`;
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="robots" content="noindex"><title>Connect your Vobiz account · Vobiz MCP Server</title>
-<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600&display=swap">
-<style>
-${BRAND_BASE_CSS}
-ul.scope{list-style:none;margin:0 0 24px;padding:14px 16px;border:1px solid var(--line);border-radius:var(--radius);display:grid;gap:8px}
-ul.scope li{display:flex;gap:10px;align-items:flex-start;font-size:14px}
-ul.scope li::before{content:"";flex:0 0 8px;height:8px;margin-top:7px;border-radius:2px 8px 2px 2px;background:var(--red)}
-label{display:block;font-weight:500;font-size:14px;margin:16px 0 6px}
-input[type=text],input[type=password]{width:100%;padding:11px 13px;border:1px solid var(--line);border-radius:var(--radius);background:var(--input);color:var(--fg);font:inherit;transition:border-color .15s,box-shadow .15s}
-input[type=text]::placeholder{color:var(--muted);font-weight:300}
-input[type=text]:focus,input[type=password]:focus{outline:none;border-color:var(--red);box-shadow:0 0 0 3px var(--ring)}
-.check{display:flex;gap:10px;align-items:flex-start;margin-top:18px;font-size:14px;color:var(--muted)}
-.check input{accent-color:var(--red);width:16px;height:16px;margin:3px 0 0;flex:0 0 auto}
-.check label{margin:0;font-weight:400;color:var(--muted)}
-.check strong{color:var(--fg);font-weight:500}
-fieldset{border:0;margin:20px 0 0;padding:0;display:grid;gap:8px}
-legend{font-weight:500;font-size:14px;padding:0;margin:0 0 8px}
-.opt{display:flex;gap:10px;align-items:flex-start;margin:0;padding:11px 13px;border:1px solid var(--line);border-radius:var(--radius);font-weight:400;font-size:14px;color:var(--muted);cursor:pointer;transition:border-color .15s}
-.opt input{accent-color:var(--red);width:16px;height:16px;margin:3px 0 0;flex:0 0 auto}
-.opt strong{display:block;color:var(--fg);font-weight:500}
-.opt:has(input:checked){border-color:var(--red)}
-.opt:has(input:focus-visible){box-shadow:0 0 0 3px var(--ring)}
-.profile{margin-top:4px}
-form:has(#scope_read:checked) .profile{display:none}
-.hint{display:block;font-weight:300;font-size:13px;color:var(--muted);margin:4px 0 0}
-input[type=tel]{width:100%;padding:11px 13px;border:1px solid var(--line);border-radius:var(--radius);background:var(--input);color:var(--fg);font:inherit;transition:border-color .15s,box-shadow .15s}
-input[type=tel]::placeholder{color:var(--muted);font-weight:300}
-input[type=tel]:focus{outline:none;border-color:var(--red);box-shadow:0 0 0 3px var(--ring)}
-</style></head><body>
-<div class="brand">${VOBIZ_LOGO_SVG}</div>
-<main>
-<p class="eyebrow">Vobiz MCP Server</p>
-<h1>Connect your Vobiz account</h1>
-<p class="lead"><strong>${esc(o.clientName)}</strong> (${esc(o.redirectHost)}) is asking to use your Vobiz account.</p>
-<ul class="scope">
-<li>Read your calls, call records, numbers, SIP trunks, messages and balance</li>
-<li>Place calls, send messages or change settings only after you confirm each one</li>
-<li>Schedule reminder and wake-up calls that Vobiz places at the time you ask, with your own audio if you add some</li>
-</ul>
-<form method="post" action="/oauth/login" autocomplete="off">
-<input type="hidden" name="txn" value="${esc(o.txn)}">
-<label for="auth_id">Auth ID</label><input id="auth_id" name="auth_id" type="text" placeholder="MA_XXXXXXXX" required pattern="(MA|SA)_[A-Za-z0-9]+" spellcheck="false" autocapitalize="off">
-<label for="auth_token">Auth Token</label><input id="auth_token" name="auth_token" type="password" required>
-<fieldset><legend>Access</legend>
-${radio("full", "Full access", "Every tool. Calls, messages and account changes only after you confirm each one.")}
-${radio("assistant", "Personal assistant", "Only reminder and wake-up calls to your own number, plus your balance, numbers and call status.")}
-${radio("read", "Read-only", "No calls, messages, reminders or account changes.")}
-</fieldset>
-<div class="profile">
-<label for="call_me_on">Call me on <span class="hint">Your own number in E.164, e.g. +919876543210. Reminder calls go here. Required for personal assistant.</span></label><input id="call_me_on" name="call_me_on" type="tel" placeholder="+919876543210" value="${esc(v.callMeOn)}" pattern="\\+?[0-9]{7,15}" inputmode="tel" autocomplete="tel">
-<label for="call_from">Call from <span class="hint">Optional: a voice number on your Vobiz account. Blank = your first voice number.</span></label><input id="call_from" name="call_from" type="tel" placeholder="+918012345678" value="${esc(v.callFrom)}" pattern="\\+?[0-9]{7,15}" inputmode="tel">
-<label for="timezone">Timezone <span class="hint">Used to read and say reminder times.</span></label><input id="timezone" name="timezone" type="text" list="tz_list" value="${esc(v.tz)}" spellcheck="false" autocapitalize="off">
-<datalist id="tz_list">${COMMON_TIME_ZONES.map((z) => `<option value="${z}"></option>`).join("")}</datalist>
-</div>
-${o.error ? `<p class="err" role="alert">${esc(o.error)}</p>` : ""}
-<button type="submit">Allow access</button>
-</form>
-<p class="fine">Your Auth ID and Auth Token are on the <a href="${esc(o.links.console)}" target="_blank" rel="noopener">Vobiz console</a> overview page. They are encrypted inside the access token issued to this app and never stored by Vobiz MCP Server. Rotate your Auth Token in the console at any time to revoke access.</p>
-</main>
-<footer><a href="${esc(o.links.privacy)}" target="_blank" rel="noopener">Privacy policy</a> · <a href="${esc(o.links.docs)}" target="_blank" rel="noopener">Documentation</a></footer>
-</body></html>`;
-}
-
 export function createHostedApp(o: HostedOptions): express.Express {
   const { cfg, log } = o;
   const seal = new Sealer(o.secret);
   const base = o.baseUrl.replace(/\/+$/, "");
   const mcpUrl = new URL(`${base}/mcp`);
-  // ChatGPT's CIMD client id is https://chatgpt.com/oauth/client.json.
-  const cimdHosts = new Set((o.cimdHosts ?? ["claude.ai", "chatgpt.com"]).map((h) => h.toLowerCase()));
+  const trusted = o.trustedClients ?? cfg.oauth.trustedClients;
+  const loginLimits = { perIp: o.loginLimits?.perIp ?? cfg.oauth.loginMaxPerIp, perAuthId: o.loginLimits?.perAuthId ?? cfg.oauth.loginMaxPerAuthId };
+
+  /** The cheapest authenticated Vobiz call: the HTTP status, or "network" when Vobiz could not be reached. */
+  async function checkVobiz(authId: string, authToken: string): Promise<number | "network"> {
+    try {
+      const r = await fetchImpl(`${cfg.baseUrl}/api/v1/Account/${encodeURIComponent(authId)}/numbers?per_page=1`, {
+        headers: { "X-Auth-ID": authId, "X-Auth-Token": authToken, Accept: "application/json" },
+        signal: AbortSignal.timeout(10_000),
+      });
+      await r.body?.cancel().catch(() => {});
+      return r.status;
+    } catch {
+      return "network";
+    }
+  }
   const allowedOrigins = new Set(o.allowedOrigins ?? ["https://claude.ai", "https://claude.com", "https://chatgpt.com", "https://chat.openai.com"]);
   const fetchImpl = o.fetchImpl ?? globalThis.fetch;
-  const ACCESS_TTL = o.accessTtlSec ?? 3600;
+  const ACCESS_TTL = Math.min(o.accessTtlSec ?? 3600, MAX_ACCESS_TTL);
   const REFRESH_TTL = o.refreshTtlSec ?? 30 * 24 * 3600;
   const excludeTools = o.excludeTools ?? HOSTED_EXCLUDED_TOOLS;
-  const usedCodes = new Map<string, number>();
+  const grants = o.grants ?? new MemoryGrantStore();
+  const egress = new CidrMatcher(o.trustedEgressCidrs ?? cfg.oauth.trustedEgressCidrs);
+  /** Claude's and ChatGPT's backends call /token and /register for all their users from a few shared IPs. */
+  const skipForTrustedEgress = { skip: (req: Request) => egress.has(req.ip) };
+  /** Family revocation as seen by verifyAccessToken, cached briefly so /mcp does not read the store on every call. */
+  const familyCache = new Map<string, { at: number; usable: boolean }>();
   const cimdCache = new Map<string, { at: number; client: OAuthClientInformationFull }>();
   const tenants = new Map<string, SharedState>();
   const accountCfg = (g: Pick<Grant, "authId" | "authToken">): Config => ({ ...cfg, authId: g.authId, authToken: g.authToken });
@@ -263,10 +233,19 @@ export function createHostedApp(o: HostedOptions): express.Express {
       return c ? { ...c.c, client_id: clientId } : undefined;
     },
     // Stateless dynamic registration: the client record is sealed into its own client_id.
+    // Redirect URIs must be https or loopback http, with no fragment or wildcard; private-use schemes are refused.
     async registerClient(client) {
+      if (!Array.isArray(client.redirect_uris) || !client.redirect_uris.length || client.redirect_uris.length > 10) {
+        throw new InvalidClientMetadataError("redirect_uris must list 1 to 10 URIs");
+      }
+      for (const uri of client.redirect_uris) {
+        const problem = redirectUriProblem(uri);
+        if (problem) throw new InvalidClientMetadataError(problem);
+      }
+      const clientName = typeof client.client_name === "string" ? client.client_name.slice(0, 256) : undefined;
       const keep: Partial<OAuthClientInformationFull> = {
         redirect_uris: client.redirect_uris,
-        client_name: client.client_name,
+        client_name: clientName,
         token_endpoint_auth_method: client.token_endpoint_auth_method,
         grant_types: client.grant_types,
         response_types: client.response_types,
@@ -274,7 +253,7 @@ export function createHostedApp(o: HostedOptions): express.Express {
         client_secret_expires_at: client.client_secret_expires_at,
       };
       const clientId = seal.seal("client", { c: keep }, 10 * 365 * 24 * 3600);
-      return { ...client, client_id: clientId, client_id_issued_at: Math.floor(Date.now() / 1000) };
+      return { ...client, client_name: clientName, client_id: clientId, client_id_issued_at: Math.floor(Date.now() / 1000) };
     },
   };
 
@@ -285,7 +264,8 @@ export function createHostedApp(o: HostedOptions): express.Express {
     } catch {
       return undefined;
     }
-    if (u.protocol !== "https:" || !cimdHosts.has(u.hostname.toLowerCase())) return undefined;
+    // Only the exact client_id URLs of the clients we verify (VERIFIED_CIMD); any other https client_id is refused.
+    if (u.href !== url || !verifiedCimdName(url)) return undefined;
     const hit = cimdCache.get(url);
     if (hit && Date.now() - hit.at < 3600_000) return hit.client;
     try {
@@ -294,8 +274,10 @@ export function createHostedApp(o: HostedOptions): express.Express {
       const text = await res.text();
       if (text.length > 64 * 1024) return undefined;
       const doc = JSON.parse(text) as Partial<OAuthClientInformationFull>;
-      if (doc.client_id !== url || !Array.isArray(doc.redirect_uris) || !doc.redirect_uris.length) return undefined;
-      const client = { ...doc, client_id: url, token_endpoint_auth_method: "none" } as OAuthClientInformationFull;
+      if (doc.client_id !== url || !Array.isArray(doc.redirect_uris)) return undefined;
+      const redirectUris = doc.redirect_uris.filter((r) => !redirectUriProblem(r));
+      if (!redirectUris.length) return undefined;
+      const client = { ...doc, redirect_uris: redirectUris, client_id: url, token_endpoint_auth_method: "none" } as OAuthClientInformationFull;
       cimdCache.set(url, { at: Date.now(), client });
       return client;
     } catch {
@@ -303,47 +285,140 @@ export function createHostedApp(o: HostedOptions): express.Express {
     }
   }
 
-  const issue = (g: Grant): OAuthTokens => ({
-    access_token: seal.seal("access", { ...g }, ACCESS_TTL),
-    token_type: "Bearer",
-    expires_in: ACCESS_TTL,
-    refresh_token: seal.seal("refresh", { ...g }, REFRESH_TTL),
-    scope: SCOPE,
-  });
+  /** Access + refresh token for one generation of a family; the refresh token never outlives the family. */
+  const issue = (g: Grant, family: Pick<GrantFamily, "id" | "createdAt">, jti: string): OAuthTokens => {
+    const left = Math.floor((family.createdAt + FAMILY_MAX_AGE_MS - Date.now()) / 1000);
+    const grant: Grant = { authId: g.authId, authToken: g.authToken, clientId: g.clientId, resource: g.resource, ...profileOf(g) };
+    return {
+      access_token: seal.seal("access", { ...grant, fam: family.id }, Math.max(1, Math.min(ACCESS_TTL, left))),
+      token_type: "Bearer",
+      expires_in: Math.max(1, Math.min(ACCESS_TTL, left)),
+      refresh_token: seal.seal("refresh", { ...grant, fam: family.id, jti }, Math.max(1, Math.min(REFRESH_TTL, left))),
+      scope: SCOPE,
+    };
+  };
+  /** Legacy refresh tokens (issued before families) are migrated into a family keyed by a hash of the token, once. */
+  const legacyFamilyId = (token: string) => `l${createHash("sha256").update(token).digest("hex").slice(0, 40)}`;
+  const familyUsable = async (fam: string): Promise<boolean> => {
+    const hit = familyCache.get(fam);
+    if (hit && Date.now() - hit.at < FAMILY_CACHE_MS) return hit.usable;
+    let usable = true;
+    try {
+      const f = await grants.get(fam);
+      // A family missing from the store (memory store after a restart) does not block a still-valid access token.
+      usable = !f || (!f.revokedAt && !familyExpired(f));
+    } catch {
+      log.info("oauth: grant store unavailable while checking an access token; allowing it");
+      return true;
+    }
+    if (familyCache.size > 10_000) familyCache.clear();
+    familyCache.set(fam, { at: Date.now(), usable });
+    return usable;
+  };
+  const revokeFamily = async (fam: string, seed?: GrantFamily) => {
+    await grants.revoke(fam, Date.now(), seed);
+    familyCache.set(fam, { at: Date.now(), usable: false });
+  };
+
+  /**
+   * RFC 8707: a `resource` must name this MCP server (the /mcp URL or its origin; scheme and host compare
+   * case-insensitively). A missing resource is tolerated (some clients omit it) and means this server.
+   */
+  const resourceOk = (v: string | undefined): boolean => {
+    if (v === undefined) return true;
+    let u: URL;
+    try {
+      u = new URL(v);
+    } catch {
+      return false;
+    }
+    return u.origin === mcpUrl.origin && !u.search && !u.hash && !u.username && ["/", "/mcp", "/mcp/"].includes(u.pathname);
+  };
+
+  const sendError = (res: Response, status: number, title: string, message: string) =>
+    res.status(status).set({ "Content-Security-Policy": ERROR_CSP, "X-Frame-Options": "DENY", "Cache-Control": "no-store" }).type("html").send(errorPage({ title, message, links: cfg.links }));
+
+  /** The consent page: framing denied, and Referrer-Policy same-origin so the form post carries our Origin (no-referrer would send "null"). */
+  const sendConsent = (res: Response, view: Parameters<typeof consentPage>[0]) =>
+    res
+      .status(200)
+      .set({ "Content-Security-Policy": consentCsp(view.redirectUri), "X-Frame-Options": "DENY", "Referrer-Policy": "same-origin", "Cache-Control": "no-store" })
+      .type("html")
+      .send(consentPage(view));
 
   const provider: OAuthServerProvider = {
     clientsStore,
     async authorize(client, params: AuthorizationParams, res) {
       const txn = seal.seal(
         "txn",
-        { cid: client.client_id, redirect: params.redirectUri, state: params.state ?? null, challenge: params.codeChallenge, resource: params.resource?.href ?? mcpUrl.href },
+        // The resource was checked by validateAuthorize; tokens are always bound to the canonical /mcp URL.
+        { cid: client.client_id, redirect: params.redirectUri, state: params.state ?? null, challenge: params.codeChallenge, resource: mcpUrl.href },
         TXN_TTL,
       );
-      res.setHeader("Content-Security-Policy", consentCsp(params.redirectUri));
-      res.status(200).type("html").send(consentPage({ txn, clientName: client.client_name ?? "An MCP client", redirectHost: new URL(params.redirectUri).host, links: cfg.links }));
+      sendConsent(res, { txn, client: classifyClient(client, trusted), redirectUri: params.redirectUri, links: cfg.links });
     },
     async challengeForAuthorizationCode(client, code) {
       const c = seal.open<{ cid: string; challenge: string }>("code", code);
       if (!c || c.cid !== client.client_id) throw new InvalidGrantError("Invalid or expired authorization code");
       return c.challenge;
     },
-    async exchangeAuthorizationCode(client, code, _verifier, redirectUri) {
+    async exchangeAuthorizationCode(client, code, _verifier, redirectUri, resource) {
+      if (resource && !resourceOk(resource.href)) throw new InvalidTargetError("resource must be this MCP server's URL");
       const c = seal.open<Grant & { cid: string; redirect: string; jti: string }>("code", code);
       if (!c || c.cid !== client.client_id) throw new InvalidGrantError("Invalid or expired authorization code");
       if (redirectUri && redirectUri !== c.redirect) throw new InvalidGrantError("redirect_uri does not match the authorization request");
-      if (usedCodes.has(c.jti)) throw new InvalidGrantError("Authorization code was already used");
-      usedCodes.set(c.jti, c.exp);
-      for (const [k, exp] of usedCodes) if (exp * 1000 < Date.now()) usedCodes.delete(k);
-      return issue({ authId: c.authId, authToken: c.authToken, clientId: client.client_id, resource: c.resource, ...profileOf(c) });
+      // Single use across every replica: the code's jti is recorded in the grant store.
+      if (!(await grants.consumeCode(c.jti, c.exp * 1000))) throw new InvalidGrantError("Authorization code was already used");
+      const family: GrantFamily = { id: newId(), authIdHash: authIdHash(c.authId), clientId: client.client_id, currentJti: newId(), prevJti: null, rotatedAt: null, createdAt: Date.now(), revokedAt: null };
+      if (!(await grants.create(family))) throw new ServerError("Could not start a session; try again");
+      return issue({ ...c, clientId: client.client_id }, family, family.currentJti);
     },
-    async exchangeRefreshToken(client, refreshToken) {
-      const g = seal.open<Grant>("refresh", refreshToken);
+    async exchangeRefreshToken(client, refreshToken, _scopes, resource) {
+      if (resource && !resourceOk(resource.href)) throw new InvalidTargetError("resource must be this MCP server's URL");
+      const g = seal.open<RefreshGrant>("refresh", refreshToken);
       if (!g || g.clientId !== client.client_id) throw new InvalidGrantError("Invalid or expired refresh token");
-      return issue({ authId: g.authId, authToken: g.authToken, clientId: g.clientId, resource: g.resource, ...profileOf(g) });
+      const now = Date.now();
+      let fam = g.fam;
+      let jti = g.jti;
+      if (!fam || !jti) {
+        fam = legacyFamilyId(refreshToken);
+        jti = "legacy";
+        await grants.create({ id: fam, authIdHash: authIdHash(g.authId), clientId: g.clientId, currentJti: jti, prevJti: null, rotatedAt: null, createdAt: now, revokedAt: null });
+      }
+      const current = await grants.get(fam);
+      if (!current || current.revokedAt) throw new InvalidGrantError("This session has ended; connect again");
+      if (familyExpired(current, now)) {
+        await revokeFamily(fam);
+        throw new InvalidGrantError("This session is older than 90 days; connect again");
+      }
+      const replay = jti !== current.currentJti && !(jti === current.prevJti && current.rotatedAt && now - current.rotatedAt <= 60_000);
+      if (!replay) {
+        // Re-check the sealed credentials with Vobiz: a rotated or revoked Auth Token ends the session here.
+        const status = await checkVobiz(g.authId, g.authToken);
+        const transient = status === "network" || status === 429 || (typeof status === "number" && status >= 500);
+        if (!transient && (status as number) >= 200 && (status as number) <= 299) {
+          if (current.unverifiedAt) await grants.setUnverified(fam, null);
+        } else if (transient) {
+          if (current.unverifiedAt) throw new ServerError("Vobiz could not be reached to re-check this session; try again shortly");
+          log.info(`oauth: refresh allowed once without a credential re-check (Vobiz ${status === "network" ? "unreachable" : `status ${status}`})`);
+          await grants.setUnverified(fam, now);
+        } else {
+          await revokeFamily(fam);
+          throw new InvalidGrantError("Vobiz no longer accepts this account's credentials; connect again");
+        }
+      }
+      const out = await grants.rotate(fam, jti, newId(), now);
+      if (out.kind === "rotated" || out.kind === "grace") return issue(g, out.family, out.family.currentJti);
+      if (out.kind === "reuse") {
+        familyCache.set(fam, { at: Date.now(), usable: false });
+        log.info("oauth: refresh token reuse detected; session revoked");
+      }
+      throw new InvalidGrantError("Invalid or expired refresh token");
     },
     async verifyAccessToken(token): Promise<AuthInfo> {
-      const g = seal.open<Grant>("access", token);
+      const g = seal.open<AccessGrant>("access", token);
       if (!g) throw new InvalidTokenError("Invalid or expired access token");
+      if (g.fam && !(await familyUsable(g.fam))) throw new InvalidTokenError("This session was revoked");
       const p = profileOf(g);
       return {
         token,
@@ -354,13 +429,42 @@ export function createHostedApp(o: HostedOptions): express.Express {
         extra: { authId: g.authId, authToken: g.authToken, readOnly: p.readOnly, scope: p.scope, callMeOn: p.callMeOn, callFrom: p.callFrom, tz: p.tz },
       };
     },
+    // RFC 7009: revoking either token ends its whole family. Unknown, expired or foreign tokens succeed silently.
+    async revokeToken(client, request) {
+      const order = request.token_type_hint === "access_token" ? (["access", "refresh"] as const) : (["refresh", "access"] as const);
+      for (const kind of order) {
+        const g = seal.open<RefreshGrant>(kind, request.token);
+        if (!g) continue;
+        if (g.clientId !== client.client_id) return;
+        if (g.fam) {
+          await revokeFamily(g.fam);
+        } else if (kind === "refresh") {
+          const id = legacyFamilyId(request.token);
+          await revokeFamily(id, { id, authIdHash: authIdHash(g.authId), clientId: g.clientId, currentJti: "legacy", prevJti: null, rotatedAt: null, createdAt: Date.now(), revokedAt: null });
+        }
+        log.info("oauth: session revoked by the client");
+        return;
+      }
+    },
   };
 
   const app = express();
   app.disable("x-powered-by");
   app.set("trust proxy", 1);
+  // Security headers on every response. Pages that need another Referrer-Policy (the consent page) override it.
+  app.use((_req, res, next) => {
+    res.set({
+      "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+      "X-Content-Type-Options": "nosniff",
+      "Referrer-Policy": "no-referrer",
+      "X-Frame-Options": "DENY",
+    });
+    next();
+  });
 
   app.get("/health", (_req, res) => res.json({ ok: true, version: SERVER_VERSION }));
+  app.get("/favicon.svg", (_req, res) => res.type("image/svg+xml").set("Cache-Control", "public, max-age=86400").send(VOBIZ_FAVICON_SVG));
+  app.get("/favicon.ico", (_req, res) => res.redirect(301, "/favicon.svg"));
   const answerXml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n    <Speak>${esc(process.env.VOBIZ_ANSWER_TEXT?.trim() || "Hello from Vobiz.")}</Speak>\n</Response>\n`;
   app.all("/answer", (req, res) => {
     if (req.method !== "GET" && req.method !== "POST") return res.status(405).end();
@@ -372,14 +476,80 @@ export function createHostedApp(o: HostedOptions): express.Express {
     ...createOAuthMetadata({ provider, issuerUrl: new URL(base), scopesSupported: [SCOPE], serviceDocumentationUrl: new URL(cfg.links.docs) }),
     client_id_metadata_document_supported: true,
     token_endpoint_auth_methods_supported: ["none", "client_secret_post"],
+    revocation_endpoint_auth_methods_supported: ["none", "client_secret_post"],
     // RFC 9207: every authorization response carries iss (ChatGPT checks it).
     authorization_response_iss_parameter_supported: true,
   };
   app.get("/.well-known/oauth-authorization-server", (_req, res) => res.json(asMeta));
+  // Protected resource metadata (RFC 9728), served here rather than by the SDK so it can say tokens go in the header only.
+  const prm = {
+    resource: mcpUrl.href,
+    authorization_servers: [asMeta.issuer],
+    scopes_supported: [SCOPE],
+    resource_name: "Vobiz",
+    resource_documentation: new URL(cfg.links.docs).href,
+    bearer_methods_supported: ["header"],
+  };
+  app.get(new URL(getOAuthProtectedResourceMetadataUrl(mcpUrl)).pathname, (_req, res) => res.set("Access-Control-Allow-Origin", "*").json(prm));
   // OpenAI Apps domain verification: the token from the OpenAI platform, served verbatim.
   app.get("/.well-known/openai-apps-challenge", (_req, res) =>
     cfg.openaiAppsChallenge ? res.type("text/plain").set("Cache-Control", "no-store").send(cfg.openaiAppsChallenge) : res.status(404).json({ error: "not_found" }),
   );
+  /**
+   * Runs before the SDK's /authorize handler. Once client_id and redirect_uri check out (otherwise the SDK answers
+   * with its own 400), the remaining parameters are validated here so that errors carry `iss` (RFC 9207) and
+   * `state`, and so that only verified clients ever get an error redirect: local and unverified clients get a
+   * plain error page instead, which stops /authorize being used as an open redirector.
+   */
+  const validateAuthorize: express.RequestHandler = async (req, res, next) => {
+    if (req.method !== "GET" && req.method !== "POST") return next();
+    const p = ((req.method === "POST" ? req.body : req.query) ?? {}) as Record<string, unknown>;
+    /** The parameter as a string, undefined when absent, null when repeated or not a string. */
+    const str = (k: string): string | null | undefined => (p[k] === undefined ? undefined : typeof p[k] === "string" ? (p[k] as string) : null);
+    const clientId = str("client_id");
+    if (!clientId) return next();
+    let client: OAuthClientInformationFull | undefined;
+    try {
+      client = await clientsStore.getClient(clientId);
+    } catch {
+      return next();
+    }
+    if (!client) return next();
+    let redirect = str("redirect_uri");
+    if (redirect === null) return next();
+    if (redirect === undefined) {
+      if (client.redirect_uris.length !== 1) return next();
+      redirect = client.redirect_uris[0]!;
+    } else if (!client.redirect_uris.some((r) => redirectUriMatches(redirect as string, r))) {
+      return next();
+    }
+    if (redirectUriProblem(redirect)) return sendError(res, 400, "This app cannot connect", "This app's redirect URL is not allowed. Redirect URLs must use https, or http on localhost.");
+    const cls = classifyClient(client, trusted);
+    const state = str("state");
+    const fail = (error: string, description: string) => {
+      if (cls.kind !== "verified") return sendError(res, 400, "This sign-in link is not valid", `${description} (${error}).`);
+      const to = new URL(redirect as string);
+      to.searchParams.set("error", error);
+      to.searchParams.set("error_description", description);
+      if (typeof state === "string" && state) to.searchParams.set("state", state);
+      to.searchParams.set("iss", asMeta.issuer);
+      res.setHeader("Cache-Control", "no-store");
+      return res.redirect(302, to.href);
+    };
+    const responseType = str("response_type");
+    if (responseType === undefined || responseType === null) return fail("invalid_request", "response_type is required");
+    if (responseType !== "code") return fail("unsupported_response_type", "Only response_type=code is supported");
+    if (state === null) return fail("invalid_request", "state must be a single value");
+    const challenge = str("code_challenge");
+    if (!challenge || !/^[A-Za-z0-9._~-]{43,128}$/.test(challenge)) return fail("invalid_request", "A PKCE code_challenge is required");
+    if (str("code_challenge_method") !== "S256") return fail("invalid_request", "code_challenge_method must be S256");
+    if (str("scope") === null) return fail("invalid_request", "scope must be a single value");
+    const resource = str("resource");
+    if (resource === null || !resourceOk(resource)) return fail("invalid_target", "resource must be this MCP server's URL");
+    next();
+  };
+  app.use("/authorize", express.urlencoded({ extended: false, limit: "8kb" }), validateAuthorize);
+
   app.use(
     mcpAuthRouter({
       provider,
@@ -388,30 +558,62 @@ export function createHostedApp(o: HostedOptions): express.Express {
       scopesSupported: [SCOPE],
       resourceName: "Vobiz",
       serviceDocumentationUrl: new URL(cfg.links.docs),
+      // /authorize keeps the SDK's per-IP limit: it is the user's own browser.
+      tokenOptions: { rateLimit: skipForTrustedEgress },
+      clientRegistrationOptions: { rateLimit: skipForTrustedEgress },
     }),
   );
 
   // Consent form submission: verify the credentials with Vobiz, then redirect back with a code.
-  app.post("/oauth/login", express.urlencoded({ extended: false, limit: "8kb" }), async (req: Request, res: Response) => {
+  // Guarded by a same-origin check, two rate limiters (per client IP and per submitted Auth ID) and an attempt
+  // counter sealed into the transaction.
+  const limitHandler: express.RequestHandler = (_req, res) =>
+    sendError(res, 429, "Too many sign-in attempts", "Too many sign-in attempts. Wait 15 minutes, then go back to your app and connect again.");
+  const loginByIp = rateLimit({ windowMs: LOGIN_WINDOW_MS, limit: loginLimits.perIp, standardHeaders: "draft-7", legacyHeaders: false, handler: limitHandler });
+  const loginByAuthId = rateLimit({
+    windowMs: LOGIN_WINDOW_MS,
+    limit: loginLimits.perAuthId,
+    standardHeaders: false,
+    legacyHeaders: false,
+    skip: (req) => !String(req.body?.auth_id ?? "").trim(),
+    keyGenerator: (req) => `aid:${String(req.body?.auth_id ?? "").trim().toUpperCase().slice(0, 64)}`,
+    handler: limitHandler,
+  });
+  const baseOrigin = new URL(base).origin;
+  /** Only our own consent page may post the form: Sec-Fetch-Site same-origin (or absent on old browsers), Origin ours if sent. */
+  const sameOrigin: express.RequestHandler = (req, res, next) => {
+    const site = req.get("sec-fetch-site");
+    const origin = req.get("origin");
+    if ((site && site !== "same-origin") || (origin !== undefined && origin !== baseOrigin)) {
+      return sendError(res, 403, "Sign-in blocked", "This sign-in form was not submitted from the Vobiz sign-in page.");
+    }
+    next();
+  };
+  app.post("/oauth/login", express.urlencoded({ extended: false, limit: "8kb" }), sameOrigin, loginByIp, loginByAuthId, async (req: Request, res: Response) => {
     res.setHeader("Cache-Control", "no-store");
-    const t = seal.open<{ cid: string; redirect: string; state: string | null; challenge: string; resource: string }>("txn", String(req.body?.txn ?? ""));
-    if (!t) return res.status(400).type("text").send("This sign-in link has expired. Go back to your app and connect again.");
+    const t = seal.open<Txn>("txn", String(req.body?.txn ?? ""));
+    if (!t) return sendError(res, 400, "This sign-in link has expired", "This sign-in link has expired.");
     const client = await clientsStore.getClient(t.cid);
-    if (!client) return res.status(400).type("text").send("Unknown client. Go back to your app and connect again.");
+    if (!client) return sendError(res, 400, "Unknown app", "This app is not registered any more.");
+    const cls = classifyClient(client, trusted);
+    const attempts = t.n ?? 0;
+    if (attempts >= MAX_LOGIN_ATTEMPTS) return sendError(res, 429, "Too many sign-in attempts", "Too many failed attempts for this sign-in link.");
     const authId = String(req.body?.auth_id ?? "").trim();
     const authToken = String(req.body?.auth_token ?? "").trim();
     const field = (k: string) => String(req.body?.[k] ?? "").trim().slice(0, 64);
     const rawScope = field("scope");
-    // Older form: a read_only checkbox and no scope radio.
-    const scope: Scope = SCOPES.includes(rawScope as Scope) ? (rawScope as Scope) : req.body?.read_only === "1" ? "read" : "full";
+    // Older form: a read_only checkbox and no scope radio. Without either, the page's own default for this client.
+    const scope: Scope = SCOPES.includes(rawScope as Scope) ? (rawScope as Scope) : req.body?.read_only === "1" ? "read" : defaultChoice(cls).scope;
     const values: Choice = { scope, callMeOn: field("call_me_on"), callFrom: field("call_from"), tz: field("timezone") || DEFAULT_TIME_ZONE };
-    const again = (error: string) =>
-      res
-        .status(200)
-        .set("Content-Security-Policy", consentCsp(t.redirect))
-        .type("html")
-        .send(consentPage({ txn: String(req.body.txn), clientName: client.client_name ?? "An MCP client", redirectHost: new URL(t.redirect).host, error, links: cfg.links, values }));
-    if (!AUTH_ID_RE.test(authId) || authToken.length < 8 || authToken.length > 256) return again("Enter a valid Auth ID (MA_… or SA_…) and Auth Token.");
+    const again = (error: string, txn = String(req.body.txn)) => sendConsent(res, { txn, client: cls, redirectUri: t.redirect, error, links: cfg.links, values });
+    /** A failed credential attempt: count it in a re-sealed transaction (same expiry). */
+    const failed = (error: string) => {
+      const left = t.exp - Math.floor(Date.now() / 1000);
+      if (attempts + 1 >= MAX_LOGIN_ATTEMPTS || left <= 0) return sendError(res, 429, "Too many sign-in attempts", "Too many failed attempts for this sign-in link.");
+      const { exp: _exp, ...rest } = t;
+      return again(error, seal.seal("txn", { ...rest, n: attempts + 1 }, left));
+    };
+    if (!AUTH_ID_RE.test(authId) || authToken.length < 8 || authToken.length > 256) return failed("Enter a valid Auth ID (MA_… or SA_…) and Auth Token.");
     if (!isValidTimeZone(values.tz)) return again("Enter a timezone such as Asia/Kolkata or America/New_York.");
     let callMeOn: string | undefined;
     let callFrom: string | undefined;
@@ -422,19 +624,12 @@ export function createHostedApp(o: HostedOptions): express.Express {
       callFrom = values.callFrom ? e164(values.callFrom) : undefined;
       if (values.callFrom && !callFrom) return again("Enter \"Call from\" in E.164, e.g. +918012345678, or leave it blank.");
     }
-    let status = 0;
-    try {
-      const r = await fetchImpl(`${cfg.baseUrl}/api/v1/Account/${encodeURIComponent(authId)}/numbers?per_page=1`, {
-        headers: { "X-Auth-ID": authId, "X-Auth-Token": authToken, Accept: "application/json" },
-        signal: AbortSignal.timeout(10_000),
-      });
-      status = r.status;
-      await r.body?.cancel().catch(() => {});
-    } catch {
-      return again("Vobiz could not be reached to check these credentials. Try again in a moment.");
-    }
-    if (status === 401 || status === 403) return again("Vobiz did not accept this Auth ID and Auth Token. Check them on the console overview page.");
-    if (status >= 500 || status === 0) return again("Vobiz could not check these credentials right now. Try again in a moment.");
+    // Fail closed: only a 2xx from Vobiz signs the user in.
+    const status = await checkVobiz(authId, authToken);
+    if (status === "network") return again("Vobiz could not be reached to check these credentials. Try again in a moment.");
+    if (status === 401 || status === 403 || status === 404) return failed("Vobiz did not accept this Auth ID and Auth Token. Check them on the console overview page.");
+    if (status === 429) return again("Vobiz is receiving too many requests right now. Wait a minute and try again.");
+    if (status < 200 || status > 299) return again(`Vobiz could not check these credentials right now (status ${status}). Try again in a moment.`);
     log.info(`oauth: account connected (status ${status}, scope ${scope})`);
     const code = seal.seal(
       "code",
@@ -531,11 +726,15 @@ export async function runHosted(): Promise<void> {
     process.exit(1);
   }
   if (!cfg.defaultAnswerUrl) cfg.defaultAnswerUrl = `${baseUrl}/answer`;
+  if (process.env.VOBIZ_CIMD_HOSTS?.trim()) {
+    log.info("oauth: VOBIZ_CIMD_HOSTS is no longer used (CIMD client_ids are matched exactly against the Claude, Claude Code, ChatGPT and Codex URLs); remove it");
+  }
+  if (cfg.oauth.trustedClients.length) log.info(`oauth: ${cfg.oauth.trustedClients.length} trusted client host(s) from VOBIZ_TRUSTED_CLIENTS`);
   const list = (v?: string) => v?.split(",").map((s) => s.trim()).filter(Boolean);
-  const ttl = (name: string, fallback: number) => {
+  const ttl = (name: string, fallback: number, max = 365 * 24 * 3600) => {
     const v = Number(process.env[name] ?? fallback);
-    if (!Number.isInteger(v) || v < 60 || v > 365 * 24 * 3600) {
-      process.stderr.write(`[vobiz-mcp] ${name} must be a whole number of seconds between 60 and 31536000\n`);
+    if (!Number.isInteger(v) || v < 60 || v > max) {
+      process.stderr.write(`[vobiz-mcp] ${name} must be a whole number of seconds between 60 and ${max}\n`);
       process.exit(1);
     }
     return v;
@@ -608,21 +807,40 @@ export async function runHosted(): Promise<void> {
     log,
     signatureMode: reminderSignatureMode(process.env.VOBIZ_WEBHOOK_SIGNATURE, cfg.webhookSignature),
   });
+  // Shared client egress ranges that skip the per-IP limits on /token and /register: configured list plus an optional
+  // published list fetched now (e.g. OpenAI's https://openai.com/chatgpt-connectors.json).
+  let trustedEgressCidrs = cfg.oauth.trustedEgressCidrs;
+  if (cfg.oauth.trustedEgressUrl) {
+    const got = await fetchCidrList(cfg.oauth.trustedEgressUrl);
+    if (got.error) log.info(`oauth: WARNING could not load VOBIZ_TRUSTED_EGRESS_URL (${got.error}); using the ${trustedEgressCidrs.length} configured ranges only`);
+    else trustedEgressCidrs = [...new Set([...trustedEgressCidrs, ...got.cidrs])];
+  }
+  log.info(`oauth: ${trustedEgressCidrs.length} trusted client egress range(s) skip the per-IP limits on /token and /register`);
+  // Refresh-token families and used codes: Firestore (shared by every replica) when a GCP project is configured.
+  const grants: GrantStore = cfg.reminders.gcpProject
+    ? new FirestoreGrantStore({ projectId: cfg.reminders.gcpProject, databaseId: cfg.reminders.firestoreDatabase })
+    : new MemoryGrantStore();
+  log.info(
+    grants.kind === "firestore"
+      ? `oauth: grant store Firestore (${cfg.reminders.firestoreDatabase}, collections oauth_grants and oauth_codes)`
+      : "oauth: grant store in memory (single replica only; every session ends on restart)",
+  );
   const app = createHostedApp({
     cfg,
     log,
     baseUrl,
     secret,
+    grants,
+    trustedEgressCidrs,
     reminders,
     remindersRouter,
     media,
     mediaRouter,
     mediaAvailable,
     callScripts,
-    cimdHosts: list(process.env.VOBIZ_CIMD_HOSTS),
     allowedOrigins: list(process.env.VOBIZ_ALLOWED_ORIGINS),
     excludeTools: process.env.VOBIZ_HOSTED_EXCLUDED_TOOLS === undefined ? undefined : (list(process.env.VOBIZ_HOSTED_EXCLUDED_TOOLS) ?? []),
-    accessTtlSec: ttl("VOBIZ_ACCESS_TOKEN_TTL_SEC", 3600),
+    accessTtlSec: ttl("VOBIZ_ACCESS_TOKEN_TTL_SEC", 3600, MAX_ACCESS_TTL),
     refreshTtlSec: ttl("VOBIZ_REFRESH_TOKEN_TTL_SEC", 30 * 24 * 3600),
   });
   const port = Number(process.env.PORT ?? 3000);

@@ -267,7 +267,8 @@ All settings are environment variables. Every one is optional except credentials
 | URLs | `VOBIZ_ALLOWED_URL_HOSTS`, `VOBIZ_ALLOW_ANY_URL_HOST` (false) |
 | Links | `VOBIZ_CONSOLE_URL`, `VOBIZ_PRIVACY_URL`, `VOBIZ_DOCS_URL`, `VOBIZ_DOCS_MCP_URL` (public Vobiz URLs) |
 | Single-account HTTP | `PORT` (3000), `HOST` (127.0.0.1), `VOBIZ_HTTP_SECRET`, `VOBIZ_PUBLIC_URL`, `VOBIZ_REMOTE_ALLOW_CALLS` (false), `VOBIZ_WEBHOOK_SIGNATURE` (`require`), `VOBIZ_ANSWER_TEXT` |
-| Hosted connector | `VOBIZ_HOSTED_URL`, `VOBIZ_HOSTED_SECRET`, `VOBIZ_ACCESS_TOKEN_TTL_SEC` (3600), `VOBIZ_REFRESH_TOKEN_TTL_SEC` (2592000), `VOBIZ_CIMD_HOSTS` (`claude.ai`), `VOBIZ_ALLOWED_ORIGINS` (`https://claude.ai,https://claude.com`), `VOBIZ_HOSTED_EXCLUDED_TOOLS` |
+| Hosted connector | `VOBIZ_HOSTED_URL`, `VOBIZ_HOSTED_SECRET`, `VOBIZ_ACCESS_TOKEN_TTL_SEC` (3600, max 86400), `VOBIZ_REFRESH_TOKEN_TTL_SEC` (2592000), `VOBIZ_ALLOWED_ORIGINS` (`https://claude.ai,https://claude.com,https://chatgpt.com,https://chat.openai.com`), `VOBIZ_HOSTED_EXCLUDED_TOOLS` |
+| Hosted connector OAuth | `VOBIZ_TRUSTED_CLIENTS` (none; `redirect-host=Display Name`), `VOBIZ_LOGIN_MAX_PER_IP` (10), `VOBIZ_LOGIN_MAX_PER_AUTH_ID` (10), `VOBIZ_TRUSTED_EGRESS_CIDRS` (Anthropic's published ranges), `VOBIZ_TRUSTED_EGRESS_URL` |
 
 ## Run modes
 

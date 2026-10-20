@@ -45,6 +45,8 @@ beforeAll(async () => {
     baseUrl: "https://mcp.example.test",
     secret: "s".repeat(40),
     fetchImpl: vobiz.impl,
+    // This suite signs in many times from one IP with one Auth ID; the default limits are tested in oauth-flow.test.ts.
+    loginLimits: { perIp: 1000, perAuthId: 1000 },
     reminders,
     remindersRouter: express.Router().post("/jobs/fire", (_req, res) => res.json({ fired: false, reason: "router-mounted" })),
     media,
