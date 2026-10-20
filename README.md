@@ -244,14 +244,14 @@ Everything below is enforced by the server, not left to the model.
 | Sending messages, changing opt-outs | Off (`VOBIZ_ENABLE_MESSAGING`) |
 | Buying or releasing numbers; changing trunks, SIP endpoints, credentials, IP allow-lists, applications and sub-accounts; deleting recordings | Off (`VOBIZ_ENABLE_PROVISIONING`). Purchases also need `VOBIZ_MAX_NUMBER_COST` > 0. |
 | Explicit confirmation | `confirm: true` on every call, message, transfer, recording, purchase and account change. MCP clients also prompt for every destructive tool. |
-| Idempotency | `idempotency_key` replays the first result instead of acting twice. Identical calls inside `VOBIZ_DUPLICATE_CALL_WINDOW_SEC` are refused. Unknown outcomes stay blocked. |
-| Call limits | Destination countries and blocked prefixes, plus caps on duration, per-minute and per-hour calls, and concurrency. A balance floor applies to prepaid accounts. |
+| Idempotency | `idempotency_key` replays the first result instead of acting twice. Identical calls inside `VOBIZ_DUPLICATE_CALL_WINDOW_SEC` are refused. Unknown outcomes stay blocked. With a shared store (hosted connector on Firestore) records and call/message caps are shared by every replica; in multi-tenant mode `VOBIZ_IDEMPOTENCY_FILE` is ignored. |
+| Call limits | Destination countries and blocked prefixes (also for every `<Dial>` number the server builds), plus caps on duration, per-minute and per-hour calls, and concurrency. A concurrency slot is reserved before the checks run, so simultaneous requests cannot overshoot the cap. A balance floor applies to prepaid accounts. |
 | Message limits | Recipients per send, messages per minute and per hour, recipient countries. Senders must be messaging numbers on the account. Opt-outs are respected. |
 | Number purchases | Cost cap, daily cap, balance pre-check, already-owned check |
 | Call-control URLs | https only, approved hosts only (hosted mode: any public host). No credentials in URLs. |
 | Tenant isolation | The account comes from the credentials only. No tool accepts an account ID. |
 | Secrets | Auth tokens, SIP passwords and other secrets are redacted from results. Logs carry route templates and status codes only, never phone numbers or tokens. |
-| Untrusted content | Message bodies, caller names and callback payloads are data, never instructions. |
+| Untrusted content | Message bodies, caller names and callback payloads are data, never instructions. Tools that return them mark each item `untrusted: true` and add a top-level `notice` and `untrusted_fields`; all other fields are unchanged. |
 
 ## Configuration
 

@@ -8,6 +8,8 @@ import { digitsOnly } from "../config.js";
 import type { ToolContext } from "../context.js";
 import { VobizError } from "../errors.js";
 import { IdempotencyStore, withIdempotency } from "../idempotency.js";
+import { acquireMessageRate, sharedOf } from "../guard/capacity.js";
+import { UNTRUSTED_DESCRIPTION, markUntrusted, withUntrustedNotice } from "../guard/untrusted.js";
 import { handler, idempotencyKey, ok, phoneNumber, toE164 } from "../util.js";
 
 type Rec = Record<string, unknown>;
@@ -25,6 +27,10 @@ const limit = (max: number) => z.number().int().min(1).max(max).optional();
 const offset = z.number().int().min(0).max(1_000_000).optional();
 
 const ZERO_TIME = /^0001-01-01/;
+
+/** Message fields a third party can write (inbound bodies, MMS subjects, RCS sender names, carrier error text). */
+export const MESSAGE_UNTRUSTED_FIELDS = ["text", "title", "from", "errorMessage", "lastMessage"];
+const untrustedMessage = (m: unknown) => markUntrusted(cleanMessage(m));
 
 /** Keeps message objects tidy for the model: unset timestamps become null and internal routing fields are dropped. */
 export function cleanMessage(m: unknown): unknown {
@@ -157,14 +163,7 @@ export function registerMessagingTools(server: McpServer, ctx: ToolContext): voi
       return ok(
         await withIdempotency(ctx.idempotency, `msg:${a.idempotency_key}`, fingerprint, async () => {
           if (ch !== "rcs" && cfg.messaging.verifySender) await assertSenderOwned(ctx, a.from);
-          if (!ctx.messageLimiter.wouldAllow(to.length) || !ctx.hourlyMessageLimiter.wouldAllow(to.length)) {
-            throw new VobizError(
-              "rate_limited",
-              `This MCP server sends at most ${cfg.messaging.maxMessagesPerMinute} messages per minute and ${cfg.messaging.maxMessagesPerHour} per hour.`,
-            );
-          }
-          ctx.messageLimiter.tryAcquireMany(to.length);
-          ctx.hourlyMessageLimiter.tryAcquireMany(to.length);
+          await acquireMessageRate(ctx, to.length);
           // One request per recipient so every message ID and status comes back.
           const messages: Rec[] = [];
           const statuses: number[] = [];
@@ -202,7 +201,7 @@ export function registerMessagingTools(server: McpServer, ctx: ToolContext): voi
                 : "Some recipients were not sent; see status, errorCode and errorMessage on each message. Do not resend to opted-out numbers.",
             http_statuses: statuses,
           };
-        }),
+        }, { shared: sharedOf(ctx) }),
       );
     }),
   );
@@ -236,7 +235,7 @@ export function registerMessagingTools(server: McpServer, ctx: ToolContext): voi
     {
       title: "List messages",
       description:
-        "List SMS, MMS and RCS messages on this account, newest first, with filters (status, channel, direction in/out, to, from, tag, date range) and limit/offset paging. Read-only.",
+        "List SMS, MMS and RCS messages on this account, newest first, with filters (status, channel, direction in/out, to, from, tag, date range) and limit/offset paging. Read-only." + UNTRUSTED_DESCRIPTION,
       inputSchema: {
         status: z.enum(["scheduled", "sent", "delivered", "failed", "received", "unknown"]).optional(),
         channel: channel.optional(),
@@ -268,10 +267,15 @@ export function registerMessagingTools(server: McpServer, ctx: ToolContext): voi
           offset: off,
         },
       });
-      const messages = (Array.isArray(res.data?.messages) ? res.data.messages : []).map(cleanMessage);
+      const messages = (Array.isArray(res.data?.messages) ? res.data.messages : []).map(untrustedMessage);
       const total = typeof res.data?.total === "number" ? res.data.total : null;
       const hasMore = total !== null ? off + messages.length < total : messages.length === lim;
-      return ok({ ok: true, count: messages.length, messages, pagination: { limit: lim, offset: off, total, has_more: hasMore, next_offset: hasMore ? off + lim : null } });
+      return ok(
+        withUntrustedNotice(
+          { ok: true, count: messages.length, messages, pagination: { limit: lim, offset: off, total, has_more: hasMore, next_offset: hasMore ? off + lim : null } },
+          MESSAGE_UNTRUSTED_FIELDS,
+        ),
+      );
     }),
   );
 
@@ -279,13 +283,13 @@ export function registerMessagingTools(server: McpServer, ctx: ToolContext): voi
     "get_message",
     {
       title: "Get a message",
-      description: "Return one message by ID with its current status, error details and status history (sent → delivered / failed). Read-only.",
+      description: "Return one message by ID with its current status, error details and status history (sent → delivered / failed). Read-only." + UNTRUSTED_DESCRIPTION,
       inputSchema: { message_id: messageId },
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     handler(async ({ message_id }) => {
       const res = await sms(ctx, "GET", `/messages/${encodeURIComponent(message_id)}`, "GET sms/messages/{id}");
-      return ok({ ok: true, message: cleanMessage(res.data ?? {}) });
+      return ok(withUntrustedNotice({ ok: true, message: untrustedMessage(res.data ?? {}) }, MESSAGE_UNTRUSTED_FIELDS));
     }),
   );
 
@@ -294,14 +298,14 @@ export function registerMessagingTools(server: McpServer, ctx: ToolContext): voi
     "list_conversations",
     {
       title: "List conversations",
-      description: "List message threads (one per pair of numbers and channel), most recently active first, with message and unread counts. Read-only.",
+      description: "List message threads (one per pair of numbers and channel), most recently active first, with message and unread counts. Read-only." + UNTRUSTED_DESCRIPTION,
       inputSchema: { limit: limit(100).describe("Page size, 1-100 (default 20)."), offset },
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     handler(async (a) => {
       const res = await sms<unknown>(ctx, "GET", "/conversations", "GET sms/conversations", { query: { limit: a.limit ?? cfg.defaultPageSize, offset: a.offset ?? 0 } });
-      const list = (Array.isArray(res.data) ? res.data : []).map(cleanMessage);
-      return ok({ ok: true, count: list.length, conversations: list });
+      const list = (Array.isArray(res.data) ? res.data : []).map(untrustedMessage);
+      return ok(withUntrustedNotice({ ok: true, count: list.length, conversations: list }, MESSAGE_UNTRUSTED_FIELDS));
     }),
   );
 
@@ -309,7 +313,7 @@ export function registerMessagingTools(server: McpServer, ctx: ToolContext): voi
     "get_conversation_messages",
     {
       title: "Get conversation messages",
-      description: "Return the messages of one conversation (from list_conversations or a message's conversationId), oldest first. Read-only.",
+      description: "Return the messages of one conversation (from list_conversations or a message's conversationId), oldest first. Read-only." + UNTRUSTED_DESCRIPTION,
       inputSchema: { conversation_id: messageId.describe("Conversation ID."), limit: limit(100).describe("Page size, 1-100 (default 50)."), offset },
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
@@ -317,8 +321,8 @@ export function registerMessagingTools(server: McpServer, ctx: ToolContext): voi
       const res = await sms<unknown>(ctx, "GET", `/conversations/${encodeURIComponent(a.conversation_id)}/messages`, "GET sms/conversations/{id}/messages", {
         query: { limit: a.limit ?? 50, offset: a.offset ?? 0 },
       });
-      const list = (Array.isArray(res.data) ? res.data : []).map(cleanMessage);
-      return ok({ ok: true, conversation_id: a.conversation_id, count: list.length, messages: list });
+      const list = (Array.isArray(res.data) ? res.data : []).map(untrustedMessage);
+      return ok(withUntrustedNotice({ ok: true, conversation_id: a.conversation_id, count: list.length, messages: list }, MESSAGE_UNTRUSTED_FIELDS));
     }),
   );
 
@@ -327,7 +331,7 @@ export function registerMessagingTools(server: McpServer, ctx: ToolContext): voi
     "list_messaging_numbers",
     {
       title: "List messaging numbers",
-      description: "List the numbers on this account that can send and receive SMS/MMS, with capabilities and their latest message. Use one as send_message `from`. Read-only.",
+      description: "List the numbers on this account that can send and receive SMS/MMS, with capabilities and their latest message. Use one as send_message `from`. Read-only." + UNTRUSTED_DESCRIPTION,
       inputSchema: {},
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
@@ -335,10 +339,10 @@ export function registerMessagingTools(server: McpServer, ctx: ToolContext): voi
       const res = await sms<Rec>(ctx, "GET", "/numbers", "GET sms/numbers");
       const numbers = (Array.isArray(res.data?.numbers) ? res.data.numbers : []).map((n) => {
         const c = cleanMessage(n) as Rec;
-        if (c.lastMessage) c.lastMessage = cleanMessage(c.lastMessage);
+        if (c.lastMessage) c.lastMessage = untrustedMessage(c.lastMessage);
         return c;
       });
-      return ok({ ok: true, count: numbers.length, numbers });
+      return ok(withUntrustedNotice({ ok: true, count: numbers.length, numbers }, ["lastMessage"]));
     }),
   );
 

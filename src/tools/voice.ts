@@ -9,6 +9,8 @@ import { VobizError } from "../errors.js";
 import { assertAllowedUrl, callId, handler, listField, ok } from "../util.js";
 import { buildResponseXml, xmlAction, xmlActions, type XmlAction } from "../xml.js";
 import { callAction } from "./control.js";
+import { assertDestinationAllowed } from "../policy.js";
+import { UNTRUSTED_DESCRIPTION, markUntrusted, withUntrustedNotice } from "../guard/untrusted.js";
 
 type Rec = Record<string, unknown>;
 
@@ -22,7 +24,11 @@ function needHosting(ctx: ToolContext): asserts ctx is ToolContext & Required<Pi
 }
 
 export function registerVoiceTools(server: McpServer, ctx: ToolContext): void {
-  const checkUrl = (u: string, f: string) => assertAllowedUrl(ctx.cfg, u, f);
+  // Every builder call gets both checks: approved URL hosts and the destination policy for <Dial><Number>.
+  const checks = {
+    checkUrl: (u: string, f: string) => assertAllowedUrl(ctx.cfg, u, f),
+    checkDestination: (n: string) => assertDestinationAllowed(ctx.cfg, n),
+  };
 
   // ── generate_answer_xml ──────────────────────────────────────
   server.registerTool(
@@ -31,7 +37,7 @@ export function registerVoiceTools(server: McpServer, ctx: ToolContext): void {
       title: "Generate Vobiz call XML",
       description:
         "Build a validated Vobiz XML document from a list of actions: speak, play, wait, gather (DTMF/speech), record, dial (number or sip_uri), redirect, hangup. " +
-        "Text is XML-escaped; callback/redirect URLs must be on approved hosts; actions after redirect/hangup are rejected. " +
+        "Text is XML-escaped; callback/redirect URLs must be on approved hosts; dial numbers must pass the server's destination policy (countries, blocked prefixes, allowlist); actions after redirect/hangup are rejected. " +
         "With host: true (HTTP mode) the server also serves it and returns a URL usable as make_call answer_url or transfer_call aleg_url. Pure generation otherwise (no API call).",
       inputSchema: {
         actions: xmlActions.describe("Ordered actions, e.g. [{type:'speak',text:'Hello'},{type:'hangup'}]"),
@@ -41,12 +47,12 @@ export function registerVoiceTools(server: McpServer, ctx: ToolContext): void {
     },
     handler(async ({ actions, host }) => {
       if (!host) {
-        const xml = buildResponseXml(actions as XmlAction[], { checkUrl });
+        const xml = buildResponseXml(actions as XmlAction[], checks);
         return ok({ ok: true, xml, hosted: false });
       }
       needHosting(ctx);
       const id = ctx.flows.newId();
-      const xml = buildResponseXml(actions as XmlAction[], { checkUrl, defaultGatherAction: ctx.flows.gatherUrl(id) });
+      const xml = buildResponseXml(actions as XmlAction[], { ...checks, defaultGatherAction: ctx.flows.gatherUrl(id) });
       ctx.flows.create({ kind: "xml", xml }, id);
       return ok({ ok: true, xml, hosted: true, flow_id: id, url: ctx.flows.flowUrl(id), method: "POST" });
     }),
@@ -96,9 +102,9 @@ export function registerVoiceTools(server: McpServer, ctx: ToolContext): void {
             prompt: prompt as never,
           },
         ],
-        { checkUrl, defaultGatherAction: ctx.flows.gatherUrl(id) },
+        { ...checks, defaultGatherAction: ctx.flows.gatherUrl(id) },
       );
-      const afterXml = a.then?.length ? buildResponseXml(a.then as XmlAction[], { checkUrl }) : undefined;
+      const afterXml = a.then?.length ? buildResponseXml(a.then as XmlAction[], checks) : undefined;
       ctx.flows.create({ kind: "xml", xml, afterXml }, id);
       const url = ctx.flows.flowUrl(id);
       let transferred = false;
@@ -121,7 +127,7 @@ export function registerVoiceTools(server: McpServer, ctx: ToolContext): void {
     "get_gather_result",
     {
       title: "Get collected keypad input",
-      description: "Return the DTMF input received for a gather_dtmf / hosted flow (digits, call_uuid, whether the callback signature was verified). Read-only.",
+      description: "Return the DTMF input received for a gather_dtmf / hosted flow (digits, call_uuid, whether the callback signature was verified). Read-only." + UNTRUSTED_DESCRIPTION,
       inputSchema: { flow_id: z.string().regex(/^[0-9a-f]{32}$/, "must be a flow_id from gather_dtmf") },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -129,7 +135,12 @@ export function registerVoiceTools(server: McpServer, ctx: ToolContext): void {
       needHosting(ctx);
       const r = ctx.flows.results(flow_id);
       if (!r.exists) throw new VobizError("not_found", "No hosted flow with this ID (it may have expired after 24h or the server restarted).");
-      return ok({ ok: true, flow_id, received: r.results.length > 0, results: r.results, status: r.results.length ? "input_received" : "waiting" });
+      return ok(
+        withUntrustedNotice(
+          { ok: true, flow_id, received: r.results.length > 0, results: r.results.map(markUntrusted), status: r.results.length ? "input_received" : "waiting" },
+          ["digits", "speech"],
+        ),
+      );
     }),
   );
 
@@ -140,7 +151,7 @@ export function registerVoiceTools(server: McpServer, ctx: ToolContext): void {
       title: "List received Vobiz callbacks",
       description:
         "List callbacks Vobiz delivered to this server's /webhooks/vobiz endpoint and hosted flows (call answered/hung up, Gather digits, recording events), newest first. " +
-        "Duplicates are collapsed and unsigned/invalid requests are rejected per VOBIZ_WEBHOOK_SIGNATURE. HTTP mode only. Read-only.",
+        "Duplicates are collapsed and unsigned/invalid requests are rejected per VOBIZ_WEBHOOK_SIGNATURE. HTTP mode only. Read-only." + UNTRUSTED_DESCRIPTION,
       inputSchema: {
         call_uuid: callId.optional(),
         event: z.string().regex(/^[A-Za-z]{2,40}$/).optional().describe("e.g. StartApp, Hangup, Redirect"),
@@ -151,7 +162,12 @@ export function registerVoiceTools(server: McpServer, ctx: ToolContext): void {
     handler(async (f) => {
       needHosting(ctx);
       const events = ctx.events.list(f);
-      return ok({ ok: true, count: events.length, events, endpoint: `${ctx.cfg.publicUrl}/webhooks/vobiz` });
+      return ok(
+        withUntrustedNotice(
+          { ok: true, count: events.length, events: events.map(markUntrusted), endpoint: `${ctx.cfg.publicUrl}/webhooks/vobiz` },
+          ["fields.CallerName", "fields.Speech", "fields.Digits", "fields.From"],
+        ),
+      );
     }),
   );
 

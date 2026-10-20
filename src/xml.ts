@@ -97,6 +97,11 @@ function attrs(pairs: Record<string, string | number | boolean | undefined>): st
 export interface BuildOptions {
   /** Validates call-control URLs (action/redirect/callback); throws when not allowed. */
   checkUrl: (url: string, field: string) => void;
+  /**
+   * Validates every phone number the document dials (<Dial><Number>) against the server's destination
+   * policy (assertDestinationAllowed); throws when not allowed. Required so no caller can skip it.
+   */
+  checkDestination: (number: string, field: string) => void;
   /** Default Gather action URL (hosted callback) when the action has none. */
   defaultGatherAction?: string;
 }
@@ -148,6 +153,7 @@ function el(a: XmlAction, o: BuildOptions, indent: string): string {
     case "dial": {
       if (!!a.number === !!a.sip_uri) throw new VobizError("invalid_input", "dial needs exactly one of number or sip_uri.");
       if (a.action_url) o.checkUrl(a.action_url, "dial.action_url");
+      if (a.number) o.checkDestination(a.number, "dial.number");
       const target = a.number
         ? `${indent}    <Number>${escapeXml(a.number.startsWith("+") ? a.number : "+" + a.number)}</Number>`
         : `${indent}    <User>${escapeXml(a.sip_uri as string)}</User>`;

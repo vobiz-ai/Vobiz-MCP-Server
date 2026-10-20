@@ -314,6 +314,20 @@ export function fail(err: unknown): CallToolResult {
   };
 }
 
+/**
+ * Log-safe description of an unexpected error: its name (or VobizError kind) plus at most 120 characters of
+ * its message, with the query string and fragment of any http(s) URL removed (signed URLs, tokens).
+ */
+export function safeErrorText(err: unknown): string {
+  const name = err instanceof VobizError ? err.kind : err instanceof Error ? err.name || "Error" : typeof err;
+  const raw = err instanceof Error ? err.message : typeof err === "string" ? err : "";
+  const msg = raw
+    .replace(/(https?:\/\/[^\s?#]*)[?#][^\s]*/gi, "$1")
+    .replace(/[\r\n\t]+/g, " ")
+    .slice(0, 120);
+  return msg ? `${name}: ${msg}` : name;
+}
+
 /** Wraps a tool handler so every thrown error becomes a structured MCP tool error. */
 export function handler<A>(fn: (args: A) => Promise<CallToolResult>): (args: A) => Promise<CallToolResult> {
   return async (args: A) => {
