@@ -111,6 +111,7 @@ export function registerAudioTools(server: McpServer, ctx: ToolContext): void {
       title: "Import audio from a link",
       description:
         "Vobiz: save the audio at a public https link the user pastes (an MP3, WAV or other audio file) into this account's audio library under a name, for use on reminder and wake-up calls. " +
+        "It needs a direct https link to an audio FILE (.mp3, .wav, .m4a, .ogg…), not a web page such as Pixabay, YouTube, Spotify or SoundCloud; if the user only has a page link, ask for the direct file link or use create_audio_upload_link so they can upload the file. " +
         `${limitsText(svc)} Then pass the name as \`audio\` to schedule_reminder_call. For a file on the user's device, or a recording, use create_audio_upload_link.`,
       inputSchema: {
         url: z.string().trim().url().max(2048).describe("Public https link to the audio file."),

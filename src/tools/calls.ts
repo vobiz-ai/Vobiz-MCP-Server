@@ -193,7 +193,7 @@ async function resolveCallScript(ctx: ToolContext, a: ScriptArgs): Promise<Minte
   if (!ctx.callScripts) {
     throw new VobizError(
       "invalid_input",
-      "`say` and `play` need this server to host the call's VobizXML, which only the hosted Vobiz connector (or a server with VOBIZ_PUBLIC_URL) does. Pass an `answer_url` that returns VobizXML instead.",
+      "`say` and `play` need this server to host the call's VobizXML, which only the hosted Vobiz connector does today (a self-hosted server with VOBIZ_PUBLIC_URL does not serve call scripts yet). Pass an `answer_url` that returns VobizXML instead.",
     );
   }
   if ((a.language || a.voice) && a.say === undefined) throw new VobizError("invalid_input", "`language` and `voice` apply to `say`; add the text to speak.");
