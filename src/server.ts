@@ -5,6 +5,7 @@ import type { Config } from "./config.js";
 import { SlidingWindowLimiter, type ConnectionProfile, type MediaUploads, type SharedState, type ToolContext } from "./context.js";
 import type { ReminderService } from "./reminders/types.js";
 import type { MediaService } from "./media/types.js";
+import type { CallScriptBackend } from "./callscript/types.js";
 import { FlowStore } from "./flows.js";
 import { IdempotencyStore } from "./idempotency.js";
 import { EventStore } from "./webhooks.js";
@@ -70,6 +71,8 @@ export interface ServerOptions {
   media?: MediaService;
   /** Upload-link minting for create_audio_upload_link. */
   mediaUploads?: MediaUploads;
+  /** Call scripts for make_call `say` / `play` (hosted connector); without it those parameters are refused. */
+  callScripts?: CallScriptBackend;
   /** The signed-in user's choices (scope, own number, caller ID, timezone). */
   profile?: ConnectionProfile;
 }
@@ -100,6 +103,7 @@ export function createServer(cfg: Config, log: Logger, fetchImpl?: typeof fetch,
     ...(opts.reminders ? { reminders: opts.reminders } : {}),
     ...(opts.media ? { media: opts.media } : {}),
     ...(opts.mediaUploads ? { mediaUploads: opts.mediaUploads } : {}),
+    ...(opts.callScripts ? { callScripts: opts.callScripts } : {}),
     ...(opts.profile ? { profile: opts.profile } : {}),
   };
   const exclude = new Set(opts.excludeTools ?? []);

@@ -11,10 +11,15 @@ import {
   createCallScriptBackend,
   type CallScript,
 } from "../src/callscript/index.js";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { Logger } from "../src/logger.js";
+import { silentLogger } from "../src/logger.js";
+import { createServer } from "../src/server.js";
 import { Sealer } from "../src/sealer.js";
 import { signV3 } from "../src/webhooks.js";
 import { FakeMedia } from "./fake-media.js";
+import { AUTH_ID, OWN_NUMBER, acct, capacityRoutes, connect, json, mockFetch, ownNumberRoute, testConfig } from "./helpers.js";
 
 const PUBLIC = "https://mcp.example.test";
 const ME = "MA_SCRIPT1234";
@@ -232,5 +237,169 @@ describe("POST /c/:token/hangup", () => {
     const u = local(backend.mint(script({ say: { text: "x" } })).hangupUrl);
     const r = await fetch(u, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{bad" });
     expect(r.status).toBe(400);
+  });
+});
+
+// ── make_call say / play ─────────────────────────────────────────
+
+const DEST = "+919812345678";
+const UUID = "5a9fd4a0-3d4c-11ef-bef9-0242ac110005";
+const base3 = { to: DEST, from: OWN_NUMBER, confirm: true };
+
+async function mcp(o: { scripts?: boolean; withMedia?: boolean; env?: Record<string, string | undefined> } = {}) {
+  const m = mockFetch([
+    ownNumberRoute,
+    { method: "POST", path: acct("/Call/"), respond: () => json(201, { api_id: "api-1", message: "call queued", request_uuid: UUID }) },
+    ...capacityRoutes,
+  ]);
+  const lib = new FakeMedia();
+  const cfg = testConfig(o.env ?? {});
+  const server = createServer(cfg, silentLogger, m.impl, {
+    ...(o.scripts === false ? {} : { callScripts: backend }),
+    ...(o.withMedia === false ? {} : { media: lib }),
+  });
+  const [a, b] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: "test", version: "0" });
+  await Promise.all([server.connect(a), client.connect(b)]);
+  const call = async (args: Record<string, unknown>) => {
+    const res = (await client.callTool({ name: "make_call", arguments: args })) as { isError?: boolean; structuredContent?: Record<string, any> };
+    return { isError: !!res.isError, data: (res.structuredContent ?? {}) as Record<string, any> };
+  };
+  const posts = () => m.calls.filter((c) => c.method === "POST" && c.url.pathname === acct("/Call/"));
+  return { call, posts, lib };
+}
+
+const tokenOf = (u: string) => new URL(u).pathname.split("/")[2];
+
+describe("make_call say / play", () => {
+  it("say: posts our answer and hangup URLs and reports the script", async () => {
+    const { call, posts } = await mcp();
+    const r = await call({ ...base3, say: "Your table is ready", language: "en-IN", voice: "MAN" });
+    expect(r.isError).toBe(false);
+    expect(r.data).toMatchObject({ accepted: true, request_uuid: UUID, script: { say: true, loop: 1 } });
+    expect(r.data.script).not.toHaveProperty("play");
+    expect(r.data.how_to).toMatch(/speaks the text, then hangs up automatically/);
+    const body = posts()[0].body as Record<string, string>;
+    expect(body.answer_url).toMatch(/^https:\/\/mcp\.example\.test\/c\/vbzs_[A-Za-z0-9_-]+\/answer$/);
+    expect(body.hangup_url).toBe(body.answer_url.replace(/answer$/, "hangup"));
+    expect(body.answer_method).toBe("POST");
+    const s = sealer.open<CallScript>("scr", tokenOf(body.answer_url))!;
+    expect(s).toMatchObject({ authId: AUTH_ID, say: { text: "Your table is ready", language: "en-IN", voice: "MAN" }, loop: 1 });
+    // The served XML is the script.
+    const x = await (await fetch(local(body.answer_url), { method: "POST" })).text();
+    expect(x).toContain(`<Speak voice="MAN" language="en-IN">Your table is ready</Speak>`);
+  });
+
+  it("play URL: validated and played; the model's own hangup_url wins", async () => {
+    const { call, posts } = await mcp({ env: { VOBIZ_ALLOWED_URL_HOSTS: "hooks.example.com" } });
+    const r = await call({ ...base3, play: "https://cdn.example.com/music/track.MP3", loop: 2, hangup_url: "https://hooks.example.com/h" });
+    expect(r.isError).toBe(false);
+    expect(r.data.script).toEqual({ say: false, play: "url", loop: 2 });
+    const body = posts()[0].body as Record<string, string>;
+    expect(body.hangup_url).toBe("https://hooks.example.com/h");
+    expect(sealer.open<CallScript>("scr", tokenOf(body.answer_url))!.play).toEqual({ url: "https://cdn.example.com/music/track.MP3" });
+  });
+
+  it("play from the library by name: the script holds the file id", async () => {
+    const { call, posts, lib } = await mcp();
+    const m = await lib.add(AUTH_ID, Buffer.from("ID3 alarm"), { name: "My alarm", source: "upload" });
+    const r = await call({ ...base3, play: "my ALARM", say: "Wake up", order: "say_then_play" });
+    expect(r.isError).toBe(false);
+    expect(r.data.script).toEqual({ say: true, play: "library:My alarm", loop: 1, order: "say_then_play" });
+    const s = sealer.open<CallScript>("scr", tokenOf((posts()[0].body as Record<string, string>).answer_url))!;
+    expect(s.play).toEqual({ audioId: m.id, name: "My alarm" });
+    expect(s.order).toBe("say_then_play");
+  });
+
+  it("unknown library name: not_found listing the library, no call placed", async () => {
+    const { call, posts, lib } = await mcp();
+    await lib.add(AUTH_ID, Buffer.from("ID3 a"), { name: "Alarm", source: "upload" });
+    await lib.add(AUTH_ID, Buffer.from("ID3 b"), { name: "Jingle", source: "upload" });
+    const r = await call({ ...base3, play: "Beethoven" });
+    expect(r.data.error).toBe("not_found");
+    expect(r.data.message).toMatch(/"Jingle", "Alarm"/);
+    expect(posts()).toHaveLength(0);
+  });
+
+  it.each(["https://pixabay.com/music/beats-chill-123/", "https://open.spotify.com/track/abc", "https://soundcloud.com/a/b"])(
+    "rejects the page link %s with the precise message",
+    async (play) => {
+      const { call, posts } = await mcp();
+      const r = await call({ ...base3, play });
+      expect(r.data.error).toBe("invalid_input");
+      expect(r.data.message).toBe(PAGE_LINK_MESSAGE);
+      expect(posts()).toHaveLength(0);
+    },
+  );
+
+  it("refuses say/play together with answer_url", async () => {
+    const { call, posts } = await mcp();
+    const r = await call({ ...base3, say: "Hi", answer_url: "https://example.com/answer.xml" });
+    expect(r.data.error).toBe("invalid_input");
+    expect(r.data.message).toMatch(/cannot be combined with `answer_url`/);
+    expect(posts()).toHaveLength(0);
+  });
+
+  it("needs content: no answer_url, say or play and no default answer URL", async () => {
+    const { call, posts } = await mcp({ env: { VOBIZ_DEFAULT_ANSWER_URL: undefined } });
+    const r = await call(base3);
+    expect(r.data.error).toBe("invalid_input");
+    expect(r.data.message).toMatch(/`say`.*`play`.*`answer_url`/);
+    expect(posts()).toHaveLength(0);
+  });
+
+  it("refuses loop/order/language without say or play", async () => {
+    const { call } = await mcp();
+    expect((await call({ ...base3, loop: 3 })).data.error).toBe("invalid_input");
+    expect((await call({ ...base3, play: "https://cdn.example.com/a.mp3", voice: "MAN" })).data.message).toMatch(/apply to `say`/);
+  });
+
+  it("strips control characters from say and rejects empty text", async () => {
+    const { call, posts } = await mcp();
+    expect((await call({ ...base3, say: "\n\t" })).data.error).toBe("invalid_input");
+    const r = await call({ ...base3, say: "Line one\nLine two", idempotency_key: "say-ctl-0001" });
+    expect(r.isError).toBe(false);
+    expect(sealer.open<CallScript>("scr", tokenOf((posts()[0].body as Record<string, string>).answer_url))!.say!.text).toBe("Line one Line two");
+  });
+
+  it("without the call-script backend (stdio / plain HTTP), say/play is invalid_input", async () => {
+    const { call, posts } = await mcp({ scripts: false });
+    const r = await call({ ...base3, say: "Hi" });
+    expect(r.data.error).toBe("invalid_input");
+    expect(r.data.message).toMatch(/hosted Vobiz connector.*VOBIZ_PUBLIC_URL/);
+    expect(posts()).toHaveLength(0);
+  });
+
+  it("an identical say call inside the duplicate window is blocked (stable fingerprint)", async () => {
+    const { call, posts } = await mcp();
+    expect((await call({ ...base3, say: "Same" })).isError).toBe(false);
+    expect((await call({ ...base3, say: "Same" })).data.error).toBe("duplicate_blocked");
+    expect((await call({ ...base3, say: "Different" })).isError).toBe(false);
+    expect(posts()).toHaveLength(2);
+  });
+
+  it("flags the placeholder answer URL when nothing is given", async () => {
+    const { call, posts } = await mcp({ env: { VOBIZ_DEFAULT_ANSWER_URL: `${PUBLIC}/answer` } });
+    const r = await call(base3);
+    expect(r.isError).toBe(false);
+    expect(r.data.script).toEqual({ placeholder: true });
+    expect(r.data.how_to).toMatch(/placeholder.*short greeting.*`say`/);
+    expect((posts()[0].body as Record<string, string>).answer_url).toBe(`${PUBLIC}/answer`);
+  });
+
+  it("leaves a caller's own answer_url untouched", async () => {
+    const { call, posts } = await mcp();
+    const r = await call({ ...base3, answer_url: "https://example.com/answer.xml" });
+    expect(r.isError).toBe(false);
+    expect(r.data).not.toHaveProperty("script");
+    expect(posts()[0].body).not.toHaveProperty("hangup_url");
+  });
+
+  it("describes say/play first in the tool description", async () => {
+    const { client } = await connect(testConfig(), mockFetch([]).impl);
+    const t = (await client.listTools()).tools.find((x) => x.name === "make_call")!;
+    expect(t.description).toMatch(/^Place ONE outbound call[^.]*\);[^.]*`say`.*`play`.*simplest way/);
+    expect(t.description).toMatch(/placeholder greeting/);
+    expect(Object.keys(t.inputSchema.properties ?? {})).toEqual(expect.arrayContaining(["say", "play", "loop", "order", "language", "voice"]));
   });
 });

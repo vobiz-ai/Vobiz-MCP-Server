@@ -6,6 +6,7 @@ import type { EventStore } from "./webhooks.js";
 import type { Logger } from "./logger.js";
 import type { ReminderService } from "./reminders/types.js";
 import type { MediaService } from "./media/types.js";
+import type { CallScriptBackend } from "./callscript/types.js";
 
 /** How the audio tools hand out upload links (hosted connector: sealed one-time /upload/:token URLs). */
 export interface MediaUploads {
@@ -51,6 +52,8 @@ export interface ToolContext {
   /** The account's audio library for reminder calls: present only on the hosted connector. */
   media?: MediaService;
   mediaUploads?: MediaUploads;
+  /** make_call `say` / `play`: this server hosts the call's VobizXML (hosted connector only). */
+  callScripts?: CallScriptBackend;
   profile?: ConnectionProfile;
 }
 

@@ -44,6 +44,8 @@ export interface CallScriptUrls {
 }
 
 export interface CallScriptBackend {
+  /** Public base URL the scripts are served from, no trailing slash. */
+  baseUrl: string;
   /** Express router serving /c/:token/answer and /c/:token/hangup; mount at the app root. */
   router: Router;
   /** Seals a script and returns the URLs to put on the call. */

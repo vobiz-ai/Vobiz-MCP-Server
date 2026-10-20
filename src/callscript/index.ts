@@ -40,6 +40,7 @@ export interface CallScriptBackendOptions {
 
 export function createCallScriptBackend(o: CallScriptBackendOptions): CallScriptBackend {
   return {
+    baseUrl: o.baseUrl.replace(/\/+$/, ""),
     router: createCallScriptRouter(o),
     mint: (script) => mintScriptUrls(o.sealer, o.baseUrl, script),
   };
