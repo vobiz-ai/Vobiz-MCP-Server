@@ -48,6 +48,13 @@ export interface MediaStore {
   /** Newest first. */
   list(authId: string): Promise<AudioMeta[]>;
   delete(authId: string, id: string): Promise<boolean>;
+  /** Number of library entries for the account (sidecars), without reading them. */
+  count(authId: string): Promise<number>;
+  /**
+   * Atomically adds one to the account's counter for `day` (YYYY-MM-DD, UTC) and returns the new value.
+   * The counter only goes up within a day: deleting files never lowers it. A new day starts at 1.
+   */
+  incrementDaily(authId: string, day: string): Promise<number>;
 }
 
 export interface ProcessedAudio {

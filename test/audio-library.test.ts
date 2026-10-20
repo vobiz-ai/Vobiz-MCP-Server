@@ -93,14 +93,64 @@ describe("LocalDiskMediaStore", () => {
   });
 });
 
+describe("LocalDiskMediaStore counters", () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "vobiz-media-cnt-"));
+  });
+  afterEach(() => rm(dir, { recursive: true, force: true }));
+
+  it("increments a monotonic per-day counter outside the library folder, without losing concurrent updates", async () => {
+    const store = new LocalDiskMediaStore(dir);
+    const got = await Promise.all(Array.from({ length: 10 }, () => store.incrementDaily(AUTH, "2026-10-20")));
+    expect([...got].sort((x, y) => x - y)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    expect(JSON.parse(await readFile(join(dir, "counters", `${HASH}.json`), "utf8"))).toEqual({ day: "2026-10-20", count: 10 });
+    expect(await store.list(AUTH)).toEqual([]);
+    expect(await store.incrementDaily(OTHER, "2026-10-20")).toBe(1);
+    expect(await store.incrementDaily(AUTH, "2026-10-21")).toBe(1);
+    expect(await readdir(join(dir, "counters"))).toHaveLength(2); // no temp files left behind
+    await expect(store.incrementDaily(AUTH, "../x")).rejects.toThrow();
+  });
+
+  it("counts library entries without reading them", async () => {
+    const store = new LocalDiskMediaStore(dir);
+    expect(await store.count(AUTH)).toBe(0);
+    await store.put(meta({ id: "a_one" }), Buffer.from("RIFF"));
+    await store.put(meta({ id: "a_two" }), Buffer.from("RIFF"));
+    await store.incrementDaily(AUTH, "2026-10-20");
+    expect(await store.count(AUTH)).toBe(2);
+    expect(await store.count(OTHER)).toBe(0);
+  });
+});
+
 class FakeBucket implements GcsBucketLike {
-  objects = new Map<string, { data: Buffer; o?: Record<string, unknown> }>();
+  objects = new Map<string, { data: Buffer; o?: Record<string, unknown>; generation: number }>();
+  /** Precondition failures answered so far (412). */
+  conflicts = 0;
+  private gen = 0;
+  /** Awaited between a counter read and its write, to force interleaving in tests. */
+  pause = () => Promise.resolve();
   file(name: string): GcsFileLike {
     const self = this;
     return {
       name,
       async save(data, o) {
-        self.objects.set(name, { data: Buffer.from(data), o: o as Record<string, unknown> });
+        const want = o?.preconditionOpts?.ifGenerationMatch;
+        if (want !== undefined) {
+          await self.pause();
+          const cur = self.objects.get(name)?.generation ?? 0;
+          if (Number(want) !== cur) {
+            self.conflicts++;
+            throw Object.assign(new Error("conditionNotMet"), { code: 412 });
+          }
+        }
+        self.objects.set(name, { data: Buffer.from(data), o: o as Record<string, unknown>, generation: ++self.gen });
+      },
+      async getMetadata() {
+        const x = self.objects.get(name);
+        if (!x) throw Object.assign(new Error("No such object"), { code: 404 });
+        const md = (x.o?.metadata as { metadata?: Record<string, unknown> } | undefined)?.metadata;
+        return [{ generation: x.generation, metadata: md ? { ...md } : undefined }];
       },
       async download() {
         const x = self.objects.get(name);
@@ -153,6 +203,39 @@ describe("GcsMediaStore (fake bucket)", () => {
     await bucket.file(store.objectName(AUTH, "a_one", "json")).save(JSON.stringify(meta({ authId: OTHER })));
     expect(await store.getMeta(AUTH, "a_one")).toBeUndefined();
     expect(await store.list(AUTH)).toEqual([]);
+  });
+
+  it("increments the daily counter with ifGenerationMatch and retries on conflict, never losing an update", async () => {
+    const bucket = new FakeBucket();
+    const store = new GcsMediaStore({ bucket: "b", prefix: "media", client: bucket });
+    bucket.pause = () => new Promise((r) => setTimeout(r, Math.random() * 3));
+    const got = await Promise.all(Array.from({ length: 6 }, () => store.incrementDaily(AUTH, "2026-10-20")));
+    expect([...got].sort((x, y) => x - y)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(bucket.conflicts).toBeGreaterThan(0);
+    const obj = bucket.objects.get(`media/counters/${HASH}.json`)!;
+    expect(JSON.parse(obj.data.toString())).toEqual({ day: "2026-10-20", count: 6 });
+    expect(await store.incrementDaily(AUTH, "2026-10-21")).toBe(1);
+    expect(await store.list(AUTH)).toEqual([]);
+  });
+
+  it("gives up after repeated conflicts and passes other errors through", async () => {
+    const bucket = new FakeBucket();
+    const store = new GcsMediaStore({ bucket: "b", client: bucket });
+    const real = bucket.file.bind(bucket);
+    bucket.file = (name) => ({ ...real(name), save: async () => Promise.reject(Object.assign(new Error("conditionNotMet"), { code: 412 })) });
+    await expect(store.incrementDaily(AUTH, "2026-10-20")).rejects.toMatchObject({ code: 412 });
+    bucket.file = (name) => ({ ...real(name), getMetadata: async () => Promise.reject(Object.assign(new Error("forbidden"), { code: 403 })) });
+    await expect(store.incrementDaily(AUTH, "2026-10-20")).rejects.toMatchObject({ code: 403 });
+  });
+
+  it("counts sidecars without downloading them", async () => {
+    const bucket = new FakeBucket();
+    const store = new GcsMediaStore({ bucket: "b", client: bucket });
+    await store.put(meta({ id: "a_one" }), Buffer.from("RIFF"));
+    await store.put(meta({ id: "a_two" }), Buffer.from("RIFF"));
+    await store.incrementDaily(AUTH, "2026-10-20");
+    expect(await store.count(AUTH)).toBe(2);
+    expect(await store.count(OTHER)).toBe(0);
   });
 });
 
@@ -335,6 +418,66 @@ describe("createMediaService", () => {
 
   it("passes processor errors through", async () => {
     expect(await kindOf(make().add(AUTH, Buffer.from("not audio"), { name: "x", source: "upload" }))).toMatchObject({ kind: "invalid_input", status: 415 });
+  });
+
+  it("consumes the daily counter before conversion, counts failures, and is not reset by deleting files", async () => {
+    const svc = make({ limits: { maxUploadsPerDay: 3 } });
+    expect(await kindOf(svc.add(AUTH, Buffer.from("not audio"), { name: "bad", source: "upload" }))).toMatchObject({ status: 415 });
+    const a = await svc.add(AUTH, Buffer.from("1"), { name: "one", source: "upload" });
+    const b = await svc.add(AUTH, Buffer.from("2"), { name: "two", source: "upload" });
+    await svc.delete(AUTH, a.id);
+    await svc.delete(AUTH, b.id);
+    expect(await svc.list(AUTH)).toEqual([]);
+    const r = await kindOf(svc.add(AUTH, Buffer.from("3"), { name: "three", source: "upload" }));
+    expect(r).toMatchObject({ kind: "not_allowed", status: 403 });
+    expect(r.message).toContain("Daily limit");
+    expect(processor.calls).toBe(3); // the refused attempt never reached the converter
+  });
+
+  it("counts a failed URL import toward the daily cap", async () => {
+    const svc = make({ limits: { maxUploadsPerDay: 1 }, request: async () => new Response("nope", { status: 404 }) });
+    expect(await kindOf(svc.importFromUrl(AUTH, "https://cdn.example.com/a", "a"))).toMatchObject({ message: IMPORT_FAILED });
+    expect(await kindOf(svc.add(AUTH, Buffer.from("1"), { name: "one", source: "upload" }))).toMatchObject({ kind: "not_allowed" });
+  });
+
+  it("allows one add or import in flight per account", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const slow: AudioProcessor = { available: async () => true, process: async (input) => (await gate, { wav: Buffer.concat([Buffer.from("RIFF"), input]), durationSec: 1 }) };
+    const svc = createMediaService({ store: new LocalDiskMediaStore(dir), processor: slow, log: silentLogger, now: () => clock, lookup: publicDns, request: async () => new Response("x") });
+    const first = svc.add(AUTH, Buffer.from("1"), { name: "one", source: "upload" });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(await kindOf(svc.add(AUTH, Buffer.from("2"), { name: "two", source: "upload" }))).toMatchObject({ kind: "rate_limited", status: 429 });
+    expect(await kindOf(svc.importFromUrl(AUTH, "https://cdn.example.com/a", "three"))).toMatchObject({ kind: "rate_limited" });
+    const other = svc.add(OTHER, Buffer.from("x"), { name: "one", source: "upload" });
+    release();
+    await expect(first).resolves.toBeTruthy();
+    await expect(other).resolves.toBeTruthy();
+    await expect(svc.add(AUTH, Buffer.from("2"), { name: "two", source: "upload" })).resolves.toBeTruthy();
+  });
+
+  it("checks the total cap with a store count, not a possibly stale listing", async () => {
+    const real = new LocalDiskMediaStore(dir);
+    const stale = Object.assign(Object.create(real), { list: async () => [], count: async () => 2 }) as LocalDiskMediaStore;
+    const svc = createMediaService({ store: stale, processor, log: silentLogger, now: () => clock, limits: { maxPerAccount: 2 } });
+    const r = await kindOf(svc.add(AUTH, Buffer.from("1"), { name: "one", source: "upload" }));
+    expect(r).toMatchObject({ kind: "not_allowed" });
+    expect(r.message).toContain("library is full");
+    expect(processor.calls).toBe(0);
+  });
+
+  it("refuses id-shaped names, and an id-shaped key never resolves to a file by name", async () => {
+    const svc = make();
+    const idLike = "a_AAAAAAAAAAAAAAAA";
+    expect(() => normalizeAudioName(idLike)).toThrow(/must not look like an audio id/);
+    expect(await kindOf(svc.add(AUTH, Buffer.from("1"), { name: idLike, source: "upload" }))).toMatchObject({ kind: "invalid_input", status: 400 });
+    expect(processor.calls).toBe(0);
+    expect(normalizeAudioName("a_short")).toBe("a_short");
+    // A file stored before this rule, whose name is id-shaped, is not reachable through that name.
+    const store = new LocalDiskMediaStore(dir);
+    await store.put(meta({ id: "a_legacy", name: idLike }), Buffer.from("RIFF"));
+    expect(await svc.find(AUTH, idLike)).toBeUndefined();
+    expect((await svc.find(AUTH, "a_legacy"))?.name).toBe(idLike);
   });
 
   describe("importFromUrl", () => {

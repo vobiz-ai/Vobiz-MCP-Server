@@ -2,8 +2,13 @@
  * The per-account audio library: validation, caps, conversion and URL import on top of a MediaStore.
  *
  * Errors are VobizError kinds; `status` carries the HTTP code the upload router should answer with
- * (400 bad name / input, 403 caps, 413 too large or too long, 415 not audio, 502 import fetch failed).
+ * (400 bad name / input, 403 caps, 413 too large or too long, 415 not audio, 429 busy, 502 import fetch failed).
  * Logs carry ids and error kinds only, never names, URLs or audio.
+ *
+ * Caps: the daily counter is consumed (MediaStore.incrementDaily) before any download or conversion, and counts
+ * failed attempts too; deleting files never resets it. Each account has at most one add/import in flight at a
+ * time. That lock is an in-process Map, so it holds per server instance (per Cloud Run replica), not globally;
+ * the daily counter and the total cap are enforced in the store and hold across replicas.
  */
 import { randomBytes } from "node:crypto";
 import { VobizError } from "../errors.js";
@@ -29,6 +34,8 @@ export const IMPORT_FAILED = "The audio link could not be downloaded.";
 const NAME_MAX = 80;
 const ORIGIN_MAX = 300;
 const NAME_RE = /^[\p{L}\p{M}\p{N} ._()-]+$/u;
+/** The shape of a generated id (`a_` + 16 base64url chars). A name of this shape is refused, so it can never shadow an id. */
+export const AUDIO_ID_RE = /^a_[A-Za-z0-9_-]{16}$/;
 
 export interface MediaServiceOptions {
   store: MediaStore;
@@ -51,6 +58,9 @@ export function normalizeAudioName(raw: unknown): string {
   if (name.length > NAME_MAX) throw new VobizError("invalid_input", `The audio name must be at most ${NAME_MAX} characters.`, 400);
   if (!NAME_RE.test(name)) {
     throw new VobizError("invalid_input", "The audio name may contain only letters, digits, spaces and - _ . ( ).", 400);
+  }
+  if (AUDIO_ID_RE.test(name)) {
+    throw new VobizError("invalid_input", "The audio name must not look like an audio id (a_ followed by 16 characters). Pick a descriptive name.", 400);
   }
   return name;
 }
@@ -88,25 +98,50 @@ export function createMediaService(o: MediaServiceOptions): MediaService {
   const lookup = o.lookup;
   const importTimeoutMs = o.importTimeoutMs ?? IMPORT_TIMEOUT_MS;
 
-  /** Name and cap checks that do not need the audio; run before any download or conversion. */
+  /** Accounts with an add or import in flight on this instance. */
+  const inFlight = new Set<string>();
+
+  /** Runs `fn` holding the account's in-flight slot; a second concurrent add/import for the account is refused. */
+  async function exclusive<T>(authId: string, fn: () => Promise<T>): Promise<T> {
+    if (inFlight.has(authId)) {
+      throw new VobizError("rate_limited", "Another audio file for this account is still being processed. Try again when it finishes.", 429);
+    }
+    inFlight.add(authId);
+    try {
+      return await fn();
+    } finally {
+      inFlight.delete(authId);
+    }
+  }
+
+  /** Name and total-cap checks that do not need the audio; run before the daily counter and any download or conversion. */
   async function precheck(authId: string, rawName: unknown): Promise<string> {
     const name = normalizeAudioName(rawName);
-    const existing = await store.list(authId);
-    if (existing.some((m) => sameName(m.name, name))) {
+    if ((await store.list(authId)).some((m) => sameName(m.name, name))) {
       throw new VobizError("invalid_input", `An audio named "${name}" already exists. Pick another name or delete the old one first.`, 400);
     }
-    if (existing.length >= limits.maxPerAccount) {
+    if ((await store.count(authId)) >= limits.maxPerAccount) {
       throw new VobizError("not_allowed", `The audio library is full (${limits.maxPerAccount} files). Delete one before adding another.`, 403);
-    }
-    const today = now().toISOString().slice(0, 10);
-    if (existing.filter((m) => m.createdAt.slice(0, 10) === today).length >= limits.maxUploadsPerDay) {
-      throw new VobizError("not_allowed", `Daily limit reached: at most ${limits.maxUploadsPerDay} audio files can be added per day. Try again tomorrow (UTC).`, 403);
     }
     return name;
   }
 
-  async function add(authId: string, input: Buffer, a: { name: string; source: AudioMeta["source"]; origin?: string }): Promise<AudioMeta> {
-    const name = await precheck(authId, a.name);
+  /** Consumes one of today's attempts (UTC). Failed attempts count too. */
+  async function consumeDaily(authId: string): Promise<void> {
+    let n: number;
+    try {
+      n = await store.incrementDaily(authId, now().toISOString().slice(0, 10));
+    } catch (e) {
+      log.info(`media: daily counter failed (${e instanceof Error ? e.name : "error"})`);
+      throw new VobizError("internal_error", "The audio could not be saved. Try again.", 500);
+    }
+    if (n > limits.maxUploadsPerDay) {
+      throw new VobizError("not_allowed", `Daily limit reached: at most ${limits.maxUploadsPerDay} audio files can be added per day. Try again tomorrow (UTC).`, 403);
+    }
+  }
+
+  /** Converts and stores; caller holds the account lock and has run precheck + consumeDaily. */
+  async function convertAndStore(authId: string, name: string, input: Buffer, a: { source: AudioMeta["source"]; origin?: string }): Promise<AudioMeta> {
     const { wav, durationSec } = await processor.process(input, limits);
     const meta: AudioMeta = {
       id: newId(),
@@ -128,6 +163,14 @@ export function createMediaService(o: MediaServiceOptions): MediaService {
     }
     log.info(`media: added ${meta.id} (${meta.source}, ${durationSec}s)`);
     return meta;
+  }
+
+  function add(authId: string, input: Buffer, a: { name: string; source: AudioMeta["source"]; origin?: string }): Promise<AudioMeta> {
+    return exclusive(authId, async () => {
+      const name = await precheck(authId, a.name);
+      await consumeDaily(authId);
+      return convertAndStore(authId, name, input, a);
+    });
   }
 
   /**
@@ -206,6 +249,8 @@ export function createMediaService(o: MediaServiceOptions): MediaService {
     if (isValidAudioId(key)) {
       const byId = await store.getMeta(authId, key);
       if (byId) return byId;
+      // An id-shaped key is only ever an id: it never falls through to a name lookup.
+      if (AUDIO_ID_RE.test(key)) return undefined;
     }
     const wanted = key.replace(/\s+/g, " ");
     return (await store.list(authId)).find((m) => sameName(m.name, wanted));
@@ -214,11 +259,14 @@ export function createMediaService(o: MediaServiceOptions): MediaService {
   return {
     limits,
     add,
-    async importFromUrl(authId, rawUrl, name) {
+    async importFromUrl(authId, rawUrl, rawName) {
       const u = checkImportUrl(typeof rawUrl === "string" ? rawUrl.trim() : "");
-      await precheck(authId, name);
-      const body = await download(u);
-      return add(authId, body, { name, source: "url", origin: originOf(u) });
+      return exclusive(authId, async () => {
+        const name = await precheck(authId, rawName);
+        await consumeDaily(authId);
+        const body = await download(u);
+        return convertAndStore(authId, name, body, { source: "url", origin: originOf(u) });
+      });
     },
     list: (authId) => store.list(authId),
     find,
