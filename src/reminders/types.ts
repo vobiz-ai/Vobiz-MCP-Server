@@ -176,8 +176,8 @@ export interface ReminderService {
   fire(jobToken: string): Promise<{ fired: boolean; reason?: string }>;
   /** VobizXML for the answered call (GET|POST /r/:token/answer); undefined when the token is invalid or the reminder is no longer active. */
   answerXml(ansToken: string): Promise<string | undefined>;
-  /** VobizXML after a key press (POST /r/:token/input). */
-  inputXml(ansToken: string, digits: string): Promise<string | undefined>;
+  /** VobizXML after a key press or a spoken word (POST /r/:token/input: Digits and/or Speech). */
+  inputXml(ansToken: string, digits: string, speech?: string): Promise<string | undefined>;
   /** Final call outcome (POST /r/:token/hangup): classifies, records the attempt and schedules a retry when due. */
   hangup(ansToken: string, params: HangupParams): Promise<void>;
 }

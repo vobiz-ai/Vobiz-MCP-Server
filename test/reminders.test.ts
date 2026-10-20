@@ -110,12 +110,12 @@ describe("reminder scripts", () => {
       .toMatchInlineSnapshot(`
       "<?xml version="1.0" encoding="UTF-8"?>
       <Response>
-          <Gather action="https://mcp.example.test/r/vbzn_abc/input" method="POST" inputType="dtmf" numDigits="1" finishOnKey="none" executionTimeout="8">
+          <Gather action="https://mcp.example.test/r/vbzn_abc/input" method="POST" inputType="dtmf speech" numDigits="1" finishOnKey="none" executionTimeout="8" speechModel="command_and_search" language="en-IN" hints="snooze, later, confirm, yes, done, okay, stop, cancel, no">
               <Play>https://cdn.example.com/a.mp3?x=1&amp;y=2</Play>
-              <Speak language="en-IN" voice="MAN">Good morning! This is your Vobiz wake-up call. Gym &lt;Dial&gt;+1900&lt;/Dial&gt; &amp; &quot;eat&quot; Press 1 to snooze for 1 minute, 2 to confirm, 9 to stop these calls.</Speak>
+              <Speak language="en-IN" voice="MAN">Good morning! This is your Vobiz wake-up call. Gym &lt;Dial&gt;+1900&lt;/Dial&gt; &amp; &quot;eat&quot; Press 1 or say snooze to call again in 1 minute. Press 2 or say confirm. Press 9 or say stop to end these calls.</Speak>
           </Gather>
-          <Gather action="https://mcp.example.test/r/vbzn_abc/input" method="POST" inputType="dtmf" numDigits="1" finishOnKey="none" executionTimeout="8">
-              <Speak language="en-IN" voice="MAN">Press 1 to snooze, 2 to confirm, or 9 to stop.</Speak>
+          <Gather action="https://mcp.example.test/r/vbzn_abc/input" method="POST" inputType="dtmf speech" numDigits="1" finishOnKey="none" executionTimeout="8" speechModel="command_and_search" language="en-IN" hints="snooze, later, confirm, yes, done, okay, stop, cancel, no">
+              <Speak language="en-IN" voice="MAN">Press 1 or say snooze. Press 2 or say confirm. Press 9 or say stop.</Speak>
           </Gather>
           <Speak language="en-IN" voice="MAN">No response. I will call again in 5 minutes. Goodbye.</Speak>
       </Response>
@@ -128,7 +128,7 @@ describe("reminder scripts", () => {
     expect(x).toContain("Hello. This is your reminder call from Vobiz. Call mum");
     expect(x).toContain(">No response. Goodbye.</Speak>");
     expect(x).not.toContain("<Play>");
-    expect(menuText(10)).toBe("Press 1 to snooze for 10 minutes, 2 to confirm, 9 to stop these calls.");
+    expect(menuText(10)).toBe("Press 1 or say snooze to call again in 10 minutes. Press 2 or say confirm. Press 9 or say stop to end these calls.");
     expect(noResponseText(1)).toBe("No response. I will call again in 1 minute. Goodbye.");
   });
 
@@ -497,7 +497,7 @@ describe("ReminderService call flow", () => {
     await t.service.schedule(ACCOUNT, input({ message: "Pay rent & bills" }));
     const { ans } = await t.fireLast();
     const xml = await t.service.answerXml(ans);
-    expect(xml).toContain("Pay rent &amp; bills Press 1 to snooze for 10 minutes");
+    expect(xml).toContain("Pay rent &amp; bills Press 1 or say snooze to call again in 10 minutes");
     expect(xml).toContain(`action="${PUBLIC}/r/${ans}/input"`);
     expect(xml).toContain("I will call again in 5 minutes.");
     expect(await t.service.answerXml("vbzn_bogus")).toBeUndefined();

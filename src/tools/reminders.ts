@@ -61,14 +61,17 @@ function account(ctx: ToolContext): ReminderAccount {
 
 const tzOf = (ctx: ToolContext) => ctx.profile?.timezone || DEFAULT_TIME_ZONE;
 
-/** First active, voice-capable number on the account: the default caller ID when the user did not choose one. */
-async function firstVoiceNumber(ctx: ToolContext): Promise<string> {
+/**
+ * Default caller ID when the user did not choose one: an active, voice-capable number on the account, preferring one
+ * from the destination's country (a domestic route relays key presses more reliably than an international one).
+ */
+async function firstVoiceNumber(ctx: ToolContext, to?: string): Promise<string> {
   const res = await ctx.client.request<Rec>("GET", ctx.client.accountPath("/numbers"), {
     query: { status: "active", page: 1, per_page: 100 },
     route: "GET numbers",
   });
   const items = listField(res.data, "items") ?? [];
-  const n = items.find(
+  const usable = items.filter(
     (x) =>
       typeof x.e164 === "string" &&
       (x.status === undefined || x.status === "active") &&
@@ -76,6 +79,13 @@ async function firstVoiceNumber(ctx: ToolContext): Promise<string> {
       (x.capabilities as Rec | undefined)?.voice !== false &&
       x.is_blocked !== true,
   );
+  const toDigits = to ? digitsOnly(to) : "";
+  const common = (a: string) => {
+    let i = 0;
+    while (i < 3 && i < a.length && i < toDigits.length && a[i] === toDigits[i]) i++;
+    return i;
+  };
+  const n = usable.map((x) => ({ x, score: toDigits ? common(digitsOnly(x.e164 as string)) : 0 })).sort((p, q) => q.score - p.score)[0]?.x;
   if (!n) {
     throw new VobizError(
       "not_allowed",
@@ -222,7 +232,7 @@ export function registerReminderTools(server: McpServer, ctx: ToolContext): void
         }
         await assertCallerIdOwned(ctx, from);
       } else {
-        from = await firstVoiceNumber(ctx);
+        from = await firstVoiceNumber(ctx, to);
       }
 
       const r = await logged(ctx, "schedule", svc.schedule(

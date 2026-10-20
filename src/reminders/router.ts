@@ -88,8 +88,8 @@ export function createRemindersRouter(service: ReminderService, o: RemindersRout
     if (c === "bad_signature") return res.status(403).type("text/plain").send("invalid signature");
     if (c === "invalid_token") return xml(res, inactiveScript());
     try {
-      const digits = params(req).Digits ?? "";
-      return xml(res, (await service.inputXml(String(req.params.token), digits)) ?? inactiveScript());
+      const p = params(req);
+      return xml(res, (await service.inputXml(String(req.params.token), p.Digits ?? "", p.Speech ?? "")) ?? inactiveScript());
     } catch {
       return res.status(503).type("text/plain").send("temporarily unavailable");
     }

@@ -446,12 +446,24 @@ export function createReminderService(opts: ReminderServiceOptions): ReminderSer
     return answerScript({ ...c.r, audioUrl }, { actionUrl: inputUrl(token), retryInMinutes: canRetry(c.r, c.a.n) ? c.r.retryMinutes : null });
   }
 
-  async function inputXml(token: string, digits: string): Promise<string | undefined> {
+  /** A key press wins; otherwise a spoken word maps to the same menu (1 snooze, 2 confirm, 9 stop). */
+  function digitFromInput(digits: string, speech: string): string {
+    const d = typeof digits === "string" ? digits.trim().slice(0, 8) : "";
+    if (d) return d;
+    const w = typeof speech === "string" ? speech.trim().toLowerCase().slice(0, 80) : "";
+    if (!w) return "";
+    if (/\b(snooze|later|again|sleep|wait)\b/.test(w)) return "1";
+    if (/\b(stop|cancel|never|no more|don'?t call)\b/.test(w)) return "9";
+    if (/\b(confirm|yes|done|ok|okay|got it|thanks?|thank you|awake|sure)\b/.test(w)) return "2";
+    return w; // unrecognised: treated like an invalid key (re-prompt once)
+  }
+
+  async function inputXml(token: string, digits: string, speech = ""): Promise<string | undefined> {
     const c = await current(token);
     if (!c) return undefined;
     const { a, r } = c;
     const n = a.n;
-    const d = typeof digits === "string" ? digits.trim().slice(0, 8) : "";
+    const d = digitFromInput(digits, speech);
     const isCurrent = (cur: Reminder) => cur.status === "calling" && cur.attempts.length === n;
     const decide = (outcome: AttemptOutcome, status: ReminderStatus, nextAt: string | null = null) =>
       store.update(r.authId, r.id, (cur) =>
