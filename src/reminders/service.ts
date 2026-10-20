@@ -301,7 +301,9 @@ export function createReminderService(opts: ReminderServiceOptions): ReminderSer
       ACTIVE.includes(cur.status) ? { status: "cancelled", nextAt: null, updatedAt: iso() } : undefined,
     );
     if (!updated) return store.get(authId, id); // unknown (undefined) or already finished (unchanged)
-    await scheduler.cancel(`${id}-${updated.attempts.length + 1}`).catch(() => log.info(`reminder ${id}: job cancel failed (ignored on fire)`));
+    await scheduler
+      .cancel(`${id}-${updated.attempts.length + 1}`)
+      .catch((err: unknown) => log.info(`reminder ${id}: job cancel failed, the job is ignored when it fires (${err instanceof Error ? err.message : String(err)})`));
     log.info(`reminder ${id} cancelled`);
     return updated;
   }
@@ -345,7 +347,8 @@ export function createReminderService(opts: ReminderServiceOptions): ReminderSer
       hangup_method: "POST",
       ring_timeout: "45",
       time_limit: 180,
-      machine_detection: "hangup",
+      // No answering-machine detection: a short "hello" is easily taken for a machine, and the call would be cut
+      // before the XML runs. A pickup without a key press is classified as no_input from the hangup callback instead.
       caller_name: "Vobiz reminder",
     };
     try {

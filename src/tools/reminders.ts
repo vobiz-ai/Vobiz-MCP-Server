@@ -139,6 +139,12 @@ export function registerReminderTools(server: McpServer, ctx: ToolContext): void
         from: phoneNumber.optional().describe("Caller ID: a voice number on this account, E.164."),
         language: z.enum(SPEAK_LANGS).optional().describe("Speech language (default en-US)."),
         voice: z.enum(["WOMAN", "MAN"]).optional().describe("Speech voice (default WOMAN)."),
+        audio_url: z
+          .string()
+          .url()
+          .max(2048)
+          .optional()
+          .describe("Optional public https link to an MP3 or WAV file played at the start of the call, before the spoken message (for example the user's own recording or alarm sound)."),
         snooze_minutes: z.number().int().min(1).max(60).optional().describe("Pressing 1 calls again after this many minutes (default 10)."),
         max_attempts: z.number().int().min(1).max(5).optional().describe("Total call attempts including retries (default 3)."),
         retry_minutes: z.number().int().min(1).max(30).optional().describe("Minutes between retries after no answer, busy or voicemail (default 5)."),
@@ -211,6 +217,7 @@ export function registerReminderTools(server: McpServer, ctx: ToolContext): void
           from,
           language: args.language ?? "en-US",
           voice: args.voice ?? "WOMAN",
+          ...(args.audio_url ? { audioUrl: args.audio_url } : {}),
           snoozeMinutes: args.snooze_minutes ?? 10,
           maxAttempts: args.max_attempts ?? 3,
           retryMinutes: args.retry_minutes ?? 5,
