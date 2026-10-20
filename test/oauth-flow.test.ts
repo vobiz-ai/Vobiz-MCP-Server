@@ -169,3 +169,68 @@ describe("dynamic client registration rules", async () => {
     expect((r.body as unknown as { client_name: string }).client_name).toHaveLength(256);
   });
 });
+
+describe("authorize errors", async () => {
+  const base = await start();
+  const claude = (await register(base, [CLAUDE_CB])).body.client_id;
+  const unverified = (await register(base, ["https://tools.evil.example/cb"])).body.client_id;
+  const local = (await register(base, ["http://localhost/callback"])).body.client_id;
+
+  const bad: [Record<string, string | undefined>, string][] = [
+    [{ response_type: "token" }, "unsupported_response_type"],
+    [{ response_type: undefined }, "invalid_request"],
+    [{ code_challenge: undefined }, "invalid_request"],
+    [{ code_challenge: "short" }, "invalid_request"],
+    [{ code_challenge_method: "plain" }, "invalid_request"],
+    [{ code_challenge_method: undefined }, "invalid_request"],
+    [{ resource: "https://evil.example/mcp" }, "invalid_target"],
+    [{ resource: "https://mcp.example.test/other" }, "invalid_target"],
+  ];
+
+  it("verified clients get an error redirect carrying error, state and iss", async () => {
+    for (const [over, code] of bad) {
+      const r = await fetch(authorizeUrl(base, claude, CLAUDE_CB, over), { redirect: "manual" });
+      expect(r.status).toBe(302);
+      const to = new URL(r.headers.get("location")!);
+      expect(to.origin + to.pathname).toBe(CLAUDE_CB);
+      expect(to.searchParams.get("error")).toBe(code);
+      expect(to.searchParams.get("state")).toBe("st-1");
+      expect(to.searchParams.get("iss")).toBe(ISSUER);
+    }
+  });
+
+  it("unverified and local clients get a plain error page, never a redirect", async () => {
+    for (const [id, cb] of [[unverified, "https://tools.evil.example/cb"], [local, "http://localhost:5555/callback"]] as const) {
+      for (const [over, code] of bad) {
+        const r = await fetch(authorizeUrl(base, id, cb, over), { redirect: "manual" });
+        expect(r.status).toBe(400);
+        expect(r.headers.get("location")).toBeNull();
+        expect(r.headers.get("content-type")).toContain("text/html");
+        expect(r.headers.get("content-security-policy")).toContain("form-action 'none'");
+        expect(await r.text()).toContain(code);
+      }
+    }
+  });
+
+  it("tolerates a missing resource and accepts the origin or a different case", async () => {
+    for (const resource of [undefined, "https://mcp.example.test", "https://MCP.EXAMPLE.TEST/mcp", "HTTPS://mcp.example.test/"]) {
+      const r = await fetch(authorizeUrl(base, claude, CLAUDE_CB, { resource }), { redirect: "manual" });
+      expect(r.status).toBe(200);
+      expect(await r.text()).toContain("Connect your Vobiz account");
+    }
+  });
+
+  it("leaves unknown clients and unregistered redirects to the SDK's 400", async () => {
+    const r1 = await fetch(authorizeUrl(base, "vbzc_bogus", CLAUDE_CB), { redirect: "manual" });
+    expect(r1.status).toBe(400);
+    const r2 = await fetch(authorizeUrl(base, claude, "https://evil.example/cb"), { redirect: "manual" });
+    expect(r2.status).toBe(400);
+    expect(r2.headers.get("location")).toBeNull();
+  });
+
+  it("refuses CIMD client_ids outside the verified list", async () => {
+    const r = await fetch(authorizeUrl(base, "https://claude.ai/oauth/some-other-client", CLAUDE_CB), { redirect: "manual" });
+    expect(r.status).toBe(400);
+    expect(vobiz.calls.some((c) => c.url.href.includes("some-other-client"))).toBe(false);
+  });
+});

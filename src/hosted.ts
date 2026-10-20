@@ -24,7 +24,8 @@ import { fileURLToPath } from "node:url";
 import express, { type Request, type Response } from "express";
 import { mcpAuthRouter, createOAuthMetadata, getOAuthProtectedResourceMetadataUrl } from "@modelcontextprotocol/sdk/server/auth/router.js";
 import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
-import { InvalidClientMetadataError, InvalidGrantError, InvalidTokenError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
+import { InvalidClientMetadataError, InvalidGrantError, InvalidTargetError, InvalidTokenError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
+import { redirectUriMatches } from "@modelcontextprotocol/sdk/server/auth/handlers/authorize.js";
 import type { AuthorizationParams, OAuthServerProvider } from "@modelcontextprotocol/sdk/server/auth/provider.js";
 import type { OAuthRegisteredClientsStore } from "@modelcontextprotocol/sdk/server/auth/clients.js";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
@@ -43,7 +44,7 @@ import { SERVER_VERSION } from "./version.js";
 import { VOBIZ_FAVICON_SVG } from "./brand.js";
 import { Sealer } from "./sealer.js";
 import { classifyClient, redirectUriProblem, verifiedCimdName, type TrustedClient } from "./oauth/clients.js";
-import { consentCsp, consentPage, esc, type Choice, type Scope } from "./oauth/consent.js";
+import { ERROR_CSP, consentCsp, consentPage, errorPage, esc, type Choice, type Scope } from "./oauth/consent.js";
 import { DEFAULT_TIME_ZONE, isValidTimeZone } from "./tz.js";
 export { Sealer };
 
@@ -227,6 +228,24 @@ export function createHostedApp(o: HostedOptions): express.Express {
     scope: SCOPE,
   });
 
+  /**
+   * RFC 8707: a `resource` must name this MCP server (the /mcp URL or its origin; scheme and host compare
+   * case-insensitively). A missing resource is tolerated (some clients omit it) and means this server.
+   */
+  const resourceOk = (v: string | undefined): boolean => {
+    if (v === undefined) return true;
+    let u: URL;
+    try {
+      u = new URL(v);
+    } catch {
+      return false;
+    }
+    return u.origin === mcpUrl.origin && !u.search && !u.hash && !u.username && ["/", "/mcp", "/mcp/"].includes(u.pathname);
+  };
+
+  const sendError = (res: Response, status: number, title: string, message: string) =>
+    res.status(status).set({ "Content-Security-Policy": ERROR_CSP, "X-Frame-Options": "DENY", "Cache-Control": "no-store" }).type("html").send(errorPage({ title, message, links: cfg.links }));
+
   /** The consent page: framing denied, and Referrer-Policy same-origin so the form post carries our Origin (no-referrer would send "null"). */
   const sendConsent = (res: Response, view: Parameters<typeof consentPage>[0]) =>
     res
@@ -240,7 +259,8 @@ export function createHostedApp(o: HostedOptions): express.Express {
     async authorize(client, params: AuthorizationParams, res) {
       const txn = seal.seal(
         "txn",
-        { cid: client.client_id, redirect: params.redirectUri, state: params.state ?? null, challenge: params.codeChallenge, resource: params.resource?.href ?? mcpUrl.href },
+        // The resource was checked by validateAuthorize; tokens are always bound to the canonical /mcp URL.
+        { cid: client.client_id, redirect: params.redirectUri, state: params.state ?? null, challenge: params.codeChallenge, resource: mcpUrl.href },
         TXN_TTL,
       );
       sendConsent(res, { txn, client: classifyClient(client, trusted), redirectUri: params.redirectUri, links: cfg.links });
@@ -250,7 +270,8 @@ export function createHostedApp(o: HostedOptions): express.Express {
       if (!c || c.cid !== client.client_id) throw new InvalidGrantError("Invalid or expired authorization code");
       return c.challenge;
     },
-    async exchangeAuthorizationCode(client, code, _verifier, redirectUri) {
+    async exchangeAuthorizationCode(client, code, _verifier, redirectUri, resource) {
+      if (resource && !resourceOk(resource.href)) throw new InvalidTargetError("resource must be this MCP server's URL");
       const c = seal.open<Grant & { cid: string; redirect: string; jti: string }>("code", code);
       if (!c || c.cid !== client.client_id) throw new InvalidGrantError("Invalid or expired authorization code");
       if (redirectUri && redirectUri !== c.redirect) throw new InvalidGrantError("redirect_uri does not match the authorization request");
@@ -259,7 +280,8 @@ export function createHostedApp(o: HostedOptions): express.Express {
       for (const [k, exp] of usedCodes) if (exp * 1000 < Date.now()) usedCodes.delete(k);
       return issue({ authId: c.authId, authToken: c.authToken, clientId: client.client_id, resource: c.resource, ...profileOf(c) });
     },
-    async exchangeRefreshToken(client, refreshToken) {
+    async exchangeRefreshToken(client, refreshToken, _scopes, resource) {
+      if (resource && !resourceOk(resource.href)) throw new InvalidTargetError("resource must be this MCP server's URL");
       const g = seal.open<Grant>("refresh", refreshToken);
       if (!g || g.clientId !== client.client_id) throw new InvalidGrantError("Invalid or expired refresh token");
       return issue({ authId: g.authId, authToken: g.authToken, clientId: g.clientId, resource: g.resource, ...profileOf(g) });
@@ -305,6 +327,61 @@ export function createHostedApp(o: HostedOptions): express.Express {
   app.get("/.well-known/openai-apps-challenge", (_req, res) =>
     cfg.openaiAppsChallenge ? res.type("text/plain").set("Cache-Control", "no-store").send(cfg.openaiAppsChallenge) : res.status(404).json({ error: "not_found" }),
   );
+  /**
+   * Runs before the SDK's /authorize handler. Once client_id and redirect_uri check out (otherwise the SDK answers
+   * with its own 400), the remaining parameters are validated here so that errors carry `iss` (RFC 9207) and
+   * `state`, and so that only verified clients ever get an error redirect: local and unverified clients get a
+   * plain error page instead, which stops /authorize being used as an open redirector.
+   */
+  const validateAuthorize: express.RequestHandler = async (req, res, next) => {
+    if (req.method !== "GET" && req.method !== "POST") return next();
+    const p = ((req.method === "POST" ? req.body : req.query) ?? {}) as Record<string, unknown>;
+    /** The parameter as a string, undefined when absent, null when repeated or not a string. */
+    const str = (k: string): string | null | undefined => (p[k] === undefined ? undefined : typeof p[k] === "string" ? (p[k] as string) : null);
+    const clientId = str("client_id");
+    if (!clientId) return next();
+    let client: OAuthClientInformationFull | undefined;
+    try {
+      client = await clientsStore.getClient(clientId);
+    } catch {
+      return next();
+    }
+    if (!client) return next();
+    let redirect = str("redirect_uri");
+    if (redirect === null) return next();
+    if (redirect === undefined) {
+      if (client.redirect_uris.length !== 1) return next();
+      redirect = client.redirect_uris[0]!;
+    } else if (!client.redirect_uris.some((r) => redirectUriMatches(redirect as string, r))) {
+      return next();
+    }
+    if (redirectUriProblem(redirect)) return sendError(res, 400, "This app cannot connect", "This app's redirect URL is not allowed. Redirect URLs must use https, or http on localhost.");
+    const cls = classifyClient(client, trusted);
+    const state = str("state");
+    const fail = (error: string, description: string) => {
+      if (cls.kind !== "verified") return sendError(res, 400, "This sign-in link is not valid", `${description} (${error}).`);
+      const to = new URL(redirect as string);
+      to.searchParams.set("error", error);
+      to.searchParams.set("error_description", description);
+      if (typeof state === "string" && state) to.searchParams.set("state", state);
+      to.searchParams.set("iss", asMeta.issuer);
+      res.setHeader("Cache-Control", "no-store");
+      return res.redirect(302, to.href);
+    };
+    const responseType = str("response_type");
+    if (responseType === undefined || responseType === null) return fail("invalid_request", "response_type is required");
+    if (responseType !== "code") return fail("unsupported_response_type", "Only response_type=code is supported");
+    if (state === null) return fail("invalid_request", "state must be a single value");
+    const challenge = str("code_challenge");
+    if (!challenge || !/^[A-Za-z0-9._~-]{43,128}$/.test(challenge)) return fail("invalid_request", "A PKCE code_challenge is required");
+    if (str("code_challenge_method") !== "S256") return fail("invalid_request", "code_challenge_method must be S256");
+    if (str("scope") === null) return fail("invalid_request", "scope must be a single value");
+    const resource = str("resource");
+    if (resource === null || !resourceOk(resource)) return fail("invalid_target", "resource must be this MCP server's URL");
+    next();
+  };
+  app.use("/authorize", express.urlencoded({ extended: false, limit: "8kb" }), validateAuthorize);
+
   app.use(
     mcpAuthRouter({
       provider,
