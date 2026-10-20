@@ -10,6 +10,7 @@
  *   POST /oauth/login                           consent form: the user enters their Vobiz Auth ID + Auth Token
  *   GET|POST /answer                            default answer XML for make_call
  *   /jobs/fire, /r/:token/*                     reminder calls (when a reminders router is mounted)
+ *   /upload/:token, /media/:token               audio library for reminder calls (when a media router is mounted)
  *   GET  /.well-known/openai-apps-challenge     OpenAI Apps domain verification (VOBIZ_OPENAI_APPS_CHALLENGE)
  *   GET  /health
  *
@@ -33,10 +34,13 @@ import { ConfigError, loadConfig, type Config } from "./config.js";
 import type { ConnectionProfile, SharedState } from "./context.js";
 import type { ReminderService } from "./reminders/types.js";
 import { createReminderBackend, createReminderService, createRemindersRouter } from "./reminders/index.js";
+import type { MediaService } from "./media/types.js";
+import { createMediaBackend, createMediaService } from "./media/index.js";
+import { createMediaRouter, mintMediaUrl, mintUploadUrl } from "./media/router.js";
 import { createLogger, type Logger } from "./logger.js";
 import { createServer, createSharedState } from "./server.js";
 import { SERVER_VERSION } from "./version.js";
-import { VOBIZ_LOGO_SVG } from "./brand.js";
+import { BRAND_BASE_CSS, VOBIZ_LOGO_SVG } from "./brand.js";
 import { Sealer } from "./sealer.js";
 import { COMMON_TIME_ZONES, DEFAULT_TIME_ZONE, isValidTimeZone } from "./tz.js";
 export { Sealer };
@@ -53,6 +57,10 @@ export const ASSISTANT_TOOLS = [
   "get_account_balance",
   "list_phone_numbers",
   "get_call_status",
+  "create_audio_upload_link",
+  "import_audio_from_url",
+  "list_audio",
+  "delete_audio",
 ];
 
 type Scope = ConnectionProfile["scope"];
@@ -118,6 +126,12 @@ export interface HostedOptions {
   reminders?: ReminderService;
   /** Express router serving /jobs/fire and /r/:token/* for reminder calls, mounted before the 404 handler. */
   remindersRouter?: express.Router;
+  /** The audio library for reminder calls; the audio tools are offered only when this (and reminders) is set. */
+  media?: MediaService;
+  /** Express router serving /upload/:token and /media/:token, mounted before the 404 handler. */
+  mediaRouter?: express.Router;
+  /** False while audio conversion (ffmpeg) is unavailable: upload links and URL imports are then refused. */
+  mediaAvailable?: () => Promise<boolean>;
 }
 
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] as string);
@@ -148,22 +162,7 @@ function consentPage(o: { txn: string; clientName: string; redirectHost: string;
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600&display=swap">
 <style>
-:root{color-scheme:dark;--bg:hsl(16 50% 3%);--card:hsl(18 54% 5%);--fg:hsl(20 50% 95%);--muted:hsl(16 10% 60%);--line:hsl(16 30% 14%);--input:hsl(18 54% 7%);
---red:#E83C00;--red-hover:#c93400;--orange:#E86A00;--ring:hsl(16 100% 45% / .45);--err:#ff7b6b;--glow:hsl(16 100% 45% / .14);--radius:.75rem}
-@media (prefers-color-scheme:light){:root{color-scheme:light;--bg:hsl(16 20% 99%);--card:#fff;--fg:#100703;--muted:hsl(16 9% 38%);--line:hsl(16 15% 90%);--input:#fff;--err:#c4320a;--glow:hsl(16 100% 45% / .07)}}
-*{box-sizing:border-box}
-html,body{margin:0;min-height:100%}
-body{background:radial-gradient(60rem 30rem at 50% -10%,var(--glow),transparent 70%),var(--bg);color:var(--fg);
-font:400 15px/1.55 "IBM Plex Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased;
-display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;padding:32px 16px}
-.brand{display:flex;justify-content:center;margin-bottom:28px;color:var(--fg)}
-.logo{height:30px;width:auto;display:block}
-main{width:100%;max-width:440px;background:var(--card);border:1px solid var(--line);border-radius:calc(var(--radius) + 4px);padding:32px;position:relative;overflow:hidden}
-main::before{content:"";position:absolute;inset:0 0 auto 0;height:3px;background:linear-gradient(90deg,var(--orange),var(--red))}
-.eyebrow{font-weight:500;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--orange);margin:0 0 10px}
-h1{font-weight:600;font-size:22px;line-height:1.25;margin:0 0 8px;letter-spacing:-.01em}
-.lead{color:var(--muted);margin:0 0 22px}
-.lead strong{color:var(--fg);font-weight:500}
+${BRAND_BASE_CSS}
 ul.scope{list-style:none;margin:0 0 24px;padding:14px 16px;border:1px solid var(--line);border-radius:var(--radius);display:grid;gap:8px}
 ul.scope li{display:flex;gap:10px;align-items:flex-start;font-size:14px}
 ul.scope li::before{content:"";flex:0 0 8px;height:8px;margin-top:7px;border-radius:2px 8px 2px 2px;background:var(--red)}
@@ -175,9 +174,6 @@ input[type=text]:focus,input[type=password]:focus{outline:none;border-color:var(
 .check input{accent-color:var(--red);width:16px;height:16px;margin:3px 0 0;flex:0 0 auto}
 .check label{margin:0;font-weight:400;color:var(--muted)}
 .check strong{color:var(--fg);font-weight:500}
-button{margin-top:24px;width:100%;padding:12px;border:0;border-radius:var(--radius);background:var(--red);color:#fff;font:600 15px "IBM Plex Sans",sans-serif;cursor:pointer;transition:background .15s}
-button:hover{background:var(--red-hover)}
-button:focus-visible{outline:none;box-shadow:0 0 0 3px var(--ring)}
 fieldset{border:0;margin:20px 0 0;padding:0;display:grid;gap:8px}
 legend{font-weight:500;font-size:14px;padding:0;margin:0 0 8px}
 .opt{display:flex;gap:10px;align-items:flex-start;margin:0;padding:11px 13px;border:1px solid var(--line);border-radius:var(--radius);font-weight:400;font-size:14px;color:var(--muted);cursor:pointer;transition:border-color .15s}
@@ -191,11 +187,6 @@ form:has(#scope_read:checked) .profile{display:none}
 input[type=tel]{width:100%;padding:11px 13px;border:1px solid var(--line);border-radius:var(--radius);background:var(--input);color:var(--fg);font:inherit;transition:border-color .15s,box-shadow .15s}
 input[type=tel]::placeholder{color:var(--muted);font-weight:300}
 input[type=tel]:focus{outline:none;border-color:var(--red);box-shadow:0 0 0 3px var(--ring)}
-.err{margin:16px 0 0;padding:10px 12px;border-radius:var(--radius);border:1px solid color-mix(in srgb,var(--err) 40%,transparent);color:var(--err);font-size:14px}
-.fine{font-size:13px;font-weight:300;color:var(--muted);margin:20px 0 0}
-a{color:var(--orange);text-underline-offset:2px}
-footer{margin-top:20px;font-size:12px;font-weight:300;color:var(--muted)}
-footer a{color:var(--muted)}
 </style></head><body>
 <div class="brand">${VOBIZ_LOGO_SVG}</div>
 <main>
@@ -205,7 +196,7 @@ footer a{color:var(--muted)}
 <ul class="scope">
 <li>Read your calls, call records, numbers, SIP trunks, messages and balance</li>
 <li>Place calls, send messages or change settings only after you confirm each one</li>
-<li>Schedule reminder and wake-up calls that Vobiz places at the time you ask</li>
+<li>Schedule reminder and wake-up calls that Vobiz places at the time you ask, with your own audio if you add some</li>
 </ul>
 <form method="post" action="/oauth/login" autocomplete="off">
 <input type="hidden" name="txn" value="${esc(o.txn)}">
@@ -479,6 +470,12 @@ export function createHostedApp(o: HostedOptions): express.Express {
       excludeTools,
       ...(extra.scope === "assistant" ? { includeTools: ASSISTANT_TOOLS } : {}),
       ...(o.reminders ? { reminders: o.reminders } : {}),
+      ...(o.media
+        ? {
+            media: o.media,
+            mediaUploads: { url: (authId: string, name?: string) => mintUploadUrl(seal, base, authId, name), ...(o.mediaAvailable ? { available: o.mediaAvailable } : {}) },
+          }
+        : {}),
       profile,
     });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
@@ -497,6 +494,8 @@ export function createHostedApp(o: HostedOptions): express.Express {
 
   // Reminder-call job delivery and Vobiz callbacks (/jobs/fire, /r/:token/*), authenticated by sealed tokens.
   if (o.remindersRouter) app.use(o.remindersRouter);
+  // Audio library: the upload page and PUT (/upload/:token) and the <Play> source for Vobiz (/media/:token).
+  if (o.mediaRouter) app.use(o.mediaRouter);
 
   app.use((_req, res) => res.status(404).json({ error: "not_found" }));
   return app;
@@ -537,6 +536,9 @@ export async function runHosted(): Promise<void> {
   // Reminder calls: scheduled on this server (Cloud Tasks + Firestore when configured, else in-process memory).
   let reminders: ReminderService | undefined;
   let remindersRouter: express.Router | undefined;
+  let media: MediaService | undefined;
+  let mediaRouter: express.Router | undefined;
+  let mediaAvailable: (() => Promise<boolean>) | undefined;
   if (cfg.reminders.enabled) {
     const r = cfg.reminders;
     const backend = createReminderBackend(
@@ -553,7 +555,37 @@ export async function runHosted(): Promise<void> {
       { baseUrl },
     );
     const sealer = new Sealer(secret);
-    reminders = createReminderService({ store: backend.store, scheduler: backend.scheduler, sealer, baseUrl, cfg, log, limits: backend.limits });
+    // Audio library for reminder calls: Cloud Storage when VOBIZ_MEDIA_BUCKET is set, else local disk.
+    const m = cfg.media;
+    const mediaBackend = createMediaBackend(
+      {
+        ...(m.bucket ? { VOBIZ_MEDIA_BUCKET: m.bucket } : {}),
+        ...(m.dir ? { VOBIZ_MEDIA_DIR: m.dir } : {}),
+        VOBIZ_MEDIA_MAX_INPUT_MB: String(m.maxInputMb),
+        VOBIZ_MEDIA_MAX_DURATION_SEC: String(m.maxDurationSec),
+        VOBIZ_MEDIA_MAX_PER_ACCOUNT: String(m.maxPerAccount),
+        VOBIZ_MEDIA_MAX_UPLOADS_PER_DAY: String(m.maxUploadsPerDay),
+      },
+      log,
+    );
+    const library = createMediaService({ store: mediaBackend.store, processor: mediaBackend.processor, limits: mediaBackend.limits, log });
+    media = library;
+    mediaAvailable = () => mediaBackend.processor.available();
+    if (!(await mediaAvailable().catch(() => false))) {
+      log.info("media: WARNING ffmpeg/ffprobe not found; audio uploads and URL imports are refused until they are installed (set VOBIZ_FFMPEG / VOBIZ_FFPROBE or add them to PATH).");
+    }
+    mediaRouter = createMediaRouter(library, { baseUrl, sealer, log, links: cfg.links });
+    reminders = createReminderService({
+      store: backend.store,
+      scheduler: backend.scheduler,
+      sealer,
+      baseUrl,
+      cfg,
+      log,
+      limits: backend.limits,
+      mediaUrl: (account, audioId) => mintMediaUrl(sealer, baseUrl, account.authId, audioId),
+      mediaExists: async (authId, id) => (await library.find(authId, id))?.id === id,
+    });
     remindersRouter = createRemindersRouter(reminders, { baseUrl, signatureMode: cfg.webhookSignature === "off" ? "off" : "verify_if_present", sealer });
   }
   const app = createHostedApp({
@@ -563,6 +595,9 @@ export async function runHosted(): Promise<void> {
     secret,
     reminders,
     remindersRouter,
+    media,
+    mediaRouter,
+    mediaAvailable,
     cimdHosts: list(process.env.VOBIZ_CIMD_HOSTS),
     allowedOrigins: list(process.env.VOBIZ_ALLOWED_ORIGINS),
     excludeTools: process.env.VOBIZ_HOSTED_EXCLUDED_TOOLS === undefined ? undefined : (list(process.env.VOBIZ_HOSTED_EXCLUDED_TOOLS) ?? []),

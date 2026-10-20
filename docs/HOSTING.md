@@ -39,6 +39,8 @@ Without Docker: `npm ci && npm run build && VOBIZ_HOSTED_URL=… VOBIZ_HOSTED_SE
 | `GET`/`POST /answer` | Default answer XML for `make_call` |
 | `POST /jobs/fire` | Reminder-call job delivery from Cloud Tasks (body: sealed job token) |
 | `POST /r/:token/answer`, `/r/:token/input`, `/r/:token/hangup` | Vobiz callbacks for a reminder call (sealed per-call token) |
+| `GET`/`PUT /upload/:token` | Audio upload page, and the raw upload it sends (sealed one-time link, 15 minutes) |
+| `GET`/`HEAD /media/:token` | A library file as WAV, fetched by Vobiz for `<Play>` on a reminder call (sealed link, 2 hours) |
 | `GET /.well-known/openai-apps-challenge` | OpenAI Apps domain verification (`VOBIZ_OPENAI_APPS_CHALLENGE`; 404 when unset) |
 | `GET /health` | Liveness (`{"ok":true,"version":"…"}`) |
 
@@ -60,7 +62,7 @@ The consent page asks for the Auth ID and Auth Token, then one of three scopes:
 | Scope | Tools offered |
 |---|---|
 | **Full access** (default) | Every tool, reminder tools included. Writes still need the user's confirmation. |
-| **Personal assistant** | Only `schedule_reminder_call`, `list_reminder_calls`, `get_reminder_call`, `cancel_reminder_call`, `get_account_balance`, `list_phone_numbers` and `get_call_status`. Reminder calls always go to the user's own number. |
+| **Personal assistant** | Only `schedule_reminder_call`, `list_reminder_calls`, `get_reminder_call`, `cancel_reminder_call`, `get_account_balance`, `list_phone_numbers`, `get_call_status` and the audio library tools (`create_audio_upload_link`, `import_audio_from_url`, `list_audio`, `delete_audio`). Reminder calls always go to the user's own number. |
 | **Read-only** | Read-only tools only. |
 
 For full access and personal assistant the page also asks for **Call me on** (the user's number, E.164, required for personal assistant), **Call from** (optional caller ID on the account; blank = the first voice number) and **Timezone** (IANA, default `Asia/Kolkata`). They are sealed into the tokens with the credentials.
@@ -94,6 +96,32 @@ Reminders can be scheduled at most 30 days ahead (the Cloud Tasks limit).
 - The Cloud Run service account needs `roles/cloudtasks.enqueuer` and `roles/cloudtasks.taskDeleter` on the queue (or `roles/cloudtasks.admin` on the project) and `roles/datastore.user`.
 
 **Memory fallback.** Without the three Cloud Tasks variables, reminders are kept in memory and fired with timers. This is for local development and single-replica tests only: run exactly one replica, and expect every scheduled reminder to be lost on restart or scale-down. The connector logs a warning at startup in this mode.
+
+### Audio library
+
+Users can play their own audio (an alarm sound, a recorded message) at the start of a reminder call, before the spoken message. Files land in one private library per account, three ways:
+
+1. `create_audio_upload_link` returns a one-time link to `/upload/:token`. The page takes a file (pick or drop) or records from the microphone, up to 5 minutes.
+2. The same link accepts a direct `PUT` with the raw file and an `X-Audio-Name` header (or `?name=`). Claude's code sandbox and similar tools use this when the user attached the file in the chat.
+3. `import_audio_from_url` downloads a public https link (private and loopback hosts are refused, size-capped, at most 3 redirects).
+
+Every file is checked and converted with ffmpeg to 8 kHz mono 16-bit WAV, loudness-normalised, with leading silence trimmed. `schedule_reminder_call` takes the file's name as `audio`. When the call is answered, the connector hands Vobiz a fresh `/media/:token` link (valid 2 hours) for `<Play>`, so files are never public. A file deleted after scheduling is skipped: the call still speaks its message.
+
+**ffmpeg.** The Docker image includes `ffmpeg` and `ffprobe`. Elsewhere, install them on `PATH` or point `VOBIZ_FFMPEG` / `VOBIZ_FFPROBE` at the binaries. Without them the connector starts, logs a warning, and refuses uploads and imports with a clear message; reminder calls with `audio_url` keep working.
+
+**Storage.** Set `VOBIZ_MEDIA_BUCKET` to a private Google Cloud Storage bucket for production (every replica sees the same files). Grant the Cloud Run service account `roles/storage.objectAdmin` on the bucket, and keep public access prevention on. Files live under `accounts/<hash of the Auth ID>/`; no credentials are stored. Without a bucket, files go to local disk (`VOBIZ_MEDIA_DIR`), which suits a single replica or local development only.
+
+| Setting | Default | Purpose |
+|---|---|---|
+| `VOBIZ_MEDIA_BUCKET` | unset | Cloud Storage bucket for the library. Unset = local disk. |
+| `VOBIZ_MEDIA_DIR` | `<os tmpdir>/vobiz-mcp-media` | Local-disk directory when no bucket is set. |
+| `VOBIZ_MEDIA_MAX_INPUT_MB` | `15` | Largest accepted file, before conversion. |
+| `VOBIZ_MEDIA_MAX_DURATION_SEC` | `300` | Longest accepted audio. |
+| `VOBIZ_MEDIA_MAX_PER_ACCOUNT` | `50` | Files per account. |
+| `VOBIZ_MEDIA_MAX_UPLOADS_PER_DAY` | `20` | Uploads and imports per account per UTC day. |
+| `VOBIZ_FFMPEG`, `VOBIZ_FFPROBE` | from `PATH` | ffmpeg and ffprobe binaries. |
+
+The audio library is on whenever reminder calls are (`VOBIZ_REMINDERS`). Upload links are one-time within a replica; across replicas or a restart, a link is still bounded by its 15-minute lifetime.
 
 ## Scaling and operations
 

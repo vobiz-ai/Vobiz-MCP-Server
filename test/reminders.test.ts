@@ -17,6 +17,7 @@ import {
   formatLocalTime,
   type Reminder,
   type ReminderInput,
+  type ReminderServiceOptions,
   type ScheduledJob,
 } from "../src/reminders/index.js";
 import { answerScript, inactiveScript, menuText, noResponseText, snoozedScript } from "../src/reminders/script.js";
@@ -70,7 +71,7 @@ function input(over: Partial<ReminderInput> = {}): ReminderInput {
   };
 }
 
-function setup(o: { routes?: Route[]; env?: Record<string, string>; limits?: Record<string, number> } = {}) {
+function setup(o: { routes?: Route[]; env?: Record<string, string>; limits?: Record<string, number>; media?: Pick<ReminderServiceOptions, "mediaUrl" | "mediaExists"> } = {}) {
   let clock = T0.getTime();
   const fetch = mockFetch(o.routes ?? [ownNumberRoute, callOk]);
   const store = new MemoryStore();
@@ -85,6 +86,7 @@ function setup(o: { routes?: Route[]; env?: Record<string, string>; limits?: Rec
     fetchImpl: fetch.impl,
     limits: o.limits,
     now: () => new Date(clock),
+    ...o.media,
   });
   const advance = (ms: number) => (clock += ms);
   const posts = () => fetch.calls.filter((c) => c.method === "POST");
@@ -749,5 +751,79 @@ describe("createReminderBackend", () => {
     expect((gcp.scheduler as CloudTasksScheduler).parent).toBe("projects/p1/locations/asia-south1/queues/reminders");
     expect(() => createReminderBackend({ ...env, VOBIZ_PUBLIC_URL: "" }, log)).toThrow("VOBIZ_PUBLIC_URL");
     expect(() => createReminderBackend({ VOBIZ_MAX_REMINDER_CALLS_PER_DAY: "0" }, log)).toThrow();
+  });
+});
+
+// ── audio library (audioId) ─────────────────────────────────────
+
+describe("ReminderService with the audio library", () => {
+  const library = new Map([[AUTH_ID, new Set(["a_alarm0000000000"])]]);
+  const media = (): Pick<ReminderServiceOptions, "mediaUrl" | "mediaExists"> & { minted: string[] } => {
+    const minted: string[] = [];
+    return {
+      minted,
+      mediaUrl: (account, id) => {
+        minted.push(`${account.authId}/${id}`);
+        return `${PUBLIC}/media/${sealer.seal("med", { authId: account.authId, id }, 7200)}.wav`;
+      },
+      mediaExists: async (authId, id) => library.get(authId)?.has(id) ?? false,
+    };
+  };
+
+  it("plays a fresh /media URL for audioId, and audioId wins over audioUrl", async () => {
+    const m = media();
+    const t = setup({ media: m });
+    const r = await t.service.schedule(ACCOUNT, input({ audioId: "a_alarm0000000000", audioUrl: "https://cdn.example.com/other.mp3" }));
+    expect(r.audioId).toBe("a_alarm0000000000");
+    expect(JSON.stringify(await t.store.list(AUTH_ID))).not.toContain("vbzm_");
+    const { ans } = await t.fireLast();
+    const xml = (await t.service.answerXml(ans))!;
+    const play = /<Play>([^<]+)<\/Play>/.exec(xml)![1]!;
+    expect(play.startsWith(`${PUBLIC}/media/vbzm_`)).toBe(true);
+    expect(xml).not.toContain("other.mp3");
+    expect(sealer.open("med", play.slice(`${PUBLIC}/media/`.length, -".wav".length))).toMatchObject({ authId: AUTH_ID, id: "a_alarm0000000000" });
+    expect(m.minted).toEqual([`${AUTH_ID}/a_alarm0000000000`]);
+    expect(xml.indexOf("<Play>")).toBeLessThan(xml.indexOf("<Gather"));
+  });
+
+  it("refuses an audioId that is not in the account's library, or when there is no library", async () => {
+    const t = setup({ media: media() });
+    await expect(t.service.schedule(ACCOUNT, input({ audioId: "a_missing" }))).rejects.toMatchObject({ kind: "not_found" });
+    await expect(t.service.schedule({ ...ACCOUNT, authId: "MA_OTHER1" }, input({ audioId: "a_alarm0000000000" }))).rejects.toMatchObject({ kind: "not_found" });
+    await expect(t.service.schedule(ACCOUNT, input({ audioId: "../etc/passwd" }))).rejects.toMatchObject({ kind: "invalid_input" });
+    expect(t.scheduler.jobs).toEqual([]);
+    const bare = setup();
+    await expect(bare.service.schedule(ACCOUNT, input({ audioId: "a_alarm0000000000" }))).rejects.toMatchObject({ kind: "invalid_input", message: expect.stringContaining("no audio library") });
+  });
+
+  it("plays only the message when the file was deleted after scheduling or the library is down", async () => {
+    let state: "ok" | "gone" | "down" = "ok";
+    const m = media();
+    const t = setup({
+      media: {
+        mediaUrl: m.mediaUrl,
+        mediaExists: async (authId, id) => {
+          if (state === "down") throw new Error("storage down");
+          return state === "ok" && (library.get(authId)?.has(id) ?? false);
+        },
+      },
+    });
+    await t.service.schedule(ACCOUNT, input({ audioId: "a_alarm0000000000" }));
+    const { ans } = await t.fireLast();
+    state = "gone";
+    const gone = (await t.service.answerXml(ans))!;
+    expect(gone).not.toContain("<Play>");
+    expect(gone).toContain("Take your medicine");
+    state = "down";
+    expect(await t.service.answerXml(ans)).not.toContain("<Play>");
+    state = "ok";
+    expect(await t.service.answerXml(ans)).toContain("<Play>");
+  });
+
+  it("keeps playing audioUrl when no audioId is set", async () => {
+    const t = setup({ media: media() });
+    await t.service.schedule(ACCOUNT, input({ audioUrl: "https://cdn.example.com/alarm.mp3" }));
+    const { ans } = await t.fireLast();
+    expect(await t.service.answerXml(ans)).toContain("<Play>https://cdn.example.com/alarm.mp3</Play>");
   });
 });

@@ -19,7 +19,7 @@ export function accountHash(authId: string): string {
 const FIELDS: (keyof Reminder)[] = [
   "id", "authId", "clientId", "status", "createdAt", "updatedAt", "nextAt", "attempts", "idempotencyKey",
   "kind", "message", "at", "timezone", "to", "from", "language", "voice", "snoozeMinutes", "maxAttempts",
-  "retryMinutes", "audioUrl",
+  "retryMinutes", "audioUrl", "audioId",
 ];
 
 function clean(r: Partial<Reminder> & Record<string, unknown>): Reminder {

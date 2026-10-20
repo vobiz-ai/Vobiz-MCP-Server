@@ -318,3 +318,30 @@ describe("reminder-call configuration", () => {
     expect(() => loadConfig({ VOBIZ_MAX_ACTIVE_REMINDERS: "0" })).toThrow(/VOBIZ_MAX_ACTIVE_REMINDERS/);
   });
 });
+
+describe("audio library configuration", () => {
+  it("defaults to local disk with the brief limits", () => {
+    expect(loadConfig({}).media).toEqual({ bucket: undefined, dir: undefined, maxInputMb: 15, maxDurationSec: 300, maxPerAccount: 50, maxUploadsPerDay: 20 });
+  });
+
+  it("parses the bucket, directory and limits", () => {
+    const c = loadConfig({
+      VOBIZ_MEDIA_BUCKET: "vobiz-mcp-media",
+      VOBIZ_MEDIA_DIR: "/var/lib/vobiz-media",
+      VOBIZ_MEDIA_MAX_INPUT_MB: "8",
+      VOBIZ_MEDIA_MAX_DURATION_SEC: "120",
+      VOBIZ_MEDIA_MAX_PER_ACCOUNT: "10",
+      VOBIZ_MEDIA_MAX_UPLOADS_PER_DAY: "5",
+    });
+    expect(c.media).toEqual({ bucket: "vobiz-mcp-media", dir: "/var/lib/vobiz-media", maxInputMb: 8, maxDurationSec: 120, maxPerAccount: 10, maxUploadsPerDay: 5 });
+  });
+
+  it("rejects malformed values", () => {
+    expect(() => loadConfig({ VOBIZ_MEDIA_BUCKET: "gs://My Bucket" })).toThrow(/VOBIZ_MEDIA_BUCKET/);
+    expect(() => loadConfig({ VOBIZ_MEDIA_MAX_INPUT_MB: "0" })).toThrow(/VOBIZ_MEDIA_MAX_INPUT_MB/);
+    expect(() => loadConfig({ VOBIZ_MEDIA_MAX_INPUT_MB: "2.5" })).toThrow(/VOBIZ_MEDIA_MAX_INPUT_MB/);
+    expect(() => loadConfig({ VOBIZ_MEDIA_MAX_DURATION_SEC: "99999" })).toThrow(/VOBIZ_MEDIA_MAX_DURATION_SEC/);
+    expect(() => loadConfig({ VOBIZ_MEDIA_MAX_PER_ACCOUNT: "-1" })).toThrow(/VOBIZ_MEDIA_MAX_PER_ACCOUNT/);
+    expect(() => loadConfig({ VOBIZ_MEDIA_MAX_UPLOADS_PER_DAY: "many" })).toThrow(/VOBIZ_MEDIA_MAX_UPLOADS_PER_DAY/);
+  });
+});

@@ -8,6 +8,8 @@ import type { Attempt, AttemptOutcome, Reminder, ReminderAccount, ReminderServic
 import { DEFAULT_TIME_ZONE, formatLocal, parseWhen } from "../tz.js";
 import { handler, idempotencyKey, listField, ok, phoneNumber, toE164 } from "../util.js";
 import { SPEAK_LANGS } from "../xml.js";
+import type { AudioMeta } from "../media/types.js";
+import { audioRef, registerAudioTools } from "./audio.js";
 import { assertCallerIdOwned } from "./calls.js";
 
 /** Errors from the store or scheduler (not VobizError) are logged by message only before they become internal_error. */
@@ -130,6 +132,9 @@ export function registerReminderTools(server: McpServer, ctx: ToolContext): void
         "The server places the call itself at that time, speaks the message, and lets the user press 1 to snooze, 2 to confirm, 9 to stop; it retries when there is no answer. " +
         "Confirm the time (in the user's timezone), the message and the number with the user, then pass confirm: true. " +
         "Call it ONCE per reminder: nothing has to stay open or be polled afterwards. `at` is ISO 8601 with an offset (2026-10-21T06:00:00+05:30), a local time without an offset (read in the timezone chosen at sign-in), or \"now\". " +
+        (ctx.media
+          ? "To play the user's own audio first, pass `audio` (a name from list_audio; add files with create_audio_upload_link or import_audio_from_url) or a public `audio_url`. "
+          : "") +
         `\`to\` defaults to the user's own number from sign-in; \`from\` defaults to the caller ID chosen at sign-in, else the first voice number on the account. At most ${svc.limits.maxDaysAhead} days ahead.`,
       inputSchema: {
         at: z.string().trim().min(3).max(40).describe("When to call: ISO 8601 with offset, local ISO time without offset (sign-in timezone), or \"now\"."),
@@ -144,7 +149,10 @@ export function registerReminderTools(server: McpServer, ctx: ToolContext): void
           .url()
           .max(2048)
           .optional()
-          .describe("Optional public https link to an MP3 or WAV file played at the start of the call, before the spoken message (for example the user's own recording or alarm sound)."),
+          .describe("Optional public https link to an MP3 or WAV file played at the start of the call, before the spoken message (for example the user's own recording or alarm sound). Not together with audio."),
+        audio: audioRef
+          .optional()
+          .describe("Optional audio from this account's library (its name or id, see list_audio) played at the start of the call, before the spoken message. Not together with audio_url."),
         snooze_minutes: z.number().int().min(1).max(60).optional().describe("Pressing 1 calls again after this many minutes (default 10)."),
         max_attempts: z.number().int().min(1).max(5).optional().describe("Total call attempts including retries (default 3)."),
         retry_minutes: z.number().int().min(1).max(30).optional().describe("Minutes between retries after no answer, busy or voicemail (default 5)."),
@@ -189,7 +197,18 @@ export function registerReminderTools(server: McpServer, ctx: ToolContext): void
       }
       assertDestinationAllowed(cfg, to);
 
-      const intro = `${args.kind === "wake_up" ? "Wake-up" : "Reminder"} call to ${to} at ${formatLocal(when, tz)}: "${args.message}"`;
+      let audio: AudioMeta | undefined;
+      if (args.audio !== undefined) {
+        if (args.audio_url) throw new VobizError("invalid_input", "Pass either audio (from the audio library) or audio_url, not both.");
+        if (!ctx.media) throw new VobizError("invalid_input", "This server has no audio library. Pass audio_url with a public https MP3 or WAV link instead.");
+        audio = await logged(ctx, "find audio", ctx.media.find(account(ctx).authId, args.audio));
+        if (!audio) {
+          throw new VobizError("not_found", `No audio named "${args.audio}" in this account's library. Use list_audio to see the saved files, or create_audio_upload_link to add one.`);
+        }
+      }
+
+      const withAudio = audio ? ` (starting with the audio "${audio.name}")` : "";
+      const intro = `${args.kind === "wake_up" ? "Wake-up" : "Reminder"} call to ${to} at ${formatLocal(when, tz)}${withAudio}: "${args.message}"`;
       if (args.confirm !== true) {
         throw new VobizError("confirmation_required", `Ask the user to confirm this ${intro}, then call schedule_reminder_call again with confirm: true.`);
       }
@@ -218,6 +237,7 @@ export function registerReminderTools(server: McpServer, ctx: ToolContext): void
           language: args.language ?? "en-US",
           voice: args.voice ?? "WOMAN",
           ...(args.audio_url ? { audioUrl: args.audio_url } : {}),
+          ...(audio ? { audioId: audio.id } : {}),
           snoozeMinutes: args.snooze_minutes ?? 10,
           maxAttempts: args.max_attempts ?? 3,
           retryMinutes: args.retry_minutes ?? 5,
@@ -236,6 +256,7 @@ export function registerReminderTools(server: McpServer, ctx: ToolContext): void
         message: r.message,
         snooze_minutes: r.snoozeMinutes,
         max_attempts: r.maxAttempts,
+        ...(audio ? { audio: { id: audio.id, name: audio.name, duration_sec: audio.durationSec } } : {}),
         note: `Scheduled. Vobiz will call ${r.to} at ${formatLocal(r.at, r.timezone)} by itself; nothing else needs to run. The user can press 1 to snooze ${r.snoozeMinutes} minutes, 2 to confirm, 9 to stop. Use cancel_reminder_call with this reminder_id to cancel it.`,
       });
     }),
@@ -304,4 +325,7 @@ export function registerReminderTools(server: McpServer, ctx: ToolContext): void
       return ok({ ok: true, ...summary(r), cancelled: r.status === "cancelled", note: r.status === "cancelled" ? "Cancelled. No further calls will be placed for this reminder." : `Reminder is ${r.status}.` });
     }),
   );
+
+  // Audio library tools (same toolset): only when the hosted connector provides a MediaService.
+  registerAudioTools(server, ctx);
 }

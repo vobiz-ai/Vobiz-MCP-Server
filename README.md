@@ -19,7 +19,7 @@ It also ships the **Vobiz Agent Skills**, so the model knows how each Vobiz prod
 
 | | |
 |---|---|
-| **Tools** | 110 in 13 toolsets: calls, in-call control, conferences, audio streams, IVR/XML, records, numbers, SIP trunks and endpoints, applications, sub-accounts, billing, SMS/MMS/RCS, opt-outs, skills, and reminder calls (hosted connector) |
+| **Tools** | 114 in 13 toolsets: calls, in-call control, conferences, audio streams, IVR/XML, records, numbers, SIP trunks and endpoints, applications, sub-accounts, billing, SMS/MMS/RCS, opt-outs, skills, and reminder calls with your own audio (hosted connector) |
 | **Prompts** | 15: one per Vobiz skill, e.g. `vobiz-voice-xml`, `vobiz-sip-trunking` |
 | **Resources** | `vobiz://skills/index` and `vobiz://skills/{name}` (with completion) |
 | **Transports** | stdio (`npx`), Streamable HTTP for one account, hosted multi-tenant Streamable HTTP with OAuth 2.1 |
@@ -32,6 +32,16 @@ It also ships the **Vobiz Agent Skills**, so the model knows how each Vobiz prod
 On the hosted connector (`https://mcp.vobiz.ai/mcp`) you can say *"wake me up at 6 tomorrow"* or *"call me at 3 to remind me about the dentist"*. The client calls `schedule_reminder_call` once and the server does the rest: it places the call at that time from your Vobiz number, speaks the message, and lets you press **1** to snooze, **2** to confirm or **9** to stop. It retries when nobody answers. Nothing depends on the chat staying open.
 
 At sign-in you choose **Full access**, **Personal assistant** (only reminder calls to your own number, plus your balance, numbers and call status) or **Read-only**, and enter your own number, an optional caller ID and your timezone. Manage reminders with `list_reminder_calls`, `get_reminder_call` and `cancel_reminder_call`. Operators: see [docs/HOSTING.md](docs/HOSTING.md#reminder-calls).
+
+#### Your own audio on a reminder call
+
+Say *"use this MP3 as my alarm"* or *"let me record the message"*. Your audio plays at the start of the call, before the spoken message. There are three ways to add it to your private audio library:
+
+- **Upload page.** `create_audio_upload_link` gives you a one-time link (valid 15 minutes). Open it to pick or drop a file, or press **Record** to record from your microphone (up to 5 minutes), then name it.
+- **Straight from the chat.** If you attached the file and your assistant can run code, it uploads the file to the same link itself.
+- **A public link.** Paste an https link and the assistant saves it with `import_audio_from_url`.
+
+Then say *"use the audio Morning alarm"* and the assistant passes that name as `audio` to `schedule_reminder_call`. MP3, WAV, M4A, OGG, WEBM, AAC and FLAC work, up to 15 MB and 5 minutes each. See your files with `list_audio` and remove one with `delete_audio`. Operators: see [docs/HOSTING.md](docs/HOSTING.md#audio-library).
 
 ## Contents
 
@@ -171,10 +181,10 @@ Every tool has a `title`, input validation, and annotations: `readOnlyHint: true
 | `sip` | `list_sip_endpoints`, `get_sip_endpoint`, `list_trunk_credentials`, `list_ip_acl_entries`, `list_origination_uris` | `create_sip_endpoint`, `update_sip_endpoint`, `delete_sip_endpoint`, `create_trunk_credential`, `update_trunk_credential`, `delete_trunk_credential`, `add_ip_acl_entry`, `update_ip_acl_entry`, `delete_ip_acl_entry`, `create_origination_uri`, `update_origination_uri`, `delete_origination_uri` |
 | `subaccounts` | `list_sub_accounts`, `get_sub_account`, `get_sub_account_kyc_status` | `create_sub_account`, `update_sub_account`, `delete_sub_account`, `create_sub_account_kyc_session` |
 | `messaging` | `list_messaging_numbers`, `preview_message_cost`, `list_messages`, `get_message`, `list_conversations`, `get_conversation_messages`, `list_broadcasts`, `get_broadcast`, `check_opt_out`, `list_opt_outs` | `send_message`, `add_opt_out`, `remove_opt_out` |
-| `reminders` (hosted only) | `list_reminder_calls`, `get_reminder_call` | `schedule_reminder_call`, `cancel_reminder_call` |
+| `reminders` (hosted only) | `list_reminder_calls`, `get_reminder_call`, `list_audio` | `schedule_reminder_call`, `cancel_reminder_call`, `create_audio_upload_link`, `import_audio_from_url`, `delete_audio` |
 | `skills` | `list_vobiz_skills`, `get_vobiz_skill` | |
 
-**Choosing tools.** 110 tools is a lot for some clients. Load only what you need:
+**Choosing tools.** 114 tools is a lot for some clients. Load only what you need:
 
 - `VOBIZ_TOOLSETS=calls,call_control,records,skills` registers just those groups.
 - `VOBIZ_READ_ONLY=true` keeps only the read-only tools.
