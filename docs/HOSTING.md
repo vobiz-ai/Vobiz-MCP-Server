@@ -40,7 +40,7 @@ Without Docker: `npm ci && npm run build && VOBIZ_HOSTED_URL=… VOBIZ_HOSTED_SE
 | `POST /jobs/fire` | Reminder-call job delivery from Cloud Tasks (body: sealed job token) |
 | `POST /r/:token/answer`, `/r/:token/input`, `/r/:token/hangup` | Vobiz callbacks for a reminder call (sealed per-call token) |
 | `GET`/`PUT /upload/:token` | Audio upload page, and the raw upload it sends (sealed one-time link, 15 minutes) |
-| `GET`/`HEAD /media/:token` | A library file as WAV, fetched by Vobiz for `<Play>` on a reminder call (sealed link, 2 hours) |
+| `GET`/`HEAD /media/:token` | A library file as WAV, fetched by Vobiz for `<Play>` on a reminder call (sealed link, 20 minutes) |
 | `GET /.well-known/openai-apps-challenge` | OpenAI Apps domain verification (`VOBIZ_OPENAI_APPS_CHALLENGE`; 404 when unset) |
 | `GET /health` | Liveness (`{"ok":true,"version":"…"}`) |
 
@@ -101,13 +101,15 @@ Reminders can be scheduled at most 30 days ahead (the Cloud Tasks limit).
 
 Users can play their own audio (an alarm sound, a recorded message) at the start of a reminder call, before the spoken message. Files land in one private library per account, three ways:
 
-1. `create_audio_upload_link` returns a one-time link to `/upload/:token`. The page takes a file (pick or drop) or records from the microphone, up to 5 minutes.
+1. `create_audio_upload_link` returns a one-time link to `/upload/:token`. The page takes a file (pick or drop) or records from the microphone, up to 5 minutes. A link is good for one attempt: a failed upload uses it up.
 2. The same link accepts a direct `PUT` with the raw file and an `X-Audio-Name` header (or `?name=`). Claude's code sandbox and similar tools use this when the user attached the file in the chat.
-3. `import_audio_from_url` downloads a public https link (private and loopback hosts are refused, size-capped, at most 3 redirects).
+3. `import_audio_from_url` downloads a public https link: https on port 443 or 8443 only, size-capped, at most 3 redirects. On every hop the server resolves the host name and refuses it when any address is private, loopback, link-local, reserved or a cloud metadata address, then connects to exactly the address it checked (no DNS rebinding). Every network or upstream failure answers the same generic message.
 
-Every file is checked and converted with ffmpeg to 8 kHz mono 16-bit WAV, loudness-normalised, with leading silence trimmed. `schedule_reminder_call` takes the file's name as `audio`. When the call is answered, the connector hands Vobiz a fresh `/media/:token` link (valid 2 hours) for `<Play>`, so files are never public. A file deleted after scheduling is skipped: the call still speaks its message.
+Every file is checked and converted with ffmpeg to 8 kHz mono 16-bit WAV, loudness-normalised, with leading silence trimmed. `schedule_reminder_call` takes the file's name as `audio`. When the call is answered, the connector hands Vobiz a fresh `/media/:token` link (valid 20 minutes) for `<Play>`, so files are never public. A file deleted after scheduling is skipped: the call still speaks its message.
 
 **ffmpeg.** The Docker image includes `ffmpeg` and `ffprobe`. Elsewhere, install them on `PATH` or point `VOBIZ_FFMPEG` / `VOBIZ_FFPROBE` at the binaries. Without them the connector starts, logs a warning, and refuses uploads and imports with a clear message; reminder calls with `audio_url` keep working.
+
+**Conversion sandbox.** The server recognises the container from the file's first bytes (MP3, WAV, M4A/MP4, OGG, WebM/Matroska, AAC, FLAC) and refuses anything else before ffmpeg starts. ffprobe and ffmpeg run with an explicit input format, `-protocol_whitelist file,pipe`, one thread, a 25-second limit and only `PATH` in their environment, so no secret reaches them. A file whose probed duration is over the limit is refused before decoding. At most `VOBIZ_AUDIO_MAX_CONCURRENT` conversions run at once per instance; a request that waits more than 10 seconds for a slot gets `rate_limited` (HTTP 429).
 
 **Storage.** Set `VOBIZ_MEDIA_BUCKET` to a private Google Cloud Storage bucket for production (every replica sees the same files). Grant the Cloud Run service account `roles/storage.objectAdmin` on the bucket, and keep public access prevention on. Files live under `accounts/<hash of the Auth ID>/`; no credentials are stored. Without a bucket, files go to local disk (`VOBIZ_MEDIA_DIR`), which suits a single replica or local development only.
 
@@ -118,10 +120,13 @@ Every file is checked and converted with ffmpeg to 8 kHz mono 16-bit WAV, loudne
 | `VOBIZ_MEDIA_MAX_INPUT_MB` | `15` | Largest accepted file, before conversion. |
 | `VOBIZ_MEDIA_MAX_DURATION_SEC` | `300` | Longest accepted audio. |
 | `VOBIZ_MEDIA_MAX_PER_ACCOUNT` | `50` | Files per account. |
-| `VOBIZ_MEDIA_MAX_UPLOADS_PER_DAY` | `20` | Uploads and imports per account per UTC day. |
+| `VOBIZ_MEDIA_MAX_UPLOADS_PER_DAY` | `20` | Upload and import attempts per account per UTC day. Failed attempts count, and deleting files does not reset it. |
+| `VOBIZ_AUDIO_MAX_CONCURRENT` | `2` | Conversions running at once per instance (1 to 16). |
 | `VOBIZ_FFMPEG`, `VOBIZ_FFPROBE` | from `PATH` | ffmpeg and ffprobe binaries. |
 
 The audio library is on whenever reminder calls are (`VOBIZ_REMINDERS`). Upload links are one-time within a replica; across replicas or a restart, a link is still bounded by its 15-minute lifetime.
+
+**Caps across replicas.** The daily counter is stored next to the library (`counters/<hash>.json`; on Cloud Storage it is updated with a generation precondition), so it holds across replicas and restarts. The total-files cap counts the stored files. The one-conversion-per-account lock is in memory, so it holds per instance: with several replicas an account can convert one file per replica at a time.
 
 ## Scaling and operations
 
