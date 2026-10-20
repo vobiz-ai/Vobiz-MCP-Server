@@ -110,9 +110,12 @@ describe("reminder scripts", () => {
       .toMatchInlineSnapshot(`
       "<?xml version="1.0" encoding="UTF-8"?>
       <Response>
-          <Play>https://cdn.example.com/a.mp3?x=1&amp;y=2</Play>
-          <Gather action="https://mcp.example.test/r/vbzn_abc/input" method="POST" inputType="dtmf" numDigits="1" finishOnKey="none" executionTimeout="10">
+          <Gather action="https://mcp.example.test/r/vbzn_abc/input" method="POST" inputType="dtmf" numDigits="1" finishOnKey="none" executionTimeout="8">
+              <Play>https://cdn.example.com/a.mp3?x=1&amp;y=2</Play>
               <Speak language="en-IN" voice="MAN">Good morning! This is your Vobiz wake-up call. Gym &lt;Dial&gt;+1900&lt;/Dial&gt; &amp; &quot;eat&quot; Press 1 to snooze for 1 minute, 2 to confirm, 9 to stop these calls.</Speak>
+          </Gather>
+          <Gather action="https://mcp.example.test/r/vbzn_abc/input" method="POST" inputType="dtmf" numDigits="1" finishOnKey="none" executionTimeout="8">
+              <Speak language="en-IN" voice="MAN">Press 1 to snooze, 2 to confirm, or 9 to stop.</Speak>
           </Gather>
           <Speak language="en-IN" voice="MAN">No response. I will call again in 5 minutes. Goodbye.</Speak>
       </Response>
@@ -783,7 +786,8 @@ describe("ReminderService with the audio library", () => {
     expect(xml).not.toContain("other.mp3");
     expect(sealer.open("med", play.slice(`${PUBLIC}/media/`.length, -".wav".length))).toMatchObject({ authId: AUTH_ID, id: "a_alarm0000000000" });
     expect(m.minted).toEqual([`${AUTH_ID}/a_alarm0000000000`]);
-    expect(xml.indexOf("<Play>")).toBeLessThan(xml.indexOf("<Gather"));
+    expect(xml.indexOf("<Play>")).toBeGreaterThan(xml.indexOf("<Gather")); // the audio plays inside the first Gather
+    expect(xml.indexOf("<Play>")).toBeLessThan(xml.indexOf("<Speak"));
   });
 
   it("refuses an audioId that is not in the account's library, or when there is no library", async () => {

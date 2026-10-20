@@ -500,7 +500,9 @@ export function createReminderService(opts: ReminderServiceOptions): ReminderSer
     if (!r || !att || att.n !== a.n || att.endedAt) return; // unknown, or this attempt was already recorded
     const n = a.n;
 
-    const cause = String(params.HangupCauseName || params.HangupCause || "").slice(0, 64);
+    // HangupCause carries the Q.850 name the classifier knows (NORMAL_CLEARING, USER_BUSY…); HangupCauseName is Vobiz's
+    // display text ("Normal Hangup"), used only when the name is missing.
+    const cause = String(params.HangupCause || params.HangupCauseName || "").slice(0, 64);
     const bill = Number(params.BillDuration);
     const billsec = params.BillDuration !== undefined && params.BillDuration !== "" && Number.isFinite(bill) ? bill : undefined;
     const machine =

@@ -40,29 +40,41 @@ function speak(r: Pick<ScriptReminder, "language" | "voice">, text: string): str
   return `<Speak language="${escapeXml(r.language)}" voice="${escapeXml(r.voice)}">${escapeXml(text)}</Speak>`;
 }
 
-function gather(r: ScriptReminder, actionUrl: string, text: string): string[] {
+/** Short menu for the second listening window. */
+export function shortMenuText(): string {
+  return "Press 1 to snooze, 2 to confirm, or 9 to stop.";
+}
+
+/**
+ * A Gather around the given prompts. Key presses count during the prompts and for `timeoutSec` of silence after them.
+ * finishOnKey must be a digit, *, # or "none": the media server rejects an empty string (hangup 8011 Invalid Answer XML).
+ */
+function gather(actionUrl: string, prompts: string[], timeoutSec: number): string[] {
   return [
-    // finishOnKey must be a digit, *, # or "none": the media server rejects an empty string (hangup 8011 Invalid Answer XML).
-    `<Gather action="${escapeXml(actionUrl)}" method="POST" inputType="dtmf" numDigits="1" finishOnKey="none" executionTimeout="10">`,
-    `    ${speak(r, text)}`,
+    `<Gather action="${escapeXml(actionUrl)}" method="POST" inputType="dtmf" numDigits="1" finishOnKey="none" executionTimeout="${timeoutSec}">`,
+    ...prompts.map((p) => `    ${p}`),
     `</Gather>`,
   ];
 }
 
-/** The answered call: optional audio, intro + message + menu inside a Gather, then the no-response line. */
+/**
+ * The answered call. The optional audio sits INSIDE the first Gather so a key pressed while it plays still counts; a
+ * second, short Gather gives a quiet window in case presses during playback were missed; then the no-response line.
+ */
 export function answerScript(r: ScriptReminder, o: { actionUrl: string; retryInMinutes: number | null }): string {
   const text = `${INTROS[r.kind]} ${r.message.trim()} ${menuText(r.snoozeMinutes)}`;
   return doc([
-    ...(r.audioUrl ? [`<Play>${escapeXml(r.audioUrl)}</Play>`] : []),
-    ...gather(r, o.actionUrl, text),
+    ...gather(o.actionUrl, [...(r.audioUrl ? [`<Play>${escapeXml(r.audioUrl)}</Play>`] : []), speak(r, text)], 8),
+    ...gather(o.actionUrl, [speak(r, shortMenuText())], 8),
     speak(r, noResponseText(o.retryInMinutes)),
   ]);
 }
 
-/** After an invalid key: repeat the message and menu once. */
+/** After an invalid key: repeat the message and menu once, with the same second window. */
 export function repromptScript(r: ScriptReminder, o: { actionUrl: string; retryInMinutes: number | null }): string {
   return doc([
-    ...gather(r, o.actionUrl, `Sorry, that is not an option. ${r.message.trim()} ${menuText(r.snoozeMinutes)}`),
+    ...gather(o.actionUrl, [speak(r, `Sorry, that is not an option. ${r.message.trim()} ${menuText(r.snoozeMinutes)}`)], 8),
+    ...gather(o.actionUrl, [speak(r, shortMenuText())], 8),
     speak(r, noResponseText(o.retryInMinutes)),
   ]);
 }
