@@ -1,6 +1,6 @@
 {
   "name": "vobiz",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "Vobiz calls, conferences, IVRs, call records, numbers, SIP trunks, sub-accounts, billing and SMS/MMS/RCS, plus the Vobiz Agent Skills.",
   "contextFileName": "GEMINI.md",
   "mcpServers": {
@@ -8,7 +8,7 @@
       "command": "npx",
       "args": [
         "-y",
-        "@vobiz/mcp@1.4.0"
+        "@vobiz/mcp@1.4.1"
       ],
       "env": {
         "VOBIZ_AUTH_ID": "$VOBIZ_AUTH_ID",
