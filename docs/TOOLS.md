@@ -391,7 +391,7 @@ Return one SIP trunk's configuration (domain, status, direction, limits, transpo
 
 ## generate_answer_xml
 
-Build a validated Vobiz XML document from a list of actions: speak, play, wait, gather (DTMF/speech), record, dial (number or sip_uri), redirect, hangup. Text is XML-escaped; callback/redirect URLs must be on approved hosts; actions after redirect/hangup are rejected. With host: true (HTTP mode) the server also serves it and returns a URL usable as make_call answer_url or transfer_call aleg_url. Pure generation otherwise (no API call).
+Build a validated Vobiz XML document from a list of actions: speak, play, wait, gather (DTMF/speech), record, dial (number or sip_uri), redirect, hangup. Text is XML-escaped; callback/redirect URLs must be on approved hosts; dial numbers must pass the server's destination policy (countries, blocked prefixes, allowlist); actions after redirect/hangup are rejected. With host: true (HTTP mode) the server also serves it and returns a URL usable as make_call answer_url or transfer_call aleg_url. Pure generation otherwise (no API call).
 
 | Input | Type | Required | Notes |
 |---|---|---|---|
