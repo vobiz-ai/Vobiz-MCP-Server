@@ -32,6 +32,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { ConfigError, loadConfig, type Config } from "./config.js";
 import type { ConnectionProfile, SharedState } from "./context.js";
 import type { ReminderService } from "./reminders/types.js";
+import { createReminderBackend, createReminderService, createRemindersRouter } from "./reminders/index.js";
 import { createLogger, type Logger } from "./logger.js";
 import { createServer, createSharedState } from "./server.js";
 import { SERVER_VERSION } from "./version.js";
@@ -533,11 +534,35 @@ export async function runHosted(): Promise<void> {
     }
     return v;
   };
+  // Reminder calls: scheduled on this server (Cloud Tasks + Firestore when configured, else in-process memory).
+  let reminders: ReminderService | undefined;
+  let remindersRouter: express.Router | undefined;
+  if (cfg.reminders.enabled) {
+    const r = cfg.reminders;
+    const backend = createReminderBackend(
+      {
+        VOBIZ_GCP_PROJECT: r.gcpProject,
+        VOBIZ_TASKS_LOCATION: r.tasksLocation,
+        VOBIZ_TASKS_QUEUE: r.tasksQueue,
+        VOBIZ_FIRESTORE_DATABASE: r.firestoreDatabase,
+        VOBIZ_FIRESTORE_COLLECTION: r.firestoreCollection,
+        VOBIZ_MAX_ACTIVE_REMINDERS: String(r.maxActive),
+        VOBIZ_MAX_REMINDER_CALLS_PER_DAY: String(r.maxCallsPerDay),
+      },
+      log,
+      { baseUrl },
+    );
+    const sealer = new Sealer(secret);
+    reminders = createReminderService({ store: backend.store, scheduler: backend.scheduler, sealer, baseUrl, cfg, log, limits: backend.limits });
+    remindersRouter = createRemindersRouter(reminders, { baseUrl, signatureMode: cfg.webhookSignature === "off" ? "off" : "verify_if_present", sealer });
+  }
   const app = createHostedApp({
     cfg,
     log,
     baseUrl,
     secret,
+    reminders,
+    remindersRouter,
     cimdHosts: list(process.env.VOBIZ_CIMD_HOSTS),
     allowedOrigins: list(process.env.VOBIZ_ALLOWED_ORIGINS),
     excludeTools: process.env.VOBIZ_HOSTED_EXCLUDED_TOOLS === undefined ? undefined : (list(process.env.VOBIZ_HOSTED_EXCLUDED_TOOLS) ?? []),
