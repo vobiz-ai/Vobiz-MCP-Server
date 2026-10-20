@@ -109,7 +109,7 @@ describe("reminder scripts", () => {
       "<?xml version="1.0" encoding="UTF-8"?>
       <Response>
           <Play>https://cdn.example.com/a.mp3?x=1&amp;y=2</Play>
-          <Gather action="https://mcp.example.test/r/vbzn_abc/input" method="POST" inputType="dtmf" numDigits="1" finishOnKey="" executionTimeout="10">
+          <Gather action="https://mcp.example.test/r/vbzn_abc/input" method="POST" inputType="dtmf" numDigits="1" finishOnKey="none" executionTimeout="10">
               <Speak language="en-IN" voice="MAN">Good morning! This is your Vobiz wake-up call. Gym &lt;Dial&gt;+1900&lt;/Dial&gt; &amp; &quot;eat&quot; Press 1 to snooze for 1 minute, 2 to confirm, 9 to stop these calls.</Speak>
           </Gather>
           <Speak language="en-IN" voice="MAN">No response. I will call again in 5 minutes. Goodbye.</Speak>

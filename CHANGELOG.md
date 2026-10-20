@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.3
+
+- Reminder-call XML uses `finishOnKey="none"` on the key-press prompt. The media server rejects an empty value, which ended calls before the message played.
+
 ## 1.2.2
 
 - Reminder calls no longer use answering-machine detection, so a short "hello" can no longer cut the call before the message plays.

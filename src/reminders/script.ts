@@ -42,7 +42,8 @@ function speak(r: Pick<ScriptReminder, "language" | "voice">, text: string): str
 
 function gather(r: ScriptReminder, actionUrl: string, text: string): string[] {
   return [
-    `<Gather action="${escapeXml(actionUrl)}" method="POST" inputType="dtmf" numDigits="1" finishOnKey="" executionTimeout="10">`,
+    // finishOnKey must be a digit, *, # or "none": the media server rejects an empty string (hangup 8011 Invalid Answer XML).
+    `<Gather action="${escapeXml(actionUrl)}" method="POST" inputType="dtmf" numDigits="1" finishOnKey="none" executionTimeout="10">`,
     `    ${speak(r, text)}`,
     `</Gather>`,
   ];
