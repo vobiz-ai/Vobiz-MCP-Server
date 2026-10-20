@@ -18,6 +18,7 @@ import type { Sealer } from "../sealer.js";
 import { toE164 } from "../util.js";
 import { SPEAK_LANGS } from "../xml.js";
 import { MemoryScheduler } from "./scheduler.js";
+import { ACTIVE_STATUSES } from "./store.js";
 import {
   answerScript,
   confirmedScript,
@@ -31,8 +32,10 @@ import type {
   AnswerPayload,
   Attempt,
   AttemptOutcome,
+  CallbackIds,
   HangupParams,
   JobPayload,
+  LimitSnapshot,
   Reminder,
   ReminderAccount,
   ReminderInput,
@@ -51,14 +54,25 @@ export const MAX_TOTAL_ATTEMPTS = 10;
 /** Premium-rate ranges never dialled by a reminder, on top of VOBIZ_BLOCKED_PREFIXES. Emergency and short codes fail the length check. */
 export const REMINDER_BLOCKED_PREFIXES = ["1900", "1976", "449", "4487", "4470", "3389"];
 
-const ACTIVE: ReminderStatus[] = ["scheduled", "snoozed", "calling"];
-const ANSWER_TTL_SEC = 2 * 3600;
+const ACTIVE: ReminderStatus[] = ACTIVE_STATUSES;
+/**
+ * Lifetime of the per-call token behind /r/:token/answer|input|hangup. A call rings at most 45 s (ring_timeout) and
+ * lasts at most 180 s (time_limit); the rest covers Vobiz retrying a hangup callback. Nothing else depends on it:
+ * audio <Play> links are minted separately at answer time.
+ */
+export const ANSWER_TTL_SEC = 15 * 60;
 /** A job token stays valid this long after its due time (Cloud Tasks delivery retries). */
 const JOB_GRACE_SEC = 3 * 86400;
+/** A job delivered earlier than this before the attempt's nextAt is refused (too_early): the token alone never allows early calls. */
+const EARLY_TOLERANCE_MS = 90_000;
+/** Claim lease: a claim older than this with no sign of a placed call (no request/call UUID, no placedAt, no hangup) is dead. */
+const CLAIM_LEASE_MS = 10 * 60_000;
+/** sweepStale() default: "calling" for longer than any call can last plus every callback retry. */
+const STALE_CALLING_MIN = 30;
 /** API errors that a retry cannot fix. */
 const FATAL_API: ErrorKind[] = ["auth_failed", "forbidden", "not_allowed", "invalid_input", "account_suspended", "missing_credentials"];
-/** API errors where Vobiz certainly did not dial: the job is redelivered (HTTP 503 → Cloud Tasks retry). */
-const TRANSIENT_API: ErrorKind[] = ["service_unavailable", "backend_error", "rate_limited"];
+/** Vobiz call and request ids: UUID-shaped, anything else in a callback is never stored. */
+const UUID_RE = /^[0-9a-f-]{36}$/i;
 /** Memory backend: redeliveries of a transient failure (Cloud Tasks does this itself). */
 const MEMORY_REDELIVERIES = 5;
 const MEMORY_REDELIVERY_MS = 60_000;
@@ -145,6 +159,41 @@ function withAttempt(r: Reminder, n: number, patch: Partial<Attempt>): Attempt[]
   return r.attempts.map((a) => (a.n === n ? { ...a, ...patch } : a));
 }
 
+/** Attempts this reminder may still make in its current retry window, counting the next one (pending reminders). */
+function remainingInWindow(r: Reminder): number {
+  const next = r.attempts.length + 1;
+  const used = windowCount(r, next) - 1;
+  return Math.max(1, Math.min(r.maxAttempts - used, MAX_TOTAL_ATTEMPTS - next + 1));
+}
+
+/** Calls that went (or tried to go) out on a UTC day: started attempts, minus refusals that never dialled. */
+function startedOn(rs: Reminder[], day: string, skip?: { rid: string; n: number }): number {
+  let calls = 0;
+  for (const r of rs) {
+    for (const a of r.attempts) {
+      if (skip && r.id === skip.rid && a.n === skip.n) continue;
+      if (a.error === "daily_cap") continue;
+      if ((a.startedAt ?? a.scheduledFor).slice(0, 10) === day) calls += 1;
+    }
+  }
+  return calls;
+}
+
+/** undefined when absent, null when present but not UUID-shaped, else the lower-cased UUID. */
+function uuidOf(v: unknown): string | null | undefined {
+  if (v === undefined || v === null || v === "") return undefined;
+  return typeof v === "string" && UUID_RE.test(v) ? v.toLowerCase() : null;
+}
+
+/** A callback id contradicts the stored one (a malformed id contradicts any stored id). */
+const contradicts = (stored: string | undefined, got: string | null | undefined) => !!stored && got !== undefined && got !== stored.toLowerCase();
+
+/** Connection refused before any request bytes were sent (undici puts the code on err.cause). */
+function connectionRefused(err: unknown): boolean {
+  const code = (e: unknown) => (e && typeof e === "object" ? (e as { code?: unknown }).code : undefined);
+  return code(err) === "ECONNREFUSED" || code((err as { cause?: unknown } | undefined)?.cause) === "ECONNREFUSED";
+}
+
 const isAccount = (p: Partial<ReminderAccount> | undefined): p is ReminderAccount =>
   !!p && typeof p.authId === "string" && !!p.authId && typeof p.authToken === "string" && !!p.authToken;
 
@@ -155,7 +204,8 @@ export function createReminderService(opts: ReminderServiceOptions): ReminderSer
   const now = opts.now ?? (() => new Date());
   const iso = (d: Date = now()) => d.toISOString();
 
-  const client = (a: ReminderAccount) => new VobizClient({ ...cfg, authId: a.authId, authToken: a.authToken }, log, opts.fetchImpl);
+  const client = (a: ReminderAccount, fetchImpl: typeof fetch | undefined = opts.fetchImpl) =>
+    new VobizClient({ ...cfg, authId: a.authId, authToken: a.authToken }, log, fetchImpl);
 
   const openAns = (token: string): AnswerPayload | undefined => {
     const a = sealer.open<AnswerPayload>("ans", token);
@@ -246,23 +296,28 @@ export function createReminderService(opts: ReminderServiceOptions): ReminderSer
     if (blocked) throw new VobizError("not_allowed", `Reminder calls to premium-rate numbers (+${blocked}…) are not allowed.`);
   }
 
-  async function assertLimits(account: ReminderAccount, input: ReminderInput): Promise<void> {
-    const recent = await store.list(account.authId, { limit: 500 });
-    const active = recent.filter((r) => ACTIVE.includes(r.status)).length;
-    if (active >= limits.maxActive) {
-      throw new VobizError("rate_limited", `This account already has ${active} active reminder calls (limit ${limits.maxActive}). Cancel one first.`);
+  /**
+   * Throws rate_limited when the account is at maxActive, or the destination's calls on the reminder's UTC day
+   * (attempts already started, plus every attempt a pending reminder to it may still make that day) reach
+   * maxCallsPerDay. The counts come from dedicated store queries, so they cover every record on the account.
+   */
+  function checkLimits(s: LimitSnapshot, input: ReminderInput): void {
+    if (s.active >= limits.maxActive) {
+      throw new VobizError("rate_limited", `This account already has ${s.active} active reminder calls (limit ${limits.maxActive}). Cancel one first.`);
     }
     const day = input.at.slice(0, 10);
-    const to = digitsOnly(input.to);
-    let calls = 0;
-    for (const r of recent) {
-      if (digitsOnly(r.to) !== to) continue;
-      calls += r.attempts.filter((a) => (a.startedAt ?? a.scheduledFor).slice(0, 10) === day).length;
-      if ((r.status === "scheduled" || r.status === "snoozed") && r.nextAt?.slice(0, 10) === day) calls += 1;
+    let calls = startedOn(s.destination, day);
+    for (const r of s.destination) {
+      if ((r.status === "scheduled" || r.status === "snoozed") && r.nextAt?.slice(0, 10) === day) calls += remainingInWindow(r);
     }
     if (calls >= limits.maxCallsPerDay) {
       throw new VobizError("rate_limited", `At most ${limits.maxCallsPerDay} reminder calls a day may go to one number (UTC day ${day}).`);
     }
+  }
+
+  async function assertLimits(account: ReminderAccount, input: ReminderInput): Promise<void> {
+    const [active, destination] = await Promise.all([store.countActive(account.authId), store.listByDestination(account.authId, digitsOnly(input.to))]);
+    checkLimits({ active, destination }, input);
   }
 
   // ── public API ─────────────────────────────────────────────────
@@ -303,8 +358,17 @@ export function createReminderService(opts: ReminderServiceOptions): ReminderSer
       nextAt: input.at,
       attempts: [],
       ...(o.idempotencyKey ? { idempotencyKey: o.idempotencyKey } : {}),
+      toDigits: digitsOnly(input.to),
     };
-    await store.create(r);
+    // The limits are checked again in the same transaction as the write, so parallel schedules cannot both pass
+    // the count above (Firestore serialises them on a per-account lock document).
+    try {
+      await store.createGuarded(r, (s) => checkLimits(s, input));
+    } catch (err) {
+      if (err instanceof VobizError) throw err;
+      log.info(`reminder ${r.id}: store unavailable on schedule`);
+      throw new VobizError("service_unavailable", "The reminder could not be scheduled right now. Try again in a minute.");
+    }
     if (!(await queueAttempt(r, account, 1, new Date(input.at)))) {
       throw new VobizError("service_unavailable", "The reminder could not be scheduled right now. Try again in a minute.");
     }
@@ -333,18 +397,43 @@ export function createReminderService(opts: ReminderServiceOptions): ReminderSer
     const n = job.n;
     let r: Reminder | undefined;
     let before = undefined as Pick<Reminder, "status" | "nextAt"> | undefined; // set inside the claim
+    let refused: "too_early" | "in_progress" | undefined;
     try {
       r = await store.update(job.authId, job.rid, (cur) => {
-        if (!((cur.status === "scheduled" || cur.status === "snoozed") && cur.attempts.length === n - 1)) return undefined;
-        before = { status: cur.status, nextAt: cur.nextAt };
-        return {
-          status: "calling",
-          nextAt: null,
-          updatedAt: iso(),
-          attempts: [...cur.attempts, { n, scheduledFor: cur.nextAt ?? iso(), startedAt: iso() }],
-        };
+        const t = now().getTime();
+        if ((cur.status === "scheduled" || cur.status === "snoozed") && cur.attempts.length === n - 1) {
+          // Not before the attempt's time: a valid job token alone must not allow an early call.
+          if (cur.nextAt && t < Date.parse(cur.nextAt) - EARLY_TOLERANCE_MS) {
+            refused = "too_early";
+            return undefined;
+          }
+          before = { status: cur.status, nextAt: cur.nextAt };
+          return {
+            status: "calling",
+            nextAt: null,
+            updatedAt: iso(),
+            attempts: [...cur.attempts, { n, scheduledFor: cur.nextAt ?? iso(), startedAt: iso(), claimedAt: iso() }],
+          };
+        }
+        // Redelivery of a claimed attempt. If nothing shows a call was placed (no request/call UUID, no placedAt, no
+        // hangup recorded), the claim is alive for CLAIM_LEASE_MS (503: Cloud Tasks tries again later) and dead after
+        // it (the claimer crashed before or while dialling): re-dial. A placed call is answered or hung up well
+        // within the lease, so its callbacks mark it before a re-dial could happen.
+        const att = cur.attempts[n - 1];
+        if (cur.status === "calling" && cur.attempts.length === n && att && !att.endedAt && !att.requestUuid && !att.callUuid && !att.placedAt) {
+          const claimed = Date.parse(att.claimedAt ?? att.startedAt ?? "");
+          if (Number.isFinite(claimed) && t - claimed < CLAIM_LEASE_MS) {
+            refused = "in_progress";
+            return undefined;
+          }
+          before = { status: "scheduled", nextAt: att.scheduledFor };
+          return { updatedAt: iso(), attempts: withAttempt(cur, n, { startedAt: iso(), claimedAt: iso() }) };
+        }
+        return undefined;
       });
       if (!r) {
+        if (refused === "too_early") log.info(`reminder ${job.rid} attempt ${n}: job delivered too early, ignored`);
+        if (refused) return { fired: false, reason: refused };
         const cur = await store.get(job.authId, job.rid);
         return { fired: false, reason: cur ? "stale" : "not_found" };
       }
@@ -352,11 +441,50 @@ export function createReminderService(opts: ReminderServiceOptions): ReminderSer
       log.info(`reminder ${job.rid}: store unavailable on fire`);
       return { fired: false, reason: "transient" };
     }
+    const claimed = r;
 
-    const ans = sealer.seal("ans", { rid: r.id, n, authId: account.authId, authToken: account.authToken } satisfies AnswerPayload, ANSWER_TTL_SEC);
+    /** Gives the claim back so the job's redelivery can dial: only when Vobiz certainly did not. */
+    const undoClaim = async (): Promise<boolean> => {
+      const prev = before;
+      if (!prev) return false;
+      const undone = await store
+        .update(claimed.authId, claimed.id, (cur) =>
+          cur.status === "calling" && cur.attempts.length === n && !cur.attempts[n - 1]?.requestUuid && !cur.attempts[n - 1]?.placedAt
+            ? { status: prev.status, nextAt: prev.nextAt, attempts: cur.attempts.slice(0, n - 1), updatedAt: iso() }
+            : undefined,
+        )
+        .catch(() => undefined);
+      return !!undone;
+    };
+
+    // Per-destination daily cap, again at fire time: counts every attempt started today to this number on the
+    // account (snoozes and retries included), not only what schedule() could foresee.
+    try {
+      const day = iso().slice(0, 10);
+      const used = startedOn(await store.listByDestination(claimed.authId, digitsOnly(claimed.to)), day, { rid: claimed.id, n });
+      if (used >= limits.maxCallsPerDay) {
+        await store.update(claimed.authId, claimed.id, (cur) =>
+          cur.status === "calling" && cur.attempts.length === n
+            ? {
+                attempts: withAttempt(cur, n, { outcome: "failed", error: "daily_cap", hangupCause: "daily_cap", endedAt: iso() }),
+                status: "failed",
+                nextAt: null,
+                updatedAt: iso(),
+              }
+            : undefined,
+        );
+        log.info(`reminder ${claimed.id} attempt ${n}: daily call cap for the destination reached, not calling`);
+        return { fired: false, reason: "daily_cap" };
+      }
+    } catch {
+      log.info(`reminder ${claimed.id}: store unavailable on fire`);
+      return (await undoClaim()) ? { fired: false, reason: "transient" } : { fired: false, reason: "stale" };
+    }
+
+    const ans = sealer.seal("ans", { rid: claimed.id, n, authId: account.authId, authToken: account.authToken } satisfies AnswerPayload, ANSWER_TTL_SEC);
     const body = {
-      from: digitsOnly(r.from),
-      to: toE164(r.to),
+      from: digitsOnly(claimed.from),
+      to: toE164(claimed.to),
       answer_url: `${baseUrl}/r/${ans}/answer`,
       answer_method: "POST",
       hangup_url: `${baseUrl}/r/${ans}/hangup`,
@@ -367,40 +495,52 @@ export function createReminderService(opts: ReminderServiceOptions): ReminderSer
       // before the XML runs. A pickup without a key press is classified as no_input from the hangup callback instead.
       caller_name: "Vobiz reminder",
     };
+    // What the HTTP layer saw: a Retry-After header, or a connection refused before any request bytes went out.
+    const seen: { retryAfter?: boolean; refused?: boolean } = {};
+    const baseFetch = opts.fetchImpl ?? fetch;
+    const tracked = (async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+      try {
+        const res = await baseFetch(input, init);
+        seen.retryAfter = !!res.headers?.get?.("retry-after");
+        return res;
+      } catch (err) {
+        seen.refused = connectionRefused(err);
+        throw err;
+      }
+    }) as typeof fetch;
     try {
-      const res = await client(account).request<Record<string, unknown>>("POST", `/api/v1/Account/${encodeURIComponent(account.authId)}/Call/`, {
+      const res = await client(account, tracked).request<Record<string, unknown>>("POST", `/api/v1/Account/${encodeURIComponent(account.authId)}/Call/`, {
         body,
         sideEffect: true,
         route: "POST Call/ (reminder)",
       });
-      const requestUuid = typeof res.data?.request_uuid === "string" ? res.data.request_uuid : undefined;
-      if (requestUuid) {
-        await store.update(r.authId, r.id, (cur) => ({ attempts: withAttempt(cur, n, { requestUuid }), updatedAt: iso() })).catch(() => undefined);
-      }
-      log.info(`reminder ${r.id} attempt ${n} placed`);
+      const raw = res.data?.request_uuid;
+      const requestUuid = typeof raw === "string" && /^[A-Za-z0-9-]{1,64}$/.test(raw) ? raw : undefined;
+      await store
+        .update(claimed.authId, claimed.id, (cur) => ({ attempts: withAttempt(cur, n, { placedAt: iso(), ...(requestUuid ? { requestUuid } : {}) }), updatedAt: iso() }))
+        .catch(() => undefined);
+      log.info(`reminder ${claimed.id} attempt ${n} placed`);
       return { fired: true };
     } catch (err) {
       const kind: ErrorKind = err instanceof VobizError ? err.kind : "internal_error";
-      log.info(`reminder ${r.id} attempt ${n} call failed (${kind})`);
-      if (TRANSIENT_API.includes(kind) && before) {
-        // Vobiz said no before dialling (5xx / 429): undo the claim so the job's redelivery can place the call.
-        const prev = before;
-        const undone = await store
-          .update(r.authId, r.id, (cur) =>
-            cur.status === "calling" && cur.attempts.length === n && !cur.attempts[n - 1]?.requestUuid
-              ? { status: prev.status, nextAt: prev.nextAt, attempts: cur.attempts.slice(0, n - 1), updatedAt: iso() }
-              : undefined,
-          )
-          .catch(() => undefined);
-        if (undone) return { fired: false, reason: "transient" };
-      }
-      const retry = !FATAL_API.includes(kind) && canRetry(r, n);
-      const nextAt = new Date(now().getTime() + r.retryMinutes * 60_000);
+      const status = err instanceof VobizError ? err.status : undefined;
+      log.info(`reminder ${claimed.id} attempt ${n} call failed (${kind}${status ? ` ${status}` : ""})`);
+      // Only answers that prove Vobiz did not dial give the claim back for a redelivery (HTTP 503 → Cloud Tasks
+      // retry): 429, a 503 that says when to come back (Retry-After), or a connection refused before sending.
+      const notDialled = status === 429 || (status === 503 && seen.retryAfter === true) || (kind === "outcome_unknown" && seen.refused === true);
+      if (notDialled && (await undoClaim())) return { fired: false, reason: "transient" };
+      // Any other 5xx (500/502/504, gateway timeouts), a timeout or a dropped connection: the call may or may not
+      // be ringing. Keep the claim, record the attempt as outcome_unknown and retry on the normal retryMinutes
+      // schedule bounded by maxAttempts, never straight away (a redelivery could ring the phone twice).
+      const unknown = kind === "outcome_unknown" || kind === "timeout" || (status !== undefined && status >= 500);
+      const label = unknown ? "outcome_unknown" : kind;
+      const retry = !FATAL_API.includes(kind) && canRetry(claimed, n);
+      const nextAt = new Date(now().getTime() + claimed.retryMinutes * 60_000);
       const updated = await store
-        .update(r.authId, r.id, (cur) =>
+        .update(claimed.authId, claimed.id, (cur) =>
           cur.status === "calling" && cur.attempts.length === n
             ? {
-                attempts: withAttempt(cur, n, { outcome: "failed", hangupCause: `api_error:${kind}`, endedAt: iso() }),
+                attempts: withAttempt(cur, n, { outcome: "failed", hangupCause: `api_error:${label}`, ...(unknown ? { error: "outcome_unknown" } : {}), endedAt: iso() }),
                 status: retry ? "scheduled" : "failed",
                 nextAt: retry ? nextAt.toISOString() : null,
                 updatedAt: iso(),
@@ -413,13 +553,45 @@ export function createReminderService(opts: ReminderServiceOptions): ReminderSer
     }
   }
 
-  /** The current attempt of an active call, or undefined. */
-  async function current(token: string): Promise<{ a: AnswerPayload; r: Reminder } | undefined> {
+  /**
+   * Binds a callback to the attempt's call. A CallUUID / RequestUUID that contradicts the one stored on the attempt
+   * (RequestUUID from the Call API response, CallUUID from the first callback carrying one) is refused; a callback
+   * without them is tolerated. The first valid CallUUID is stored. Returns the (possibly updated) reminder.
+   */
+  async function bind(r: Reminder, n: number, ids: CallbackIds, leg: string): Promise<Reminder | undefined> {
+    const att = r.attempts[n - 1];
+    if (!att) return undefined;
+    const callUuid = uuidOf(ids.callUuid);
+    const requestUuid = uuidOf(ids.requestUuid);
+    const reject = () => {
+      log.info(`reminders: WARNING ${leg} callback for reminder ${r.id} attempt ${n} carries a call id that does not match this attempt; refused`);
+      return undefined;
+    };
+    if (contradicts(att.requestUuid, requestUuid) || contradicts(att.callUuid, callUuid)) return reject();
+    if (!callUuid || att.callUuid) return r;
+    let conflict = false;
+    const updated = await store.update(r.authId, r.id, (cur) => {
+      const x = cur.attempts[n - 1];
+      if (!x || x.endedAt) return undefined;
+      if (x.callUuid) {
+        conflict = x.callUuid !== callUuid;
+        return undefined;
+      }
+      return { attempts: withAttempt(cur, n, { callUuid }), updatedAt: iso() };
+    });
+    if (conflict) return reject();
+    return updated ?? r;
+  }
+
+  /** The current attempt of an active call, bound to the callback's call ids, or undefined. */
+  async function current(token: string, ids: CallbackIds = {}, leg = "answer"): Promise<{ a: AnswerPayload; r: Reminder } | undefined> {
     const a = openAns(token);
     if (!a) return undefined;
     const r = await store.get(a.authId, a.rid);
     if (!r || r.status !== "calling" || r.attempts.length !== a.n) return undefined;
-    return { a, r };
+    const bound = await bind(r, a.n, ids, leg);
+    if (!bound || bound.status !== "calling" || bound.attempts.length !== a.n) return undefined;
+    return { a, r: bound };
   }
 
   const inputUrl = (token: string) => `${baseUrl}/r/${token}/input`;
@@ -439,27 +611,30 @@ export function createReminderService(opts: ReminderServiceOptions): ReminderSer
     return opts.mediaUrl({ authId: a.authId, authToken: a.authToken }, r.audioId);
   }
 
-  async function answerXml(token: string): Promise<string | undefined> {
-    const c = await current(token);
+  async function answerXml(token: string, ids: CallbackIds = {}): Promise<string | undefined> {
+    const c = await current(token, ids, "answer");
     if (!c) return undefined;
     const audioUrl = await playUrl(c.r, c.a);
     return answerScript({ ...c.r, audioUrl }, { actionUrl: inputUrl(token), retryInMinutes: canRetry(c.r, c.a.n) ? c.r.retryMinutes : null });
   }
 
-  /** A key press wins; otherwise a spoken word maps to the same menu (1 snooze, 2 confirm, 9 stop). */
+  /**
+   * A key press wins; otherwise a spoken word maps to the same menu (1 snooze, 2 confirm, 9 stop). The result is
+   * what gets stored as attempt.digits: DTMF keys, a matched digit, or "unrecognised" — never a transcript.
+   */
   function digitFromInput(digits: string, speech: string): string {
     const d = typeof digits === "string" ? digits.trim().slice(0, 8) : "";
-    if (d) return d;
+    if (d) return /^[0-9*#]+$/.test(d) ? d : "unrecognised";
     const w = typeof speech === "string" ? speech.trim().toLowerCase().slice(0, 80) : "";
     if (!w) return "";
     if (/\b(snooze|later|again|sleep|wait)\b/.test(w)) return "1";
     if (/\b(stop|cancel|never|no more|don'?t call)\b/.test(w)) return "9";
     if (/\b(confirm|yes|done|ok|okay|got it|thanks?|thank you|awake|sure)\b/.test(w)) return "2";
-    return w; // unrecognised: treated like an invalid key (re-prompt once)
+    return "unrecognised"; // treated like an invalid key (re-prompt once)
   }
 
-  async function inputXml(token: string, digits: string, speech = ""): Promise<string | undefined> {
-    const c = await current(token);
+  async function inputXml(token: string, digits: string, speech = "", ids: CallbackIds = {}): Promise<string | undefined> {
+    const c = await current(token, ids, "input");
     if (!c) return undefined;
     const { a, r } = c;
     const n = a.n;
@@ -511,6 +686,12 @@ export function createReminderService(opts: ReminderServiceOptions): ReminderSer
     const att = r?.attempts[a.n - 1];
     if (!r || !att || att.n !== a.n || att.endedAt) return; // unknown, or this attempt was already recorded
     const n = a.n;
+    // Bound to the attempt's call: contradicting ids are refused; a hangup without them is tolerated.
+    const callUuid = uuidOf(params.CallUUID);
+    if (contradicts(att.requestUuid, uuidOf(params.RequestUUID)) || contradicts(att.callUuid, callUuid)) {
+      log.info(`reminders: WARNING hangup callback for reminder ${r.id} attempt ${n} carries a call id that does not match this attempt; refused`);
+      return;
+    }
 
     // HangupCause carries the Q.850 name the classifier knows (NORMAL_CLEARING, USER_BUSY…); HangupCauseName is Vobiz's
     // display text ("Normal Hangup"), used only when the name is missing.
@@ -559,12 +740,13 @@ export function createReminderService(opts: ReminderServiceOptions): ReminderSer
     const updated = await store.update(r.authId, r.id, (cur) => {
       const x = cur.attempts[n - 1];
       if (!x || x.endedAt) return undefined; // repeated callback: already recorded
+      if (contradicts(x.callUuid, callUuid)) return undefined; // bound to another call meanwhile
       const attempts = withAttempt(cur, n, {
         outcome,
         endedAt: iso(),
         ...(cause ? { hangupCause: cause } : {}),
         ...(billsec !== undefined ? { billsec } : {}),
-        ...(params.CallUUID ? { callUuid: String(params.CallUUID).slice(0, 64) } : {}),
+        ...(callUuid && !x.callUuid ? { callUuid } : {}),
       });
       const owns = !decided && cur.status === "calling" && cur.attempts.length === n;
       if (!owns) return { attempts, updatedAt: iso() };
@@ -577,6 +759,39 @@ export function createReminderService(opts: ReminderServiceOptions): ReminderSer
     }
   }
 
+  async function sweepStale(olderThanMinutes = STALE_CALLING_MIN): Promise<number> {
+    const cutoff = now().getTime() - olderThanMinutes * 60_000;
+    const old = (v: string | undefined) => {
+      const t = Date.parse(v ?? "");
+      return !Number.isFinite(t) || t < cutoff;
+    };
+    let swept = 0;
+    for (const r of await store.listByStatus("calling", 500)) {
+      const att = r.attempts.at(-1);
+      if (!old(r.updatedAt) || !old(att?.claimedAt ?? att?.startedAt)) continue;
+      // Credentials live only in sealed tokens, so no retry can be queued from here: the attempt is recorded as a
+      // (retryable) failure and the reminder as failed, freeing its active slot. The user can schedule it again.
+      const updated = await store
+        .update(r.authId, r.id, (cur) => {
+          if (cur.status !== "calling" || cur.attempts.length !== r.attempts.length || !old(cur.updatedAt)) return undefined;
+          const n = cur.attempts.length;
+          const x = cur.attempts[n - 1];
+          return {
+            attempts: x && !x.endedAt ? withAttempt(cur, n, { outcome: "failed", error: "stale_claim", endedAt: iso() }) : cur.attempts,
+            status: "failed",
+            nextAt: null,
+            updatedAt: iso(),
+          };
+        })
+        .catch(() => undefined);
+      if (updated) {
+        swept += 1;
+        log.info(`reminder ${r.id}: stuck in calling, marked failed (stale_claim)`);
+      }
+    }
+    return swept;
+  }
+
   const service: ReminderService = {
     limits,
     schedule,
@@ -587,6 +802,7 @@ export function createReminderService(opts: ReminderServiceOptions): ReminderSer
     answerXml,
     inputXml,
     hangup,
+    sweepStale,
   };
 
   // Single-process backend: deliver due jobs straight to fire().

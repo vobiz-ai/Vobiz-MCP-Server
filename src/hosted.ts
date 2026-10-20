@@ -33,7 +33,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { ConfigError, loadConfig, type Config } from "./config.js";
 import type { ConnectionProfile, SharedState } from "./context.js";
 import type { ReminderService } from "./reminders/types.js";
-import { createReminderBackend, createReminderService, createRemindersRouter } from "./reminders/index.js";
+import { createReminderBackend, createReminderService, createRemindersRouter, reminderSignatureMode } from "./reminders/index.js";
 import type { MediaService } from "./media/types.js";
 import { createMediaBackend, createMediaService } from "./media/index.js";
 import { createMediaRouter, mintMediaUrl, mintUploadUrl } from "./media/router.js";
@@ -586,7 +586,13 @@ export async function runHosted(): Promise<void> {
       mediaUrl: (account, audioId) => mintMediaUrl(sealer, baseUrl, account.authId, audioId),
       mediaExists: async (authId, id) => (await library.find(authId, id))?.id === id,
     });
-    remindersRouter = createRemindersRouter(reminders, { baseUrl, signatureMode: cfg.webhookSignature === "off" ? "off" : "verify_if_present", sealer });
+    // Reminder callbacks: VOBIZ_WEBHOOK_SIGNATURE when the operator set it, else verify_if_present (see docs/HOSTING.md).
+    remindersRouter = createRemindersRouter(reminders, {
+      baseUrl,
+      signatureMode: reminderSignatureMode(process.env.VOBIZ_WEBHOOK_SIGNATURE, cfg.webhookSignature),
+      sealer,
+      log,
+    });
   }
   const app = createHostedApp({
     cfg,
