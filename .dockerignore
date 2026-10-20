@@ -6,3 +6,7 @@ dist
 coverage
 *.log
 *.mcpb
+test
+# Docs are not needed in the image (skills/**/*.md are still copied: this pattern only matches the context root).
+*.md
+!README.md
