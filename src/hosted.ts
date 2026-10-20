@@ -24,7 +24,7 @@ import { fileURLToPath } from "node:url";
 import express, { type Request, type Response } from "express";
 import { mcpAuthRouter, createOAuthMetadata, getOAuthProtectedResourceMetadataUrl } from "@modelcontextprotocol/sdk/server/auth/router.js";
 import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
-import { InvalidGrantError, InvalidTokenError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
+import { InvalidClientMetadataError, InvalidGrantError, InvalidTokenError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
 import type { AuthorizationParams, OAuthServerProvider } from "@modelcontextprotocol/sdk/server/auth/provider.js";
 import type { OAuthRegisteredClientsStore } from "@modelcontextprotocol/sdk/server/auth/clients.js";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
@@ -167,10 +167,19 @@ export function createHostedApp(o: HostedOptions): express.Express {
       return c ? { ...c.c, client_id: clientId } : undefined;
     },
     // Stateless dynamic registration: the client record is sealed into its own client_id.
+    // Redirect URIs must be https or loopback http, with no fragment or wildcard; private-use schemes are refused.
     async registerClient(client) {
+      if (!Array.isArray(client.redirect_uris) || !client.redirect_uris.length || client.redirect_uris.length > 10) {
+        throw new InvalidClientMetadataError("redirect_uris must list 1 to 10 URIs");
+      }
+      for (const uri of client.redirect_uris) {
+        const problem = redirectUriProblem(uri);
+        if (problem) throw new InvalidClientMetadataError(problem);
+      }
+      const clientName = typeof client.client_name === "string" ? client.client_name.slice(0, 256) : undefined;
       const keep: Partial<OAuthClientInformationFull> = {
         redirect_uris: client.redirect_uris,
-        client_name: client.client_name,
+        client_name: clientName,
         token_endpoint_auth_method: client.token_endpoint_auth_method,
         grant_types: client.grant_types,
         response_types: client.response_types,
@@ -178,7 +187,7 @@ export function createHostedApp(o: HostedOptions): express.Express {
         client_secret_expires_at: client.client_secret_expires_at,
       };
       const clientId = seal.seal("client", { c: keep }, 10 * 365 * 24 * 3600);
-      return { ...client, client_id: clientId, client_id_issued_at: Math.floor(Date.now() / 1000) };
+      return { ...client, client_name: clientName, client_id: clientId, client_id_issued_at: Math.floor(Date.now() / 1000) };
     },
   };
 

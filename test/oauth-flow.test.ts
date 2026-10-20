@@ -141,3 +141,31 @@ describe("consent page by client kind", async () => {
   });
 });
 
+
+describe("dynamic client registration rules", async () => {
+  const base = await start();
+
+  it("accepts Claude's https callback and loopback with a port", async () => {
+    for (const uris of [[CLAUDE_CB], ["http://localhost:8765/callback"], ["http://127.0.0.1/callback", "http://[::1]:3000/cb"], ["https://app.example.com/cb?a=1"]]) {
+      const r = await register(base, uris);
+      expect(r.status).toBe(201);
+      expect(r.body.client_id).toMatch(/^vbzc_/);
+    }
+  });
+
+  it("rejects http off loopback, fragments, wildcards and custom schemes with invalid_client_metadata", async () => {
+    for (const uri of ["http://evil.example/cb", "https://a.example/cb#frag", "https://*.example.com/cb", "https://a.example/*", "myapp://callback", "com.example.app:/oauth"]) {
+      const r = await register(base, [uri]);
+      expect(r.status).toBe(400);
+      expect(r.body.error).toBe("invalid_client_metadata");
+    }
+    const mixed = await register(base, [CLAUDE_CB, "http://evil.example/cb"]);
+    expect(mixed.body.error).toBe("invalid_client_metadata");
+  });
+
+  it("caps client_name at 256 characters", async () => {
+    const r = await register(base, [CLAUDE_CB], "n".repeat(1000));
+    expect(r.status).toBe(201);
+    expect((r.body as unknown as { client_name: string }).client_name).toHaveLength(256);
+  });
+});
