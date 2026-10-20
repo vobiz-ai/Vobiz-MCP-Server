@@ -12,10 +12,10 @@ import { FirestoreStore, MemoryStore } from "./store.js";
 import type { ReminderLimits, ReminderStore, Scheduler } from "./types.js";
 
 export * from "./types.js";
-export { MemoryStore, FirestoreStore, accountHash } from "./store.js";
+export { MemoryStore, FirestoreStore, accountHash, ACTIVE_STATUSES } from "./store.js";
 export { MemoryScheduler, CloudTasksScheduler, MAX_TIMER_MS } from "./scheduler.js";
-export { createReminderService, formatLocalTime, DEFAULT_LIMITS, MAX_TOTAL_ATTEMPTS, type ReminderServiceOptions } from "./service.js";
-export { createRemindersRouter, type RemindersRouterOptions } from "./router.js";
+export { createReminderService, formatLocalTime, DEFAULT_LIMITS, MAX_TOTAL_ATTEMPTS, ANSWER_TTL_SEC, type ReminderServiceOptions } from "./service.js";
+export { createRemindersRouter, reminderSignatureMode, NonceCache, MAX_NONCES, type RemindersRouterOptions } from "./router.js";
 export * as scripts from "./script.js";
 
 export interface ReminderBackend {

@@ -10,7 +10,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ToolContext } from "../context.js";
 import { VobizError } from "../errors.js";
 import type { AudioMeta, MediaService } from "../media/types.js";
-import { handler, ok } from "../util.js";
+import { handler, ok, safeErrorText } from "../util.js";
 
 type Rec = Record<string, unknown>;
 
@@ -42,10 +42,10 @@ function authIdOf(ctx: ToolContext): string {
   return id;
 }
 
-/** Errors from storage (not VobizError) are logged by message only before they become internal_error. */
+/** Errors from storage (not VobizError) are logged (name and a short, URL-query-stripped message) before they become internal_error. */
 function logged<T>(ctx: ToolContext, op: string, p: Promise<T>): Promise<T> {
   return p.catch((err: unknown) => {
-    if (!(err instanceof VobizError)) ctx.log.info(`audio: ${op} failed: ${err instanceof Error ? err.message : String(err)}`);
+    if (!(err instanceof VobizError)) ctx.log.info(`audio: ${op} failed: ${safeErrorText(err)}`);
     throw err;
   });
 }
@@ -95,7 +95,7 @@ export function registerAudioTools(server: McpServer, ctx: ToolContext): void {
           upload_url: url,
           expires_in_minutes: 15,
           how_to: [
-            "Give the user upload_url: they open it to upload a file or record from the microphone, then name it. The link works once.",
+            "Give the user upload_url: they open it to upload a file or record from the microphone, then name it. The link works for one attempt: if that upload fails, create a new link to try again.",
             `Or, when the user attached the file in this chat and you can run code, upload it yourself (set Content-Type to the file's type): curl -sS -X PUT -H "Content-Type: audio/mpeg" -H "X-Audio-Name: ${label}" --data-binary @<file> ${url}`,
             `Then the user says "use the audio ${label}": pass that name as audio to schedule_reminder_call.`,
           ],
@@ -111,6 +111,7 @@ export function registerAudioTools(server: McpServer, ctx: ToolContext): void {
       title: "Import audio from a link",
       description:
         "Vobiz: save the audio at a public https link the user pastes (an MP3, WAV or other audio file) into this account's audio library under a name, for use on reminder and wake-up calls. " +
+        "It needs a direct https link to an audio FILE (.mp3, .wav, .m4a, .ogg…), not a web page such as Pixabay, YouTube, Spotify or SoundCloud; if the user only has a page link, ask for the direct file link or use create_audio_upload_link so they can upload the file. " +
         `${limitsText(svc)} Then pass the name as \`audio\` to schedule_reminder_call. For a file on the user's device, or a recording, use create_audio_upload_link.`,
       inputSchema: {
         url: z.string().trim().url().max(2048).describe("Public https link to the audio file."),

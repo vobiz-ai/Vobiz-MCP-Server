@@ -6,6 +6,9 @@ import type { EventStore } from "./webhooks.js";
 import type { Logger } from "./logger.js";
 import type { ReminderService } from "./reminders/types.js";
 import type { MediaService } from "./media/types.js";
+import type { CallScriptBackend } from "./callscript/types.js";
+import type { ReservationSet } from "./guard/capacity.js";
+import type { SharedStoreBackend } from "./guard/shared-store.js";
 
 /** How the audio tools hand out upload links (hosted connector: sealed one-time /upload/:token URLs). */
 export interface MediaUploads {
@@ -41,6 +44,10 @@ export interface ToolContext {
   messageLimiter: SlidingWindowLimiter;
   hourlyMessageLimiter: SlidingWindowLimiter;
   idempotency: IdempotencyStore;
+  /** In-process make_call concurrency reservations (closes the check-then-dial gap). */
+  callReservations: ReservationSet;
+  /** Cross-replica idempotency records, rate counters and reservations (hosted mode with Firestore). */
+  backend?: SharedStoreBackend;
   /** Hosted XML flows and received callbacks: present only in HTTP mode with VOBIZ_PUBLIC_URL. */
   flows?: FlowStore;
   events?: EventStore;
@@ -51,6 +58,8 @@ export interface ToolContext {
   /** The account's audio library for reminder calls: present only on the hosted connector. */
   media?: MediaService;
   mediaUploads?: MediaUploads;
+  /** make_call `say` / `play`: this server hosts the call's VobizXML (hosted connector only). */
+  callScripts?: CallScriptBackend;
   profile?: ConnectionProfile;
 }
 
@@ -62,6 +71,9 @@ export interface SharedState {
   messageLimiter: SlidingWindowLimiter;
   hourlyMessageLimiter: SlidingWindowLimiter;
   idempotency: IdempotencyStore;
+  callReservations: ReservationSet;
+  /** When set, idempotency, call/message rate caps and call reservations are shared through it. */
+  backend?: SharedStoreBackend;
   flows?: FlowStore;
   events?: EventStore;
 }

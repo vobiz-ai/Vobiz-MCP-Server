@@ -30,3 +30,10 @@ button:focus-visible{outline:none;box-shadow:0 0 0 3px var(--ring)}
 a{color:var(--orange);text-underline-offset:2px}
 footer{margin-top:20px;font-size:12px;font-weight:300;color:var(--muted)}
 footer a{color:var(--muted)}`;
+
+
+/** The Vobiz logomark on its own (from the docs site favicon), served at GET /favicon.svg. */
+export const VOBIZ_FAVICON_SVG = `<svg width="42" height="30" viewBox="0 0 42 30" fill="none" xmlns="http://www.w3.org/2000/svg"> <path d="M42 14.7458V0C24.5641 0 12 13.7288 12 30H27.1282C27.1282 21.3559 33.5385 14.7458 42 14.7458Z" fill="#E83C00"/> <path d="M0 15V0C9.28572 0 15 6.42857 15 15H0Z" fill="#E86A00"/> </svg>`;
+
+/** The <link> every server-rendered page puts in its <head> so browsers show the Vobiz logomark. */
+export const faviconLinkTag = (): string => `<link rel="icon" type="image/svg+xml" href="/favicon.svg">`;

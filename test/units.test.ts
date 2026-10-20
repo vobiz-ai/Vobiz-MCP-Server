@@ -164,7 +164,7 @@ describe("hangup outcome classification", () => {
 
 describe("XML builder", () => {
   const cfg = testConfig({ VOBIZ_PUBLIC_URL: "https://ops.example.net" });
-  const o = { checkUrl: (u: string, f: string) => assertAllowedUrl(cfg, u, f) };
+  const o = { checkUrl: (u: string, f: string) => assertAllowedUrl(cfg, u, f), checkDestination: (n: string) => assertDestinationAllowed(cfg, n) };
 
   it("builds documented verbs with escaping", () => {
     const xml = buildResponseXml(

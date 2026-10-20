@@ -58,7 +58,8 @@ describe("upload links", () => {
     expect(m).toMatch(/^https:\/\/mcp\.example\.test\/media\/vbzm_[A-Za-z0-9_-]+\.wav$/);
     const mp = sealer.open<{ authId: string; id: string; exp: number }>("med", m.slice(`${PUBLIC}/media/`.length, -4))!;
     expect(mp).toMatchObject({ authId: ME, id: "a_x123" });
-    expect(mp.exp - Math.floor(Date.now() / 1000)).toBeGreaterThan(7190);
+    expect(mp.exp - Math.floor(Date.now() / 1000)).toBeGreaterThan(1190);
+    expect(mp.exp - Math.floor(Date.now() / 1000)).toBeLessThanOrEqual(1200);
   });
 });
 
@@ -205,6 +206,17 @@ describe("PUT /upload/:token", () => {
     expect(r.status).toBe(503);
     expect(JSON.stringify(await r.json())).not.toContain("ENOSPC");
     expect(logs.at(-1)).toBe("media: upload refused (internal_error)");
+  });
+
+  it("burns the link on a failed attempt: one link = one attempt", async () => {
+    const path = uploadPath();
+    media.failNext = new VobizError("invalid_input", "No audio stream found in this file.");
+    expect((await put(path, audio(), { "X-Audio-Name": "First" })).status).toBe(415);
+    const again = await put(path, audio(), { "X-Audio-Name": "Second" });
+    expect(again.status).toBe(410);
+    expect((await again.json()).error).toBe("link_expired");
+    expect(media.added).toEqual([]);
+    expect((await fetch(`${base}${path}`)).status).toBe(410);
   });
 
   it("refuses an expired link before reading the body", async () => {

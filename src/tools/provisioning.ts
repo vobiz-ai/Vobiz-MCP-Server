@@ -16,7 +16,9 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { digitsOnly } from "../config.js";
 import type { ToolContext } from "../context.js";
 import { VobizError } from "../errors.js";
+import { CONFIRM_NOTE, hostOf, requireApproval, type ToolExtra } from "../guard/confirm.js";
 import { IdempotencyStore, withIdempotency } from "../idempotency.js";
+import { sharedOf } from "../guard/capacity.js";
 import { PAGINATION_NOTE, assertAllowedUrl, handler, idempotencyKey, listField, ok, pageInfo, phoneNumber, redact, toE164 } from "../util.js";
 
 type Rec = Record<string, unknown>;
@@ -24,16 +26,19 @@ type Rec = Record<string, unknown>;
 const appId = z.string().regex(/^\d{5,25}$/, "must be a Vobiz application ID (digits)");
 const trunkId = z.string().regex(/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/, "must be a trunk UUID");
 const uuid = trunkId;
-const confirm = (what: string) => z.boolean().describe(`Must be true, set only after the user explicitly approved: ${what}.`);
+const confirm = (what: string) => z.boolean().describe(`Must be true, set only after the user explicitly approved: ${what}.` + CONFIRM_NOTE);
 const e164Path = (n: string) => encodeURIComponent(toE164(n));
 
-function requireProvisioning(ctx: ToolContext, confirmed: boolean | undefined, what: string): void {
+/** Provisioning must be enabled, and the human must approve (elicitation when supported, else confirm: true). */
+async function requireProvisioning(server: McpServer, extra: ToolExtra, ctx: ToolContext, confirmed: boolean | undefined, what: string, detail: string): Promise<void> {
   if (!ctx.cfg.enableProvisioning) {
     throw new VobizError("provisioning_disabled", "Account changes are disabled on this server. An administrator must set VOBIZ_ENABLE_PROVISIONING=true.");
   }
-  if (confirmed !== true) {
-    throw new VobizError("confirmation_required", `Ask the user to approve ${what}, then call again with confirm: true.`);
-  }
+  await requireApproval(server, extra, {
+    confirmed,
+    message: `Change your Vobiz account: ${detail}. Approve?`,
+    fallback: `Ask the user to approve ${what}, then call again with confirm: true.`,
+  });
 }
 
 /** Public, non-local http(s) URL check for trunk webhooks (trunk-service lets unresolvable hosts through). */
@@ -145,8 +150,8 @@ export function registerProvisioningTools(server: McpServer, ctx: ToolContext): 
       inputSchema: { ...appFields, app_name: z.string().trim().min(1).max(120), answer_url: z.string().url(), confirm: confirm("creating this application") },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },
-    handler(async (a) => {
-      requireProvisioning(ctx, a.confirm, "creating this application");
+    handler(async (a, extra: ToolExtra) => {
+      await requireProvisioning(server, extra, ctx, a.confirm, "creating this application", `create application "${a.app_name}" answering calls with XML from ${hostOf(a.answer_url)}`);
       for (const k of ["answer_url", "hangup_url", "fallback_answer_url"] as const) if (a[k]) assertAllowedUrl(cfg, a[k] as string, k);
       const res = await ctx.client.request<Rec>("POST", ctx.client.accountPath("/Application/"), {
         body: pick(a as Rec, Object.keys(appFields)),
@@ -165,8 +170,8 @@ export function registerProvisioningTools(server: McpServer, ctx: ToolContext): 
       inputSchema: { app_id: appId, ...appFields, confirm: confirm("changing this application") },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
-    handler(async (a) => {
-      requireProvisioning(ctx, a.confirm, "changing this application");
+    handler(async (a, extra: ToolExtra) => {
+      await requireProvisioning(server, extra, ctx, a.confirm, "changing this application", `update application ${a.app_id}${a.answer_url ? `; inbound calls will fetch XML from ${hostOf(a.answer_url)}` : ""}${a.hangup_url ? `; hangup events go to ${hostOf(a.hangup_url)}` : ""}${a.fallback_answer_url ? `; fallback XML from ${hostOf(a.fallback_answer_url)}` : ""}`);
       for (const k of ["answer_url", "hangup_url", "fallback_answer_url"] as const) if (a[k]) assertAllowedUrl(cfg, a[k] as string, k);
       const body = pick(a as Rec, Object.keys(appFields));
       if (!Object.keys(body).length) throw new VobizError("invalid_input", "Nothing to update.");
@@ -187,8 +192,8 @@ export function registerProvisioningTools(server: McpServer, ctx: ToolContext): 
       inputSchema: { app_id: appId, confirm: confirm("deleting this application") },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
-    handler(async (a) => {
-      requireProvisioning(ctx, a.confirm, "deleting this application");
+    handler(async (a, extra: ToolExtra) => {
+      await requireProvisioning(server, extra, ctx, a.confirm, "deleting this application", `delete application ${a.app_id} (inbound calls on its numbers stop being handled)`);
       // cascade=false keeps endpoints instead of deleting them with the application.
       const res = await ctx.client.request("DELETE", ctx.client.accountPath(`/Application/${a.app_id}/`), { query: { cascade: "false" }, route: "DELETE Application/{id}/" });
       return ok({ ok: true, deleted: true, app_id: a.app_id, http_status: res.status });
@@ -242,8 +247,8 @@ export function registerProvisioningTools(server: McpServer, ctx: ToolContext): 
       },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
-    handler(async (a) => {
-      requireProvisioning(ctx, a.confirm, "buying this number");
+    handler(async (a, extra: ToolExtra) => {
+      await requireProvisioning(server, extra, ctx, a.confirm, "buying this number", `buy phone number ${toE164(a.phone_number)}; the setup and monthly fees are charged now`);
       if (cfg.maxNumberCost <= 0) {
         throw new VobizError("spending_limit", "Number purchases are capped at 0 on this server. An administrator must set VOBIZ_MAX_NUMBER_COST.");
       }
@@ -296,7 +301,7 @@ export function registerProvisioningTools(server: McpServer, ctx: ToolContext): 
             backend_message: res.data.message ?? null,
             http_status: res.status,
           };
-        }),
+        }, { shared: sharedOf(ctx) }),
       );
     }),
   );
@@ -319,8 +324,8 @@ export function registerProvisioningTools(server: McpServer, ctx: ToolContext): 
       },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
-    handler(async (a) => {
-      requireProvisioning(ctx, a.confirm, "changing this number");
+    handler(async (a, extra: ToolExtra) => {
+      await requireProvisioning(server, extra, ctx, a.confirm, "changing this number", `change routing of ${toE164(a.phone_number)}${a.application_id ? ` to application ${a.application_id}` : ""}${a.trunk_id ? ` to SIP trunk ${a.trunk_id}` : ""}${a.unlink_application ? " (unlink its application)" : ""}${a.unlink_trunk ? " (unlink its trunk)" : ""}${a.tags ? " (replace tags)" : ""}`);
       if (a.application_id && a.unlink_application) throw new VobizError("invalid_input", "Give application_id or unlink_application, not both.");
       if (a.trunk_id && a.unlink_trunk) throw new VobizError("invalid_input", "Give trunk_id or unlink_trunk, not both.");
       if (a.application_id && a.trunk_id) throw new VobizError("invalid_input", "A number can be linked to an application or a trunk, not both.");
@@ -370,8 +375,8 @@ export function registerProvisioningTools(server: McpServer, ctx: ToolContext): 
       inputSchema: { ...trunkFields, name: z.string().trim().min(1).max(100), confirm: confirm("creating this SIP trunk") },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },
-    handler(async (a) => {
-      requireProvisioning(ctx, a.confirm, "creating this SIP trunk");
+    handler(async (a, extra: ToolExtra) => {
+      await requireProvisioning(server, extra, ctx, a.confirm, "creating this SIP trunk", `create SIP trunk "${a.name}"${a.webhook_url ? ` with webhooks to ${hostOf(a.webhook_url)}` : ""}`);
       if (a.webhook_url) assertPublicWebhook(a.webhook_url);
       const res = await ctx.client.request<Rec>("POST", ctx.client.accountPath("/trunks"), { body: pick(a as Rec, Object.keys(trunkFields)), route: "POST trunks" });
       return ok({ ok: true, created: true, trunk: redact(res.data, TRUNK_SECRETS), http_status: res.status });
@@ -387,8 +392,8 @@ export function registerProvisioningTools(server: McpServer, ctx: ToolContext): 
       inputSchema: { trunk_id: trunkId, ...trunkFields, confirm: confirm("changing this SIP trunk") },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
-    handler(async (a) => {
-      requireProvisioning(ctx, a.confirm, "changing this SIP trunk");
+    handler(async (a, extra: ToolExtra) => {
+      await requireProvisioning(server, extra, ctx, a.confirm, "changing this SIP trunk", `update SIP trunk ${a.trunk_id}${a.webhook_url ? `; webhooks go to ${hostOf(a.webhook_url)}` : ""}${a.primary_uri_uuid || a.fallback_uri_uuid ? "; outbound routing URIs change" : ""}`);
       if (a.webhook_url) assertPublicWebhook(a.webhook_url);
       const body = pick(a as Rec, Object.keys(trunkFields));
       if (!Object.keys(body).length) throw new VobizError("invalid_input", "Nothing to update.");
@@ -405,8 +410,8 @@ export function registerProvisioningTools(server: McpServer, ctx: ToolContext): 
       inputSchema: { trunk_id: trunkId, confirm: confirm("deleting this SIP trunk") },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
-    handler(async (a) => {
-      requireProvisioning(ctx, a.confirm, "deleting this SIP trunk");
+    handler(async (a, extra: ToolExtra) => {
+      await requireProvisioning(server, extra, ctx, a.confirm, "deleting this SIP trunk", `delete SIP trunk ${a.trunk_id} (numbers routed to it stop receiving calls through it)`);
       const res = await ctx.client.request("DELETE", ctx.client.accountPath(`/trunks/${a.trunk_id}`), { route: "DELETE trunks/{id}" });
       return ok({ ok: true, deleted: true, trunk_id: a.trunk_id, http_status: res.status });
     }),

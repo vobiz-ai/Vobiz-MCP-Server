@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import express from "express";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { silentLogger } from "../src/logger.js";
+import { silentLogger, type Logger } from "../src/logger.js";
 import { Sealer } from "../src/sealer.js";
 import { signV3 } from "../src/webhooks.js";
 import {
@@ -15,9 +15,14 @@ import {
   createReminderService,
   createRemindersRouter,
   formatLocalTime,
+  ANSWER_TTL_SEC,
+  MAX_NONCES,
+  NonceCache,
+  reminderSignatureMode,
   type Reminder,
   type ReminderInput,
   type ReminderServiceOptions,
+  type ReminderStore,
   type ScheduledJob,
 } from "../src/reminders/index.js";
 import { answerScript, inactiveScript, menuText, noResponseText, snoozedScript } from "../src/reminders/script.js";
@@ -31,6 +36,12 @@ const TO = "+919876543210";
 const T0 = new Date("2026-10-20T10:00:00.000Z");
 
 const sealer = new Sealer("s".repeat(40));
+const CALL_1 = "0f8e2c4a-1b3d-4e5f-8a9b-0c1d2e3f4a5b";
+const CALL_2 = "9a8b7c6d-5e4f-4a3b-9c2d-1e0f9a8b7c6d";
+const REQ_1 = "11111111-2222-4333-8444-555555555555";
+
+/** 503 that says when to come back: Vobiz refused before dialling. */
+const retryAfter503 = () => new Response(JSON.stringify({ error: "busy" }), { status: 503, headers: { "Content-Type": "application/json", "Retry-After": "30" } });
 
 /** MemoryScheduler that records jobs and never fires on its own (tests deliver payloads by hand). */
 class RecScheduler extends MemoryScheduler {
@@ -71,10 +82,19 @@ function input(over: Partial<ReminderInput> = {}): ReminderInput {
   };
 }
 
-function setup(o: { routes?: Route[]; env?: Record<string, string>; limits?: Record<string, number>; media?: Pick<ReminderServiceOptions, "mediaUrl" | "mediaExists"> } = {}) {
+function setup(
+  o: {
+    routes?: Route[];
+    env?: Record<string, string>;
+    limits?: Record<string, number>;
+    media?: Pick<ReminderServiceOptions, "mediaUrl" | "mediaExists">;
+    store?: ReminderStore;
+    log?: Logger;
+  } = {},
+) {
   let clock = T0.getTime();
   const fetch = mockFetch(o.routes ?? [ownNumberRoute, callOk]);
-  const store = new MemoryStore();
+  const store = o.store ?? new MemoryStore();
   const scheduler = new RecScheduler();
   const service = createReminderService({
     store,
@@ -82,7 +102,7 @@ function setup(o: { routes?: Route[]; env?: Record<string, string>; limits?: Rec
     sealer,
     baseUrl: PUBLIC,
     cfg: testConfig({ VOBIZ_AUTH_ID: undefined, VOBIZ_AUTH_TOKEN: undefined, ...o.env }),
-    log: silentLogger,
+    log: o.log ?? silentLogger,
     fetchImpl: fetch.impl,
     limits: o.limits,
     now: () => new Date(clock),
@@ -90,14 +110,16 @@ function setup(o: { routes?: Route[]; env?: Record<string, string>; limits?: Rec
   });
   const advance = (ms: number) => (clock += ms);
   const posts = () => fetch.calls.filter((c) => c.method === "POST");
-  /** Fires the last queued job and returns the ans token from the placed call. */
+  /** Moves the clock to the last queued job's time (jobs are refused when early), fires it and returns the ans token from the placed call. */
   const fireLast = async () => {
+    clock = Math.max(clock, scheduler.last().at.getTime());
     const res = await service.fire(scheduler.last().payload);
     const body = posts().at(-1)?.body as Record<string, string> | undefined;
     const ans = body?.answer_url ? /\/r\/([^/]+)\/answer$/.exec(body.answer_url)?.[1] : undefined;
     return { res, ans: ans as string };
   };
-  return { service, store, scheduler, fetch, advance, posts, fireLast };
+  const setClock = (ms: number) => (clock = ms);
+  return { service, store, scheduler, fetch, advance, setClock, posts, fireLast };
 }
 
 // ── script ──────────────────────────────────────────────────────
@@ -197,19 +219,28 @@ describe("MemoryStore", () => {
 function fakeFirestore() {
   const docs = new Map<string, Record<string, unknown>>();
   const snap = (d?: Record<string, unknown>) => ({ exists: !!d, data: () => (d ? structuredClone(d) : undefined) });
+  const queries: string[][] = [];
   const query = (filters: [string, unknown][], order?: string, lim = Infinity): any => ({
     where: (f: string, _op: string, v: unknown) => query([...filters, [f, v]], order, lim),
     orderBy: (f: string) => query(filters, f, lim),
     limit: (n: number) => query(filters, order, n),
     get: async () => {
+      queries.push(filters.map(([f]) => f));
       let rows = [...docs.values()].filter((d) => filters.every(([f, v]) => d[f] === v));
       if (order) rows = rows.sort((a, b) => String(b[order]).localeCompare(String(a[order])));
       return { docs: rows.slice(0, lim).map((d) => snap(d)) };
     },
+    count: () => ({
+      get: async () => {
+        queries.push(filters.map(([f]) => f));
+        return { data: () => ({ count: [...docs.values()].filter((d) => filters.every(([f, v]) => d[f] === v)).length }) };
+      },
+    }),
   });
-  const db: FirestoreLike & { docs: typeof docs; collections: string[] } = {
+  const db: FirestoreLike & { docs: typeof docs; collections: string[]; queries: string[][] } = {
     docs,
     collections: [],
+    queries,
     collection: (name: string) => {
       db.collections.push(name);
       return Object.assign(query([]), {
@@ -224,7 +255,14 @@ function fakeFirestore() {
       });
     },
     runTransaction: async (fn: any) =>
-      fn({ get: (ref: any) => ref.get(), set: (ref: any, d: Record<string, unknown>) => docs.set(ref.id, structuredClone(d)) }),
+      fn({
+        get: (ref: any) => ref.get(),
+        set: (ref: any, d: Record<string, unknown>) => docs.set(ref.id, structuredClone(d)),
+        create: (ref: any, d: Record<string, unknown>) => {
+          if (docs.has(ref.id)) throw Object.assign(new Error("exists"), { code: 6 });
+          docs.set(ref.id, structuredClone(d));
+        },
+      }),
   };
   return db;
 }
@@ -446,7 +484,8 @@ describe("ReminderService.fire", () => {
     expect(sealer.open("ans", ans)).toMatchObject({ rid: r.id, n: 1, authToken: TOKEN });
     const after = await t.service.get(AUTH_ID, r.id);
     expect(after).toMatchObject({ status: "calling", nextAt: null });
-    expect(after?.attempts).toEqual([{ n: 1, scheduledFor: "2026-10-20T12:00:00.000Z", startedAt: "2026-10-20T12:00:00.000Z", requestUuid: "req-1" }]);
+    const at = "2026-10-20T12:00:00.000Z";
+    expect(after?.attempts).toEqual([{ n: 1, scheduledFor: at, startedAt: at, claimedAt: at, placedAt: at, requestUuid: "req-1" }]);
 
     expect(await t.service.fire(t.scheduler.last().payload)).toEqual({ fired: false, reason: "stale" });
     expect(t.posts()).toHaveLength(1);
@@ -464,12 +503,13 @@ describe("ReminderService.fire", () => {
     expect(t.posts()).toEqual([]);
   });
 
-  it("rolls the claim back on a Vobiz 5xx so the redelivered job can call", async () => {
+  it("rolls the claim back on a 503 with Retry-After so the redelivered job can call", async () => {
     let fail = true;
     const t = setup({
-      routes: [ownNumberRoute, { method: "POST", path: acct("/Call/"), respond: () => (fail ? json(503, { error: "down" }) : json(201, { request_uuid: "req-2" })) }],
+      routes: [ownNumberRoute, { method: "POST", path: acct("/Call/"), respond: () => (fail ? retryAfter503() : json(201, { request_uuid: "req-2" })) }],
     });
     const r = await t.service.schedule(ACCOUNT, input());
+    t.advance(2 * 3600_000);
     expect(await t.service.fire(t.scheduler.last().payload)).toEqual({ fired: false, reason: "transient" });
     expect(await t.service.get(AUTH_ID, r.id)).toMatchObject({ status: "scheduled", attempts: [], nextAt: "2026-10-20T12:00:00.000Z" });
     fail = false;
@@ -479,14 +519,14 @@ describe("ReminderService.fire", () => {
   it("schedules a retry when the outcome is unknown and fails on a non-retryable API error", async () => {
     const t = setup({ routes: [ownNumberRoute, { method: "POST", path: acct("/Call/"), respond: () => "network" }] });
     const r = await t.service.schedule(ACCOUNT, input());
-    expect(await t.service.fire(t.scheduler.last().payload)).toEqual({ fired: false, reason: "call_failed_retry_scheduled" });
+    expect((await t.fireLast()).res).toEqual({ fired: false, reason: "call_failed_retry_scheduled" });
     expect(t.scheduler.last().id).toBe(`${r.id}-2`);
-    expect(t.scheduler.last().at.toISOString()).toBe("2026-10-20T10:05:00.000Z");
+    expect(t.scheduler.last().at.toISOString()).toBe("2026-10-20T12:05:00.000Z");
     expect((await t.service.get(AUTH_ID, r.id))?.attempts[0]).toMatchObject({ outcome: "failed", hangupCause: "api_error:outcome_unknown" });
 
     const bad = setup({ routes: [ownNumberRoute, { method: "POST", path: acct("/Call/"), respond: () => json(400, { error: "invalid from" }) }] });
     const r2 = await bad.service.schedule(ACCOUNT, input());
-    expect(await bad.service.fire(bad.scheduler.last().payload)).toEqual({ fired: false, reason: "call_failed" });
+    expect((await bad.fireLast()).res).toEqual({ fired: false, reason: "call_failed" });
     expect((await bad.service.get(AUTH_ID, r2.id))?.status).toBe("failed");
   });
 });
@@ -510,11 +550,11 @@ describe("ReminderService call flow", () => {
     const { ans } = await t.fireLast();
     expect(await t.service.inputXml(ans, "1")).toContain("Snoozed. I will call you again in 10 minutes.");
     expect(t.scheduler.last().id).toBe(`${r.id}-2`);
-    expect(t.scheduler.last().at.toISOString()).toBe("2026-10-20T10:10:00.000Z");
-    await t.service.hangup(ans, { HangupCause: "NORMAL_CLEARING", BillDuration: "12", CallUUID: "call-1" });
+    expect(t.scheduler.last().at.toISOString()).toBe("2026-10-20T12:10:00.000Z");
+    await t.service.hangup(ans, { HangupCause: "NORMAL_CLEARING", BillDuration: "12", CallUUID: CALL_1 });
     const after = await t.service.get(AUTH_ID, r.id);
-    expect(after).toMatchObject({ status: "snoozed", nextAt: "2026-10-20T10:10:00.000Z" });
-    expect(after?.attempts[0]).toMatchObject({ digits: "1", outcome: "snoozed", hangupCause: "NORMAL_CLEARING", billsec: 12, callUuid: "call-1" });
+    expect(after).toMatchObject({ status: "snoozed", nextAt: "2026-10-20T12:10:00.000Z" });
+    expect(after?.attempts[0]).toMatchObject({ digits: "1", outcome: "snoozed", hangupCause: "NORMAL_CLEARING", billsec: 12, callUuid: CALL_1 });
     expect(t.scheduler.jobs).toHaveLength(2);
     // The snoozed attempt fires as attempt 2.
     t.advance(10 * 60_000);
@@ -559,7 +599,7 @@ describe("ReminderService call flow", () => {
     await t.service.hangup(ans, { HangupCause: "NORMAL_CLEARING", BillDuration: "40" });
     await t.service.hangup(ans, { HangupCause: "NORMAL_CLEARING", BillDuration: "40" });
     expect(t.scheduler.jobs.map((j) => j.id)).toEqual([`${r.id}-1`, `${r.id}-2`]);
-    expect(await t.service.get(AUTH_ID, r.id)).toMatchObject({ status: "scheduled", nextAt: "2026-10-20T10:05:00.000Z" });
+    expect(await t.service.get(AUTH_ID, r.id)).toMatchObject({ status: "scheduled", nextAt: "2026-10-20T12:05:00.000Z" });
 
     ({ ans } = await t.fireLast());
     await t.service.hangup(ans, { HangupCause: "MACHINE_DETECTED", HangupCauseCode: "9100", BillDuration: "3" });
@@ -664,7 +704,8 @@ describe("reminders router", () => {
     expect([r.status, await r.json()]).toEqual([200, { fired: false, reason: "invalid_token" }]);
     await t.service.schedule(ACCOUNT, input());
     const payload = t.scheduler.last().payload;
-    callStatus = 503;
+    t.advance(2 * 3600_000);
+    callStatus = 429;
     r = await fire(payload);
     expect([r.status, await r.json()]).toEqual([503, { fired: false, reason: "transient" }]);
     callStatus = 201;
@@ -713,16 +754,16 @@ describe("reminders router", () => {
   it("handles form-encoded input and JSON hangups; bad input is never a 500", async () => {
     const r0 = await t.service.schedule(ACCOUNT, input());
     const { ans } = await t.fireLast();
-    const input2 = await fetch(`${base}/r/${ans}/input`, { method: "POST", body: new URLSearchParams({ Digits: "2", CallUUID: "c1" }) });
+    const input2 = await fetch(`${base}/r/${ans}/input`, { method: "POST", body: new URLSearchParams({ Digits: "2", CallUUID: CALL_1 }) });
     expect(input2.status).toBe(200);
     expect(await input2.text()).toContain("Your reminder is confirmed.");
     const h = await fetch(`${base}/r/${ans}/hangup`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ HangupCause: "NORMAL_CLEARING", BillDuration: "9", CallUUID: "c1" }),
+      body: JSON.stringify({ HangupCause: "NORMAL_CLEARING", BillDuration: "9", CallUUID: CALL_1 }),
     });
     expect(h.status).toBe(204);
-    expect((await t.service.get(AUTH_ID, r0.id))?.attempts[0]).toMatchObject({ outcome: "confirmed", billsec: 9, callUuid: "c1" });
+    expect((await t.service.get(AUTH_ID, r0.id))?.attempts[0]).toMatchObject({ outcome: "confirmed", billsec: 9, callUuid: CALL_1 });
 
     expect((await fetch(`${base}/r/vbzn_bad/hangup`, { method: "POST" })).status).toBe(400);
     const junk = await fetch(`${base}/r/${ans}/hangup`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{not json" });
@@ -829,5 +870,374 @@ describe("ReminderService with the audio library", () => {
     await t.service.schedule(ACCOUNT, input({ audioUrl: "https://cdn.example.com/alarm.mp3" }));
     const { ans } = await t.fireLast();
     expect(await t.service.answerXml(ans)).toContain("<Play>https://cdn.example.com/alarm.mp3</Play>");
+  });
+});
+
+// ── hardening: callback binding, limits, fire-time safety ───────
+
+const callReq1: Route = { method: "POST", path: acct("/Call/"), respond: () => json(201, { request_uuid: REQ_1 }) };
+const callWith = (respond: Route["respond"]): Route[] => [ownNumberRoute, { method: "POST", path: acct("/Call/"), respond }];
+
+describe("callback binding (A)", () => {
+  it("binds the attempt to the first CallUUID and refuses callbacks for another call", async () => {
+    const t = setup({ routes: [ownNumberRoute, callReq1] });
+    const r = await t.service.schedule(ACCOUNT, input());
+    const { ans } = await t.fireLast();
+    expect(await t.service.answerXml(ans, { callUuid: CALL_1, requestUuid: REQ_1 })).toContain("Take your medicine");
+    expect((await t.service.get(AUTH_ID, r.id))?.attempts[0]).toMatchObject({ requestUuid: REQ_1, callUuid: CALL_1 });
+    // A different call, or a different request, is refused; upper case is the same id.
+    expect(await t.service.inputXml(ans, "2", "", { callUuid: CALL_2 })).toBeUndefined();
+    expect(await t.service.inputXml(ans, "2", "", { requestUuid: CALL_2 })).toBeUndefined();
+    expect(await t.service.inputXml(ans, "2", "", { callUuid: "not-a-uuid" })).toBeUndefined();
+    await t.service.hangup(ans, { HangupCause: "NORMAL_CLEARING", BillDuration: "5", CallUUID: CALL_2 });
+    expect(await t.service.get(AUTH_ID, r.id)).toMatchObject({ status: "calling", attempts: [{ callUuid: CALL_1 }] });
+    expect(await t.service.inputXml(ans, "2", "", { callUuid: CALL_1.toUpperCase() })).toContain("Your reminder is confirmed.");
+    // A hangup without the ids is still accepted.
+    await t.service.hangup(ans, { HangupCause: "NORMAL_CLEARING", BillDuration: "9" });
+    expect((await t.service.get(AUTH_ID, r.id))?.attempts[0]).toMatchObject({ outcome: "confirmed", billsec: 9, callUuid: CALL_1 });
+  });
+
+  it("refuses a callback whose RequestUUID differs from the Call API response, before any CallUUID is known", async () => {
+    const t = setup({ routes: [ownNumberRoute, callReq1] });
+    const r = await t.service.schedule(ACCOUNT, input());
+    const { ans } = await t.fireLast();
+    expect(await t.service.answerXml(ans, { requestUuid: CALL_2, callUuid: CALL_1 })).toBeUndefined();
+    expect((await t.service.get(AUTH_ID, r.id))?.attempts[0].callUuid).toBeUndefined();
+    await t.service.hangup(ans, { HangupCause: "NO_ANSWER", RequestUUID: CALL_2 });
+    expect((await t.service.get(AUTH_ID, r.id))?.attempts[0].endedAt).toBeUndefined();
+  });
+
+  it("never stores a malformed CallUUID or a speech transcript", async () => {
+    const t = setup();
+    const r = await t.service.schedule(ACCOUNT, input());
+    const { ans } = await t.fireLast();
+    await t.service.answerXml(ans, { callUuid: "<script>" });
+    const first = await t.service.inputXml(ans, "", "my bank PIN is 7788 please");
+    expect(first).toContain("Sorry, that is not an option.");
+    await t.service.inputXml(ans, "x1<", "");
+    await t.service.hangup(ans, { HangupCause: "NORMAL_CLEARING", BillDuration: "20", CallUUID: "c1" });
+    const att = (await t.service.get(AUTH_ID, r.id))!.attempts[0];
+    expect(att).toMatchObject({ digits: "unrecognised", outcome: "no_input" });
+    expect(att.callUuid).toBeUndefined();
+    const stored = JSON.stringify(await t.store.list(AUTH_ID));
+    for (const leak of ["PIN", "7788", "<script>", "x1<"]) expect(stored).not.toContain(leak);
+
+    const s = setup();
+    const r2 = await s.service.schedule(ACCOUNT, input());
+    const c = await s.fireLast();
+    expect(await s.service.inputXml(c.ans, "", "Okay thanks, I am awake")).toContain("Your reminder is confirmed.");
+    expect((await s.service.get(AUTH_ID, r2.id))?.attempts[0].digits).toBe("2");
+  });
+
+  it("issues answer tokens that expire after 15 minutes", async () => {
+    expect(ANSWER_TTL_SEC).toBe(15 * 60);
+    vi.useFakeTimers({ now: new Date("2026-10-20T12:00:00.000Z") });
+    try {
+      const t = setup();
+      await t.service.schedule(ACCOUNT, input());
+      const { ans } = await t.fireLast();
+      const exp = sealer.open<{ exp: number }>("ans", ans)!.exp;
+      expect(exp - Math.floor(Date.now() / 1000)).toBe(900);
+      vi.setSystemTime(Date.now() + 901_000);
+      expect(sealer.open("ans", ans)).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("chooses the signature mode: the operator's explicit setting, else verify_if_present", () => {
+    expect(reminderSignatureMode(undefined, "require")).toBe("verify_if_present");
+    expect(reminderSignatureMode("  ", "require")).toBe("verify_if_present");
+    expect(reminderSignatureMode("require", "require")).toBe("require");
+    expect(reminderSignatureMode("off", "off")).toBe("off");
+    expect(reminderSignatureMode("verify_if_present", "verify_if_present")).toBe("verify_if_present");
+  });
+
+  it("caps the nonce replay cache", () => {
+    let t = 0;
+    const c = new NonceCache(3, 1000, () => t);
+    expect(["a", "b", "c", "d"].map((n) => c.reused(n))).toEqual([false, false, false, false]);
+    expect(c.size).toBe(3);
+    expect(c.reused("d")).toBe(true);
+    t = 2000;
+    expect(c.reused("d")).toBe(false); // expired
+    expect(c.size).toBe(1);
+    expect(MAX_NONCES).toBe(10_000);
+  });
+});
+
+describe("reminders router hardening (A)", () => {
+  let base = "";
+  let close: () => void = () => {};
+  let t: ReturnType<typeof setup>;
+  let lines: string[] = [];
+  let mode: "verify_if_present" | "require" = "verify_if_present";
+
+  beforeEach(async () => {
+    lines = [];
+    const log: Logger = { info: (m) => lines.push(m), debug: () => {} };
+    t = setup({ routes: [ownNumberRoute, callReq1], log: { info: (m) => m.includes("WARNING") && lines.push(m), debug: () => {} } });
+    const app = express();
+    app.use(createRemindersRouter(t.service, { baseUrl: PUBLIC, signatureMode: mode, sealer, log }));
+    const srv = app.listen(0, "127.0.0.1");
+    await new Promise((r) => srv.once("listening", r));
+    base = `http://127.0.0.1:${(srv.address() as AddressInfo).port}`;
+    close = () => srv.close();
+  });
+  afterEach(() => {
+    close();
+    mode = "verify_if_present";
+  });
+
+  it("logs one line per callback with the signature state and never the token", async () => {
+    const r = await t.service.schedule(ACCOUNT, input());
+    const { ans } = await t.fireLast();
+    const url = `${PUBLIC}/r/${ans}/answer`;
+    await fetch(`${base}/r/${ans}/answer`, { method: "POST", body: new URLSearchParams({ CallUUID: CALL_1 }) });
+    await fetch(`${base}/r/${ans}/answer`, { method: "POST", headers: { "X-Vobiz-Signature-V3": signV3(TOKEN, url, "n9"), "X-Vobiz-Signature-V3-Nonce": "n9" } });
+    await fetch(`${base}/r/${ans}/answer`, { method: "POST", headers: { "X-Vobiz-Signature-V3": signV3("nope", url, "n8"), "X-Vobiz-Signature-V3-Nonce": "n8" } });
+    expect(lines).toEqual([
+      `reminders: callback answer r=${r.id} n=1 signature=absent callUuid=present`,
+      `reminders: callback answer r=${r.id} n=1 signature=valid callUuid=absent`,
+      `reminders: callback answer r=${r.id} n=1 signature=invalid callUuid=absent`,
+    ]);
+    expect(lines.join("\n")).not.toContain(ans);
+    expect(lines.join("\n")).not.toContain(TOKEN);
+  });
+
+  it("answers a callback for another call with the inactive script", async () => {
+    await t.service.schedule(ACCOUNT, input());
+    const { ans } = await t.fireLast();
+    const a = await fetch(`${base}/r/${ans}/answer`, { method: "POST", body: new URLSearchParams({ CallUUID: CALL_1, RequestUUID: REQ_1 }) });
+    expect(await a.text()).toContain("Take your medicine");
+    const other = await fetch(`${base}/r/${ans}/input`, { method: "POST", body: new URLSearchParams({ Digits: "9", CallUUID: CALL_2 }) });
+    expect([other.status, await other.text()]).toEqual([200, inactiveScript()]);
+    expect(lines.some((l) => l.includes("WARNING input callback") && l.includes("refused"))).toBe(true);
+  });
+
+  it("accepts only POST on /input and /hangup", async () => {
+    await t.service.schedule(ACCOUNT, input());
+    const { ans } = await t.fireLast();
+    for (const leg of ["input", "hangup"]) {
+      for (const method of ["GET", "PUT", "DELETE"]) {
+        const r = await fetch(`${base}/r/${ans}/${leg}`, { method });
+        expect([leg, method, r.status]).toEqual([leg, method, 405]);
+      }
+    }
+  });
+
+  it("refuses unsigned callbacks in require mode", async () => {
+    close();
+    mode = "require";
+    const app = express();
+    app.use(createRemindersRouter(t.service, { baseUrl: PUBLIC, signatureMode: "require", sealer }));
+    const srv = app.listen(0, "127.0.0.1");
+    await new Promise((r) => srv.once("listening", r));
+    base = `http://127.0.0.1:${(srv.address() as AddressInfo).port}`;
+    close = () => srv.close();
+    await t.service.schedule(ACCOUNT, input());
+    const { ans } = await t.fireLast();
+    expect((await fetch(`${base}/r/${ans}/answer`, { method: "POST" })).status).toBe(403);
+    const url = `${PUBLIC}/r/${ans}/answer`;
+    const ok = await fetch(`${base}/r/${ans}/answer`, { method: "POST", headers: { "X-Vobiz-Signature-V3": signV3(TOKEN, url, "n1"), "X-Vobiz-Signature-V3-Nonce": "n1" } });
+    expect(ok.status).toBe(200);
+  });
+});
+
+describe("limit accounting (B)", () => {
+  const old = (id: string, over: Partial<Reminder> = {}) => rec(id, { createdAt: "2026-10-01T00:00:00.000Z", nextAt: "2026-10-25T00:00:00.000Z", to: "+919800000000", ...over });
+
+  async function crowd(store: ReminderStore) {
+    // 20 active reminders created long ago, buried under 520 newer finished ones (the old 500-record window).
+    for (let i = 0; i < 20; i++) await store.create(old(`r_active${i}`));
+    for (let i = 0; i < 520; i++) await store.create(rec(`r_done${i}`, { status: "done", createdAt: `2026-10-19T${String(10 + (i % 10)).padStart(2, "0")}:00:00.000Z`, nextAt: null, to: "+919811111111" }));
+  }
+
+  it("counts every active reminder however many records the account has (memory)", async () => {
+    const store = new MemoryStore();
+    await crowd(store);
+    expect(await store.countActive(AUTH_ID)).toBe(20);
+    const t = setup({ store });
+    await expect(t.service.schedule(ACCOUNT, input())).rejects.toMatchObject({ kind: "rate_limited" });
+  });
+
+  it("counts every active reminder however many records the account has (Firestore, equality queries only)", async () => {
+    const db = fakeFirestore();
+    const store = new FirestoreStore({ db });
+    await crowd(store);
+    db.queries.length = 0;
+    expect(await store.countActive(AUTH_ID)).toBe(20);
+    const t = setup({ store });
+    await expect(t.service.schedule(ACCOUNT, input())).rejects.toMatchObject({ kind: "rate_limited" });
+    // Only account+status and account+toDigits/to equality filters: no composite index needed.
+    const shapes = new Set(db.queries.map((q) => q.join("+")));
+    expect([...shapes].sort()).toEqual(["account+status", "account+to", "account+toDigits"]);
+  });
+
+  it("FirestoreStore: guarded create, destination lookup with legacy records, status listing", async () => {
+    const db = fakeFirestore();
+    const s = new FirestoreStore({ db });
+    const hash = createHash("sha256").update(AUTH_ID).digest("hex").slice(0, 16);
+    await s.create(rec("r_a"));
+    db.docs.set(`${hash}_r_legacy`, { ...rec("r_legacy"), account: hash }); // written before toDigits existed
+    expect(db.docs.get(`${hash}_r_a`)?.toDigits).toBe(TO.slice(1));
+    expect((await s.listByDestination(AUTH_ID, TO.slice(1))).map((r) => r.id).sort()).toEqual(["r_a", "r_legacy"]);
+    await expect(s.createGuarded(rec("r_b"), () => {
+      throw new Error("over");
+    })).rejects.toThrow("over");
+    expect(db.docs.has(`${hash}_r_b`)).toBe(false);
+    let seen: unknown;
+    await s.createGuarded(rec("r_b"), (x) => (seen = { active: x.active, dest: x.destination.length }));
+    expect(seen).toEqual({ active: 2, dest: 2 });
+    expect(db.docs.has(`${hash}_r_b`)).toBe(true);
+    expect(db.docs.get(`${hash}__limits`)).not.toHaveProperty("account");
+    expect((await s.list(AUTH_ID)).map((r) => r.id)).not.toContain("__limits");
+    await s.update(AUTH_ID, "r_b", { status: "calling" });
+    expect((await s.listByStatus("calling")).map((r) => r.id)).toEqual(["r_b"]);
+  });
+
+  it("parallel schedules cannot overshoot the active cap", async () => {
+    const t = setup({ limits: { maxActive: 2 } });
+    const results = await Promise.allSettled([0, 1, 2, 3, 4].map((i) => t.service.schedule(ACCOUNT, input({ to: `+91987654321${i}` }))));
+    expect(results.filter((x) => x.status === "fulfilled")).toHaveLength(2);
+    expect(await t.store.countActive(AUTH_ID)).toBe(2);
+  });
+
+  it("the daily cap counts started attempts and every attempt a pending reminder may still make", async () => {
+    const t = setup({ limits: { maxCallsPerDay: 5 } });
+    await t.service.schedule(ACCOUNT, input({ maxAttempts: 3 })); // 3 potential calls
+    await t.service.schedule(ACCOUNT, input({ maxAttempts: 1, at: "2026-10-20T13:00:00.000Z" })); // 4
+    await t.service.schedule(ACCOUNT, input({ maxAttempts: 1, at: "2026-10-20T14:00:00.000Z" })); // 5
+    await expect(t.service.schedule(ACCOUNT, input({ maxAttempts: 1, at: "2026-10-20T15:00:00.000Z" }))).rejects.toMatchObject({ kind: "rate_limited" });
+
+    const d = setup({ limits: { maxCallsPerDay: 2 } });
+    // Two finished reminders to the same number with attempts today (beyond any list window).
+    const started = (n: number) => ({ n, scheduledFor: "2026-10-20T08:00:00.000Z", startedAt: "2026-10-20T08:00:00.000Z", outcome: "no_answer" as const, endedAt: "2026-10-20T08:01:00.000Z" });
+    await d.store.create(rec("r_x", { status: "failed", nextAt: null, attempts: [started(1), started(2)] }));
+    await expect(d.service.schedule(ACCOUNT, input())).rejects.toMatchObject({ kind: "rate_limited" });
+  });
+
+  it("enforces the daily cap again at fire time", async () => {
+    const t = setup({ limits: { maxCallsPerDay: 2 } });
+    const r = await t.service.schedule(ACCOUNT, input({ maxAttempts: 1 }));
+    // Calls to the same number made since scheduling (e.g. snoozes and retries of another reminder).
+    const started = (n: number) => ({ n, scheduledFor: "2026-10-20T11:00:00.000Z", startedAt: "2026-10-20T11:00:00.000Z", outcome: "no_answer" as const, endedAt: "2026-10-20T11:01:00.000Z" });
+    await t.store.create(rec("r_other", { status: "failed", nextAt: null, attempts: [started(1), started(2)] }));
+    expect((await t.fireLast()).res).toEqual({ fired: false, reason: "daily_cap" });
+    expect(t.posts()).toEqual([]);
+    expect(await t.service.get(AUTH_ID, r.id)).toMatchObject({ status: "failed", nextAt: null, attempts: [{ outcome: "failed", error: "daily_cap" }] });
+  });
+});
+
+describe("fire-time safety (C)", () => {
+  it("refuses a job delivered more than 90 s early, with 200 for Cloud Tasks", async () => {
+    const t = setup();
+    const r = await t.service.schedule(ACCOUNT, input());
+    const payload = t.scheduler.last().payload;
+    expect(await t.service.fire(payload)).toEqual({ fired: false, reason: "too_early" });
+    t.setClock(Date.parse("2026-10-20T11:58:29.000Z"));
+    expect(await t.service.fire(payload)).toEqual({ fired: false, reason: "too_early" });
+    expect(await t.service.get(AUTH_ID, r.id)).toMatchObject({ status: "scheduled", attempts: [] });
+    expect(t.posts()).toEqual([]);
+    t.setClock(Date.parse("2026-10-20T11:58:31.000Z"));
+    expect(await t.service.fire(payload)).toEqual({ fired: true });
+  });
+
+  it.each([500, 502, 504])("keeps the claim on a Vobiz %i and retries on the normal schedule", async (status) => {
+    const t = setup({ routes: callWith(() => json(status, { error: "x" })) });
+    const r = await t.service.schedule(ACCOUNT, input({ maxAttempts: 2 }));
+    expect((await t.fireLast()).res).toEqual({ fired: false, reason: "call_failed_retry_scheduled" });
+    expect(await t.service.get(AUTH_ID, r.id)).toMatchObject({
+      status: "scheduled",
+      nextAt: "2026-10-20T12:05:00.000Z",
+      attempts: [{ n: 1, outcome: "failed", error: "outcome_unknown", hangupCause: "api_error:outcome_unknown" }],
+    });
+    expect(t.scheduler.last()).toMatchObject({ id: `${r.id}-2` });
+    // The redelivered first job is stale: no second call straight away.
+    expect(await t.service.fire(t.scheduler.jobs[0].payload)).toEqual({ fired: false, reason: "stale" });
+    // The retry is bounded by maxAttempts.
+    expect((await t.fireLast()).res).toEqual({ fired: false, reason: "call_failed" });
+    expect((await t.service.get(AUTH_ID, r.id))?.status).toBe("failed");
+    expect(t.posts()).toHaveLength(2);
+  });
+
+  it("a 503 without Retry-After is outcome unknown; 429 and a refused connection give the claim back", async () => {
+    const plain = setup({ routes: callWith(() => json(503, { error: "x" })) });
+    await plain.service.schedule(ACCOUNT, input());
+    expect((await plain.fireLast()).res).toEqual({ fired: false, reason: "call_failed_retry_scheduled" });
+
+    const limited = setup({ routes: callWith(() => json(429, { error: "slow down" })) });
+    const r = await limited.service.schedule(ACCOUNT, input());
+    expect((await limited.fireLast()).res).toEqual({ fired: false, reason: "transient" });
+    expect(await limited.service.get(AUTH_ID, r.id)).toMatchObject({ status: "scheduled", attempts: [] });
+
+    const refused = setup({
+      routes: callWith(() => {
+        throw Object.assign(new TypeError("fetch failed"), { cause: { code: "ECONNREFUSED" } });
+      }),
+    });
+    const r2 = await refused.service.schedule(ACCOUNT, input());
+    expect((await refused.fireLast()).res).toEqual({ fired: false, reason: "transient" });
+    expect(await refused.service.get(AUTH_ID, r2.id)).toMatchObject({ status: "scheduled", attempts: [] });
+  });
+
+  it("holds a fresh claim (503 in_progress) and re-dials a dead one after the 10-minute lease", async () => {
+    const t = setup();
+    const r = await t.service.schedule(ACCOUNT, input());
+    t.setClock(Date.parse("2026-10-20T12:00:00.000Z"));
+    // A replica claimed attempt 1 and died before the Call API answered.
+    await t.store.update(AUTH_ID, r.id, (cur) => ({
+      status: "calling",
+      nextAt: null,
+      attempts: [{ n: 1, scheduledFor: cur.nextAt!, startedAt: "2026-10-20T12:00:00.000Z", claimedAt: "2026-10-20T12:00:00.000Z" }],
+    }));
+    const payload = t.scheduler.last().payload;
+    t.advance(5 * 60_000);
+    expect(await t.service.fire(payload)).toEqual({ fired: false, reason: "in_progress" });
+    expect(t.posts()).toEqual([]);
+    t.advance(5 * 60_000 + 1000);
+    expect(await t.service.fire(payload)).toEqual({ fired: true });
+    expect(t.posts()).toHaveLength(1);
+    expect((await t.service.get(AUTH_ID, r.id))?.attempts[0]).toMatchObject({ claimedAt: "2026-10-20T12:10:01.000Z", requestUuid: "req-1" });
+    // Once placed, a redelivery never re-dials, however late.
+    t.advance(3600_000);
+    expect(await t.service.fire(payload)).toEqual({ fired: false, reason: "stale" });
+    expect(t.posts()).toHaveLength(1);
+  });
+
+  it("POST /jobs/fire answers 503 for in_progress and 200 for too_early", async () => {
+    const t = setup();
+    const app = express();
+    app.use(createRemindersRouter(t.service, { baseUrl: PUBLIC, signatureMode: "verify_if_present", sealer }));
+    const srv = app.listen(0, "127.0.0.1");
+    await new Promise((res) => srv.once("listening", res));
+    const url = `http://127.0.0.1:${(srv.address() as AddressInfo).port}/jobs/fire`;
+    try {
+      const r = await t.service.schedule(ACCOUNT, input());
+      const payload = t.scheduler.last().payload;
+      let res = await fetch(url, { method: "POST", body: payload });
+      expect([res.status, await res.json()]).toEqual([200, { fired: false, reason: "too_early" }]);
+      t.setClock(Date.parse("2026-10-20T12:00:00.000Z"));
+      await t.store.update(AUTH_ID, r.id, (cur) => ({ status: "calling", nextAt: null, attempts: [{ n: 1, scheduledFor: cur.nextAt!, claimedAt: "2026-10-20T12:00:00.000Z" }] }));
+      res = await fetch(url, { method: "POST", body: payload });
+      expect([res.status, await res.json()]).toEqual([503, { fired: false, reason: "in_progress" }]);
+    } finally {
+      srv.close();
+    }
+  });
+
+  it("sweepStale fails reminders stuck in calling for over 30 minutes", async () => {
+    const t = setup();
+    const stuck = await t.service.schedule(ACCOUNT, input());
+    const fresh = await t.service.schedule(ACCOUNT, input({ to: "+919876543211" }));
+    t.setClock(Date.parse("2026-10-20T12:00:00.000Z"));
+    await t.service.fire(t.scheduler.jobs[0].payload);
+    t.advance(20 * 60_000);
+    await t.service.fire(t.scheduler.jobs[1].payload);
+    t.advance(11 * 60_000);
+    expect(await t.service.sweepStale()).toBe(1);
+    expect(await t.service.get(AUTH_ID, stuck.id)).toMatchObject({ status: "failed", nextAt: null, attempts: [{ outcome: "failed", error: "stale_claim" }] });
+    expect((await t.service.get(AUTH_ID, fresh.id))?.status).toBe("calling");
+    expect(await t.service.sweepStale()).toBe(0);
   });
 });

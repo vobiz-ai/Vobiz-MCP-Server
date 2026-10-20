@@ -6,9 +6,18 @@ import { VobizError } from "../errors.js";
 import { IdempotencyStore, withIdempotency } from "../idempotency.js";
 import { classifyHangup } from "../outcomes.js";
 import { assertDestinationAllowed, effectiveTimeLimit } from "../policy.js";
+import { UNTRUSTED_DESCRIPTION, markUntrusted, withUntrustedNotice } from "../guard/untrusted.js";
+import { CONFIRM_NOTE, hostOf, requireApproval, supportsFormElicitation, type ToolExtra } from "../guard/confirm.js";
+import { acquireCallRate, reserveCallSlot, sharedOf, type CallSlot } from "../guard/capacity.js";
 import { assertAllowedUrl, callId, handler, idempotencyKey, ok, phoneNumber, toE164 } from "../util.js";
+import { SPEAK_LANGS } from "../xml.js";
+import { checkPlayUrl, cleanSayText, effectiveOrder, LOOP_MAX, looksLikeUrl, SAY_MAX_CHARS } from "../callscript/service.js";
+import type { CallScript, CallScriptOrder, CallScriptUrls, SpeakLang } from "../callscript/types.js";
 
 type Rec = Record<string, unknown>;
+
+/** Call and CDR fields a caller can set (caller ID name, SIP headers, free-text fields). */
+export const CALL_UNTRUSTED_FIELDS = ["caller_name", "from_name", "caller_id_name", "sip_headers", "extra_headers", "notes"];
 
 /** Looks a call up in a given live state; returns undefined on 404. */
 async function findLiveOrQueued(ctx: ToolContext, uuid: string, status: "live" | "queued"): Promise<Rec | undefined> {
@@ -68,8 +77,12 @@ export function outcomeFields(cdr: Rec): Rec {
   return { outcome: c.outcome, typical_sip_code: c.typical_sip_code, retry_may_succeed: c.retryable };
 }
 
-/** Refuses to start a call when this server's concurrency cap or the account balance floor is reached. */
-async function assertCapacity(ctx: ToolContext): Promise<void> {
+/**
+ * Refuses to start a call when this server's concurrency cap or the account balance floor is reached.
+ * `slot` was reserved synchronously before any network check; other in-flight attempts (in this process,
+ * or on every replica with a shared backend) count against the cap until Vobiz lists their calls.
+ */
+async function assertCapacity(ctx: ToolContext, slot: CallSlot): Promise<void> {
   const { policy } = ctx.cfg;
   const live = await ctx.client.request<Rec>("GET", ctx.client.accountPath("/Call/"), {
     query: { status: "live" },
@@ -79,11 +92,15 @@ async function assertCapacity(ctx: ToolContext): Promise<void> {
     query: { status: "queued" },
     route: "GET Call/?status=queued",
   });
-  const count = (Array.isArray(live.data?.calls) ? live.data.calls.length : 0) + (Array.isArray(queued.data?.calls) ? queued.data.calls.length : 0);
+  const ids = (d: Rec | undefined) => (Array.isArray(d?.calls) ? (d.calls as unknown[]) : []);
+  const listed = new Set([...ids(live.data), ...ids(queued.data)].map(String));
+  const listedCount = ids(live.data).length + ids(queued.data).length;
+  const inFlight = await slot.others(listed);
+  const count = listedCount + inFlight;
   if (count >= policy.maxConcurrentCalls) {
     throw new VobizError(
       "rate_limited",
-      `${count} calls are already live or queued on this account; this server allows at most ${policy.maxConcurrentCalls} at once (VOBIZ_MAX_CONCURRENT_CALLS).`,
+      `${listedCount} calls are already live or queued on this account${inFlight ? ` and ${inFlight} more are being placed` : ""}; this server allows at most ${policy.maxConcurrentCalls} at once (VOBIZ_MAX_CONCURRENT_CALLS).`,
     );
   }
   if (policy.checkBalance) {
@@ -151,6 +168,118 @@ async function placeCall(
   };
 }
 
+interface ScriptArgs {
+  answer_url?: string;
+  say?: string;
+  language?: SpeakLang;
+  voice?: "WOMAN" | "MAN";
+  play?: string;
+  loop?: number;
+  order?: CallScriptOrder;
+}
+
+/** A minted call script for make_call `say` / `play`, with what the result reports about it. */
+interface MintedScript {
+  urls: CallScriptUrls;
+  /** Stable description of the content, for the idempotency fingerprint (the minted URLs differ on every call). */
+  fingerprint: string;
+  view: Record<string, unknown>;
+  howTo: string;
+}
+
+/**
+ * Validates make_call's `say` / `play` and mints the script this server will serve as the call's answer URL.
+ * Returns undefined when neither is given (the caller's own answer_url, or the server default, controls the call).
+ */
+async function resolveCallScript(ctx: ToolContext, a: ScriptArgs): Promise<MintedScript | undefined> {
+  if (a.say === undefined && a.play === undefined) {
+    if (a.language || a.voice || a.loop !== undefined || a.order) {
+      throw new VobizError("invalid_input", "`language`, `voice`, `loop` and `order` only apply together with `say` or `play`.");
+    }
+    return undefined;
+  }
+  if (a.answer_url) {
+    throw new VobizError(
+      "invalid_input",
+      "`say` / `play` cannot be combined with `answer_url`: with say/play this server hosts the call's VobizXML. Drop answer_url, or put the content in your own XML.",
+    );
+  }
+  if (!ctx.callScripts) {
+    throw new VobizError(
+      "invalid_input",
+      "`say` and `play` need this server to host the call's VobizXML, which only the hosted Vobiz connector does today (a self-hosted server with VOBIZ_PUBLIC_URL does not serve call scripts yet). Pass an `answer_url` that returns VobizXML instead.",
+    );
+  }
+  if ((a.language || a.voice) && a.say === undefined) throw new VobizError("invalid_input", "`language` and `voice` apply to `say`; add the text to speak.");
+  const authId = ctx.cfg.authId;
+  if (!authId) throw new VobizError("invalid_input", "No Vobiz account is configured for this session.");
+
+  let say: CallScript["say"];
+  if (a.say !== undefined) {
+    const text = cleanSayText(a.say);
+    if (!text) throw new VobizError("invalid_input", "`say` is empty.");
+    if (text.length > SAY_MAX_CHARS) throw new VobizError("invalid_input", `\`say\` is longer than ${SAY_MAX_CHARS} characters.`);
+    say = { text, ...(a.language ? { language: a.language } : {}), ...(a.voice ? { voice: a.voice } : {}) };
+  }
+
+  let play: CallScript["play"];
+  let playView: string | undefined;
+  if (a.play !== undefined) {
+    const raw = a.play.trim();
+    if (looksLikeUrl(raw)) {
+      play = { url: checkPlayUrl(raw) };
+      playView = "url";
+    } else {
+      if (!ctx.media) {
+        throw new VobizError("invalid_input", "This server has no audio library. Pass `play` as a direct https link to an .mp3 or .wav file.");
+      }
+      const m = await ctx.media.find(authId, raw);
+      if (!m) {
+        const names = (await ctx.media.list(authId)).slice(0, 10).map((x) => x.name);
+        throw new VobizError(
+          "not_found",
+          `No audio named "${raw.slice(0, 80)}" is in this account's audio library. ` +
+            (names.length ? `Available: ${names.map((n) => `"${n}"`).join(", ")}.` : "The library is empty.") +
+            " Pass a direct https .mp3/.wav link, or add the file with import_audio_from_url or create_audio_upload_link.",
+        );
+      }
+      play = { audioId: m.id, name: m.name };
+      playView = `library:${m.name}`;
+    }
+  }
+
+  const loop = a.loop ?? 1;
+  const script: CallScript = {
+    authId,
+    ...(ctx.cfg.authToken ? { authToken: ctx.cfg.authToken } : {}),
+    ...(say ? { say } : {}),
+    ...(play ? { play } : {}),
+    loop,
+    order: a.order ?? "play_then_say",
+  };
+  const order = effectiveOrder(script);
+  const parts = [
+    play ? `plays ${playView === "url" ? "the audio link" : `"${(play as { name: string }).name}" from the audio library`}${loop === 0 ? " until the call is hung up" : loop > 1 ? ` ${loop} times` : ""}` : "",
+    say ? "speaks the text" : "",
+  ].filter(Boolean);
+  if (order === "say_then_play") parts.reverse();
+  return {
+    urls: ctx.callScripts.mint(script),
+    fingerprint: `script:${JSON.stringify({ say: say?.text, language: say?.language, voice: say?.voice, play, loop, order })}`,
+    view: { say: !!say, ...(playView ? { play: playView } : {}), loop, ...(say && play ? { order } : {}) },
+    howTo:
+      `When the call is answered, this server's script ${parts.join(", then ")}` +
+      (loop === 0 && play ? "." : ", then hangs up automatically.") +
+      " Use get_call_status with call_uuid = request_uuid to see whether it was answered.",
+  };
+}
+
+const PLACEHOLDER_HOW_TO =
+  "No answer_url, say or play was given, so this call uses the server's placeholder answer URL: it only speaks a short greeting and ends after a few seconds. " +
+  "To put real content on a call, pass `say` (text to speak) and/or `play` (an audio link or library file).";
+
+const supportsElicitation = (server: McpServer) => supportsFormElicitation(server.server.getClientCapabilities());
+
 export function registerCallTools(server: McpServer, ctx: ToolContext): void {
   // ── make_call ────────────────────────────────────────────────
   server.registerTool(
@@ -158,9 +287,9 @@ export function registerCallTools(server: McpServer, ctx: ToolContext): void {
     {
       title: "Place an outbound call",
       description:
-        "Initiate ONE outbound call through Vobiz (POST /Account/{auth_id}/Call/). " +
+        "Place ONE outbound call through Vobiz (POST /Account/{auth_id}/Call/); `say` (text to speak) and/or `play` (a direct https .mp3/.wav link, or the name of a file in the audio library) is the simplest way to put content on it: this server hosts the call script, and the call ends automatically after the content unless `loop` is 0. " +
+        "`answer_url` is only for callers hosting their own VobizXML; a call with neither answer_url nor say/play only speaks a short placeholder greeting and ends after a few seconds. " +
         "Required: `to` (destination, E.164), `from` (caller ID: must be an active number on this account), and `confirm: true` after the user has explicitly approved this exact call. " +
-        "`answer_url` is required unless the server has VOBIZ_DEFAULT_ANSWER_URL configured; Vobiz fetches call-control XML from it when the call is answered. " +
         "Success means Vobiz ACCEPTED/QUEUED the request and returned a request_uuid; it does NOT mean the call connected. " +
         "Follow up with get_call_status using the returned request_uuid as call_uuid. Never call this twice for the same intent: if the outcome is unknown, check list_live_calls / list_call_records instead. " +
         "Pass a unique idempotency_key per intended call: repeating a key replays the first result instead of dialling again. " +
@@ -170,14 +299,38 @@ export function registerCallTools(server: McpServer, ctx: ToolContext): void {
         from: phoneNumber.describe("Caller ID: a Vobiz number on this account, E.164."),
         confirm: z
           .boolean()
-          .describe("Must be true, set only after the user explicitly confirmed this call (destination and caller ID)."),
+          .describe("Must be true, set only after the user explicitly confirmed this call (destination and caller ID)." + CONFIRM_NOTE),
         answer_url: z
           .string()
           .url()
           .optional()
-          .describe("URL that returns Vobiz XML when the call is answered. Defaults to the server's VOBIZ_DEFAULT_ANSWER_URL."),
+          .describe("Your own URL that returns VobizXML when the call is answered. Not combinable with say/play. Defaults to the server's VOBIZ_DEFAULT_ANSWER_URL."),
+        say: z
+          .string()
+          .min(1)
+          .max(SAY_MAX_CHARS)
+          .optional()
+          .describe(`Text spoken when the call is answered (max ${SAY_MAX_CHARS} characters), e.g. "Your table is ready."`),
+        language: z.enum(SPEAK_LANGS).optional().describe("Speech language for `say` (default en-US)."),
+        voice: z.enum(["WOMAN", "MAN"]).optional().describe("Speech voice for `say` (default WOMAN)."),
+        play: z
+          .string()
+          .min(1)
+          .max(2048)
+          .optional()
+          .describe(
+            "Audio played when the call is answered: a direct https link to an .mp3 or .wav FILE (not a web page such as Pixabay, YouTube, Spotify or SoundCloud), or the name or id of a file in the audio library.",
+          ),
+        loop: z
+          .number()
+          .int()
+          .min(0)
+          .max(LOOP_MAX)
+          .optional()
+          .describe(`How many times to play the audio (or speak the text when there is no audio), 0..${LOOP_MAX}, default 1. 0 = repeat until the call is hung up.`),
+        order: z.enum(["play_then_say", "say_then_play"]).optional().describe("With both say and play: which comes first (default play_then_say)."),
         answer_method: z.enum(["GET", "POST"]).optional().describe("HTTP method for answer_url (default POST)."),
-        hangup_url: z.string().url().optional().describe("URL notified when the call hangs up (defaults to answer_url)."),
+        hangup_url: z.string().url().optional().describe("URL notified when the call hangs up (defaults to answer_url; with say/play, to this server's script hangup URL)."),
         caller_name: z.string().max(50).optional().describe("Caller name shown where supported (max 50 chars)."),
         time_limit: z
           .number()
@@ -191,7 +344,7 @@ export function registerCallTools(server: McpServer, ctx: ToolContext): void {
       },
       annotations: { destructiveHint: true, idempotentHint: false, openWorldHint: true, readOnlyHint: false },
     },
-    handler(async (args) => {
+    handler(async (args, extra: ToolExtra) => {
       const { cfg } = ctx;
       if (!cfg.enableCalls) {
         throw new VobizError(
@@ -201,7 +354,7 @@ export function registerCallTools(server: McpServer, ctx: ToolContext): void {
       }
       const toDigits = digitsOnly(args.to);
       const fromDigits = digitsOnly(args.from);
-      if (args.confirm !== true) {
+      if (args.confirm !== true && !supportsElicitation(server)) {
         throw new VobizError(
           "confirmation_required",
           `Ask the user to confirm calling ${toE164(args.to)} from ${toE164(args.from)}, then call make_call again with confirm: true.`,
@@ -211,40 +364,56 @@ export function registerCallTools(server: McpServer, ctx: ToolContext): void {
       if (cfg.allowedCallerIds.length && !cfg.allowedCallerIds.includes(fromDigits)) {
         throw new VobizError("not_allowed", "This caller ID is not in the server's VOBIZ_ALLOWED_CALLER_IDS allowlist.");
       }
-      const answerUrl = args.answer_url ?? cfg.defaultAnswerUrl;
+      const script = await resolveCallScript(ctx, args);
+      const answerUrl = script?.urls.answerUrl ?? args.answer_url ?? cfg.defaultAnswerUrl;
       if (!answerUrl) {
         throw new VobizError(
           "invalid_input",
-          "answer_url is required (Vobiz needs it to control the call once answered) and no VOBIZ_DEFAULT_ANSWER_URL is configured.",
+          "Give `say` (text to speak) and/or `play` (audio), or an `answer_url` that returns VobizXML: Vobiz needs one of them to control the call once answered, and no VOBIZ_DEFAULT_ANSWER_URL is configured.",
         );
       }
+      const placeholder = !script && !args.answer_url && [ctx.callScripts?.baseUrl, cfg.publicUrl?.replace(/\/+$/, "")].some((b) => b && answerUrl === `${b}/answer`);
+      const resultExtra = script ? { script: script.view, how_to: script.howTo } : placeholder ? { script: { placeholder: true }, how_to: PLACEHOLDER_HOW_TO } : {};
+      const callArgs = script ? { ...args, answer_method: "POST", hangup_url: args.hangup_url ?? script.urls.hangupUrl } : args;
       if (args.answer_url) assertAllowedUrl(cfg, args.answer_url, "answer_url");
       if (args.hangup_url) assertAllowedUrl(cfg, args.hangup_url, "hangup_url");
       const timeLimit = effectiveTimeLimit(cfg, args.time_limit);
+      // Policy checks first, so the user is never asked to approve something the server would refuse.
+      await requireApproval(server, extra, {
+        confirmed: args.confirm,
+        message: `Place a real, billed phone call to ${toE164(args.to)} from ${toE164(args.from)} (up to ${Math.round(timeLimit / 60)} min, per-minute rates apply). Call control comes from ${hostOf(answerUrl)}. Approve?`,
+        fallback: `Ask the user to confirm calling ${toE164(args.to)} from ${toE164(args.from)}, then call make_call again with confirm: true.`,
+      });
 
-      const fingerprint = IdempotencyStore.fingerprint({ op: "make_call", from: fromDigits, to: toDigits, answerUrl, timeLimit });
+      const fingerprint = IdempotencyStore.fingerprint({ op: "make_call", from: fromDigits, to: toDigits, answerUrl: script?.fingerprint ?? answerUrl, timeLimit });
       // Without an explicit key, identical calls inside the duplicate window share one automatic key.
       const key = args.idempotency_key ? `key:${args.idempotency_key}` : `auto:${fingerprint}`;
-      if (!args.idempotency_key) {
-        // Automatic records only block identical calls inside the duplicate window
-        // (records with an unknown outcome stay blocking for the full idempotency TTL).
-        ctx.idempotency.dropIfOlder(key, cfg.duplicateCallWindowSec * 1000);
-      }
+      // Automatic records only block identical calls inside the duplicate window
+      // (records with an unknown outcome stay blocking for the full idempotency TTL).
+      const window = args.idempotency_key ? {} : { replaceDoneOlderThanMs: cfg.duplicateCallWindowSec * 1000 };
 
       return ok(
-        await withIdempotency(ctx.idempotency, key, fingerprint, async () => {
-          if (cfg.verifyCallerId) await assertCallerIdOwned(ctx, args.from);
-          await assertCapacity(ctx);
-          if (!ctx.callLimiter.wouldAllow()) {
-            throw new VobizError("rate_limited", `This MCP server allows at most ${cfg.maxCallsPerMinute} call initiations per minute.`);
-          }
-          if (!ctx.hourlyCallLimiter.wouldAllow()) {
-            throw new VobizError("rate_limited", `This MCP server allows at most ${cfg.policy.maxCallsPerHour} call initiations per hour.`);
-          }
-          ctx.callLimiter.tryAcquire();
-          ctx.hourlyCallLimiter.tryAcquire();
-          return placeCall(ctx, { fromDigits, to: args.to, answerUrl, timeLimit, args });
-        }).then((r) =>
+        await withIdempotency(
+          ctx.idempotency,
+          key,
+          fingerprint,
+          async () => {
+            // Reserved synchronously, before any network check (no check-then-dial race).
+            const slot = reserveCallSlot(ctx);
+            try {
+              if (cfg.verifyCallerId) await assertCallerIdOwned(ctx, args.from);
+              await assertCapacity(ctx, slot);
+              await acquireCallRate(ctx);
+              const placed = await placeCall(ctx, { fromDigits, to: args.to, answerUrl, timeLimit, args: callArgs });
+              await slot.settle(String(placed.request_uuid));
+              return { ...placed, ...resultExtra };
+            } catch (err) {
+              await slot.release();
+              throw err;
+            }
+          },
+          { ...window, shared: sharedOf(ctx) },
+        ).then((r) =>
           r.replayed && !args.idempotency_key
             ? (() => {
                 throw new VobizError(
@@ -266,18 +435,18 @@ export function registerCallTools(server: McpServer, ctx: ToolContext): void {
       title: "Get call status",
       description:
         "Return the current lifecycle state of one call: queued (accepted, not yet dialed), live (ringing / in-progress), or completed (from the call detail record). " +
-        "Use the request_uuid returned by make_call, or any call_uuid. Read-only.",
+        "Use the request_uuid returned by make_call, or any call_uuid. Read-only." + UNTRUSTED_DESCRIPTION,
       inputSchema: { call_uuid: callId.describe("Call UUID or the request_uuid from make_call.") },
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     handler(async ({ call_uuid }) => {
       const live = await findLiveOrQueued(ctx, call_uuid, "live");
       if (live) {
-        return ok({ ok: true, call_uuid, state: "live", call_status: live.call_status ?? null, source: "live_call", call: live });
+        return ok(withUntrustedNotice({ ok: true, call_uuid, state: "live", call_status: live.call_status ?? null, source: "live_call", call: markUntrusted(live) }, CALL_UNTRUSTED_FIELDS));
       }
       const queued = await findLiveOrQueued(ctx, call_uuid, "queued");
       if (queued) {
-        return ok({ ok: true, call_uuid, state: "queued", call_status: queued.call_status ?? "queued", source: "queued_call", call: queued });
+        return ok(withUntrustedNotice({ ok: true, call_uuid, state: "queued", call_status: queued.call_status ?? "queued", source: "queued_call", call: markUntrusted(queued) }, CALL_UNTRUSTED_FIELDS));
       }
       const cdr = await findCdr(ctx, call_uuid);
       if (cdr) {

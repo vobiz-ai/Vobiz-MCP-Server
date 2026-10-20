@@ -8,8 +8,9 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:
  *   ans                              per-call context behind /r/:token/answer|input|hangup
  *   upl                              a one-time audio upload link (/upload/:token)
  *   med                              a short-lived audio URL handed to Vobiz in <Play> (/media/:token)
+ *   scr                              a one-off call script behind /c/:token/answer|hangup (make_call say/play)
  */
-export type SealKind = "client" | "txn" | "code" | "access" | "refresh" | "job" | "ans" | "upl" | "med";
+export type SealKind = "client" | "txn" | "code" | "access" | "refresh" | "job" | "ans" | "upl" | "med" | "scr";
 
 const PREFIX: Record<SealKind, string> = {
   client: "vbzc_",
@@ -21,6 +22,7 @@ const PREFIX: Record<SealKind, string> = {
   ans: "vbzn_",
   upl: "vbzu_",
   med: "vbzm_",
+  scr: "vbzs_",
 };
 
 /** Authenticated encryption (AES-256-GCM) for every token this server hands out. */
