@@ -22,6 +22,7 @@ import { randomBytes } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express, { type Request, type Response } from "express";
+import { rateLimit } from "express-rate-limit";
 import { mcpAuthRouter, createOAuthMetadata, getOAuthProtectedResourceMetadataUrl } from "@modelcontextprotocol/sdk/server/auth/router.js";
 import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
 import { InvalidClientMetadataError, InvalidGrantError, InvalidTargetError, InvalidTokenError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
@@ -44,7 +45,7 @@ import { SERVER_VERSION } from "./version.js";
 import { VOBIZ_FAVICON_SVG } from "./brand.js";
 import { Sealer } from "./sealer.js";
 import { classifyClient, redirectUriProblem, verifiedCimdName, type TrustedClient } from "./oauth/clients.js";
-import { ERROR_CSP, consentCsp, consentPage, errorPage, esc, type Choice, type Scope } from "./oauth/consent.js";
+import { ERROR_CSP, consentCsp, consentPage, defaultChoice, errorPage, esc, type Choice, type Scope } from "./oauth/consent.js";
 import { DEFAULT_TIME_ZONE, isValidTimeZone } from "./tz.js";
 export { Sealer };
 
@@ -78,6 +79,20 @@ const CODE_TTL = 300;
 const TXN_TTL = 900;
 const SCOPE = "vobiz";
 const AUTH_ID_RE = /^(MA|SA)_[A-Za-z0-9]{4,40}$/;
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+/** Failed credential attempts allowed per sign-in transaction. */
+const MAX_LOGIN_ATTEMPTS = 5;
+
+/** The sealed sign-in transaction carried by the consent form; `n` counts failed credential attempts. */
+interface Txn {
+  cid: string;
+  redirect: string;
+  state: string | null;
+  challenge: string;
+  resource: string;
+  n?: number;
+  exp: number;
+}
 
 interface Grant {
   authId: string;
@@ -120,6 +135,8 @@ export interface HostedOptions {
   accessTtlSec?: number;
   refreshTtlSec?: number;
   fetchImpl?: typeof fetch;
+  /** POST /oauth/login attempts per client IP and per submitted Auth ID per 15 minutes (default cfg.oauth, 10 and 10). */
+  loginLimits?: { perIp?: number; perAuthId?: number };
   /** Server-side reminder calls; the reminder tools are offered only when this is set. */
   reminders?: ReminderService;
   /** Express router serving /jobs/fire and /r/:token/* for reminder calls, mounted before the 404 handler. */
@@ -138,6 +155,21 @@ export function createHostedApp(o: HostedOptions): express.Express {
   const base = o.baseUrl.replace(/\/+$/, "");
   const mcpUrl = new URL(`${base}/mcp`);
   const trusted = o.trustedClients ?? cfg.oauth.trustedClients;
+  const loginLimits = { perIp: o.loginLimits?.perIp ?? cfg.oauth.loginMaxPerIp, perAuthId: o.loginLimits?.perAuthId ?? cfg.oauth.loginMaxPerAuthId };
+
+  /** The cheapest authenticated Vobiz call: the HTTP status, or "network" when Vobiz could not be reached. */
+  async function checkVobiz(authId: string, authToken: string): Promise<number | "network"> {
+    try {
+      const r = await fetchImpl(`${cfg.baseUrl}/api/v1/Account/${encodeURIComponent(authId)}/numbers?per_page=1`, {
+        headers: { "X-Auth-ID": authId, "X-Auth-Token": authToken, Accept: "application/json" },
+        signal: AbortSignal.timeout(10_000),
+      });
+      await r.body?.cancel().catch(() => {});
+      return r.status;
+    } catch {
+      return "network";
+    }
+  }
   const allowedOrigins = new Set(o.allowedOrigins ?? ["https://claude.ai", "https://claude.com", "https://chatgpt.com", "https://chat.openai.com"]);
   const fetchImpl = o.fetchImpl ?? globalThis.fetch;
   const ACCESS_TTL = o.accessTtlSec ?? 3600;
@@ -394,21 +426,55 @@ export function createHostedApp(o: HostedOptions): express.Express {
   );
 
   // Consent form submission: verify the credentials with Vobiz, then redirect back with a code.
-  app.post("/oauth/login", express.urlencoded({ extended: false, limit: "8kb" }), async (req: Request, res: Response) => {
+  // Guarded by a same-origin check, two rate limiters (per client IP and per submitted Auth ID) and an attempt
+  // counter sealed into the transaction.
+  const limitHandler: express.RequestHandler = (_req, res) =>
+    sendError(res, 429, "Too many sign-in attempts", "Too many sign-in attempts. Wait 15 minutes, then go back to your app and connect again.");
+  const loginByIp = rateLimit({ windowMs: LOGIN_WINDOW_MS, limit: loginLimits.perIp, standardHeaders: "draft-7", legacyHeaders: false, handler: limitHandler });
+  const loginByAuthId = rateLimit({
+    windowMs: LOGIN_WINDOW_MS,
+    limit: loginLimits.perAuthId,
+    standardHeaders: false,
+    legacyHeaders: false,
+    skip: (req) => !String(req.body?.auth_id ?? "").trim(),
+    keyGenerator: (req) => `aid:${String(req.body?.auth_id ?? "").trim().toUpperCase().slice(0, 64)}`,
+    handler: limitHandler,
+  });
+  const baseOrigin = new URL(base).origin;
+  /** Only our own consent page may post the form: Sec-Fetch-Site same-origin (or absent on old browsers), Origin ours if sent. */
+  const sameOrigin: express.RequestHandler = (req, res, next) => {
+    const site = req.get("sec-fetch-site");
+    const origin = req.get("origin");
+    if ((site && site !== "same-origin") || (origin !== undefined && origin !== baseOrigin)) {
+      return sendError(res, 403, "Sign-in blocked", "This sign-in form was not submitted from the Vobiz sign-in page.");
+    }
+    next();
+  };
+  app.post("/oauth/login", express.urlencoded({ extended: false, limit: "8kb" }), sameOrigin, loginByIp, loginByAuthId, async (req: Request, res: Response) => {
     res.setHeader("Cache-Control", "no-store");
-    const t = seal.open<{ cid: string; redirect: string; state: string | null; challenge: string; resource: string }>("txn", String(req.body?.txn ?? ""));
-    if (!t) return res.status(400).type("text").send("This sign-in link has expired. Go back to your app and connect again.");
+    const t = seal.open<Txn>("txn", String(req.body?.txn ?? ""));
+    if (!t) return sendError(res, 400, "This sign-in link has expired", "This sign-in link has expired.");
     const client = await clientsStore.getClient(t.cid);
-    if (!client) return res.status(400).type("text").send("Unknown client. Go back to your app and connect again.");
+    if (!client) return sendError(res, 400, "Unknown app", "This app is not registered any more.");
+    const cls = classifyClient(client, trusted);
+    const attempts = t.n ?? 0;
+    if (attempts >= MAX_LOGIN_ATTEMPTS) return sendError(res, 429, "Too many sign-in attempts", "Too many failed attempts for this sign-in link.");
     const authId = String(req.body?.auth_id ?? "").trim();
     const authToken = String(req.body?.auth_token ?? "").trim();
     const field = (k: string) => String(req.body?.[k] ?? "").trim().slice(0, 64);
     const rawScope = field("scope");
-    // Older form: a read_only checkbox and no scope radio.
-    const scope: Scope = SCOPES.includes(rawScope as Scope) ? (rawScope as Scope) : req.body?.read_only === "1" ? "read" : "full";
+    // Older form: a read_only checkbox and no scope radio. Without either, the page's own default for this client.
+    const scope: Scope = SCOPES.includes(rawScope as Scope) ? (rawScope as Scope) : req.body?.read_only === "1" ? "read" : defaultChoice(cls).scope;
     const values: Choice = { scope, callMeOn: field("call_me_on"), callFrom: field("call_from"), tz: field("timezone") || DEFAULT_TIME_ZONE };
-    const again = (error: string) => sendConsent(res, { txn: String(req.body.txn), client: classifyClient(client, trusted), redirectUri: t.redirect, error, links: cfg.links, values });
-    if (!AUTH_ID_RE.test(authId) || authToken.length < 8 || authToken.length > 256) return again("Enter a valid Auth ID (MA_… or SA_…) and Auth Token.");
+    const again = (error: string, txn = String(req.body.txn)) => sendConsent(res, { txn, client: cls, redirectUri: t.redirect, error, links: cfg.links, values });
+    /** A failed credential attempt: count it in a re-sealed transaction (same expiry). */
+    const failed = (error: string) => {
+      const left = t.exp - Math.floor(Date.now() / 1000);
+      if (attempts + 1 >= MAX_LOGIN_ATTEMPTS || left <= 0) return sendError(res, 429, "Too many sign-in attempts", "Too many failed attempts for this sign-in link.");
+      const { exp: _exp, ...rest } = t;
+      return again(error, seal.seal("txn", { ...rest, n: attempts + 1 }, left));
+    };
+    if (!AUTH_ID_RE.test(authId) || authToken.length < 8 || authToken.length > 256) return failed("Enter a valid Auth ID (MA_… or SA_…) and Auth Token.");
     if (!isValidTimeZone(values.tz)) return again("Enter a timezone such as Asia/Kolkata or America/New_York.");
     let callMeOn: string | undefined;
     let callFrom: string | undefined;
@@ -419,19 +485,12 @@ export function createHostedApp(o: HostedOptions): express.Express {
       callFrom = values.callFrom ? e164(values.callFrom) : undefined;
       if (values.callFrom && !callFrom) return again("Enter \"Call from\" in E.164, e.g. +918012345678, or leave it blank.");
     }
-    let status = 0;
-    try {
-      const r = await fetchImpl(`${cfg.baseUrl}/api/v1/Account/${encodeURIComponent(authId)}/numbers?per_page=1`, {
-        headers: { "X-Auth-ID": authId, "X-Auth-Token": authToken, Accept: "application/json" },
-        signal: AbortSignal.timeout(10_000),
-      });
-      status = r.status;
-      await r.body?.cancel().catch(() => {});
-    } catch {
-      return again("Vobiz could not be reached to check these credentials. Try again in a moment.");
-    }
-    if (status === 401 || status === 403) return again("Vobiz did not accept this Auth ID and Auth Token. Check them on the console overview page.");
-    if (status >= 500 || status === 0) return again("Vobiz could not check these credentials right now. Try again in a moment.");
+    // Fail closed: only a 2xx from Vobiz signs the user in.
+    const status = await checkVobiz(authId, authToken);
+    if (status === "network") return again("Vobiz could not be reached to check these credentials. Try again in a moment.");
+    if (status === 401 || status === 403 || status === 404) return failed("Vobiz did not accept this Auth ID and Auth Token. Check them on the console overview page.");
+    if (status === 429) return again("Vobiz is receiving too many requests right now. Wait a minute and try again.");
+    if (status < 200 || status > 299) return again(`Vobiz could not check these credentials right now (status ${status}). Try again in a moment.`);
     log.info(`oauth: account connected (status ${status}, scope ${scope})`);
     const code = seal.seal(
       "code",

@@ -2,7 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { afterAll, describe, expect, it } from "vitest";
 import { silentLogger } from "../src/logger.js";
-import { createHostedApp, type HostedOptions } from "../src/hosted.js";
+import { Sealer, createHostedApp, type HostedOptions } from "../src/hosted.js";
 import { VOBIZ_FAVICON_SVG } from "../src/brand.js";
 import { json, mockFetch, testConfig } from "./helpers.js";
 
@@ -232,5 +232,89 @@ describe("authorize errors", async () => {
     const r = await fetch(authorizeUrl(base, "https://claude.ai/oauth/some-other-client", CLAUDE_CB), { redirect: "manual" });
     expect(r.status).toBe(400);
     expect(vobiz.calls.some((c) => c.url.href.includes("some-other-client"))).toBe(false);
+  });
+});
+
+describe("sign-in checks", async () => {
+  const base = await start();
+  const claude = (await register(base, [CLAUDE_CB])).body.client_id;
+  const consentTxn = async () => txnOf(await (await fetch(authorizeUrl(base, claude, CLAUDE_CB))).text());
+  const login = (form: Record<string, string>, headers: Record<string, string> = {}) =>
+    fetch(`${base}/oauth/login`, { method: "POST", body: new URLSearchParams(form), headers, redirect: "manual" });
+
+  it("fails closed on 404 and 429 from Vobiz", async () => {
+    const r404 = await login({ txn: await consentTxn(), auth_id: "MA_GONE4040", auth_token: "whatever-token", scope: "read" });
+    expect(r404.status).toBe(200);
+    expect(await r404.text()).toContain("did not accept");
+    for (const [code, msg] of [[429, "too many requests"], [503, "status 503"], [302, "status 302"]] as const) {
+      upstreamStatus = code;
+      try {
+        const r = await login({ txn: await consentTxn(), auth_id: GOOD_ID, auth_token: GOOD_TOKEN, scope: "read" });
+        expect(r.status).toBe(200);
+        expect(r.headers.get("location")).toBeNull();
+        expect(await r.text()).toContain(msg);
+      } finally {
+        upstreamStatus = 200;
+      }
+    }
+    const ok = await login({ txn: await consentTxn(), auth_id: GOOD_ID, auth_token: GOOD_TOKEN, scope: "read" });
+    expect(ok.status).toBe(302);
+  });
+
+  it("caps failed attempts per sign-in transaction at 5", async () => {
+    let txn = await consentTxn();
+    const original = txn;
+    for (let i = 1; i <= 4; i++) {
+      const r = await login({ txn, auth_id: GOOD_ID, auth_token: "wrong-token-x", scope: "read" });
+      expect(r.status).toBe(200);
+      const html = await r.text();
+      expect(html).toContain("did not accept");
+      txn = txnOf(html);
+      expect(txn).not.toBe(original);
+    }
+    const fifth = await login({ txn, auth_id: GOOD_ID, auth_token: "wrong-token-x", scope: "read" });
+    expect(fifth.status).toBe(429);
+    // A transaction whose counter is spent is refused even with correct credentials.
+    const sealer = new Sealer("s".repeat(40));
+    const spent = sealer.seal("txn", { ...sealer.open<Record<string, unknown>>("txn", txn)!, exp: undefined, n: 5 }, 600);
+    const r = await login({ txn: spent, auth_id: GOOD_ID, auth_token: GOOD_TOKEN, scope: "read" });
+    expect(r.status).toBe(429);
+    expect(r.headers.get("location")).toBeNull();
+  });
+
+  it("refuses cross-site form posts", async () => {
+    const txn = await consentTxn();
+    const form = { txn, auth_id: GOOD_ID, auth_token: GOOD_TOKEN, scope: "read" };
+    expect((await login(form, { "Sec-Fetch-Site": "cross-site" })).status).toBe(403);
+    expect((await login(form, { Origin: "https://evil.example" })).status).toBe(403);
+    expect((await login(form, { Origin: "null" })).status).toBe(403);
+    expect((await login(form, { "Sec-Fetch-Site": "same-origin", Origin: "https://mcp.example.test" })).status).toBe(302);
+  });
+
+  it("the consent page sends Referrer-Policy same-origin so the form post keeps its Origin", async () => {
+    const page = await fetch(authorizeUrl(base, claude, CLAUDE_CB));
+    expect(page.headers.get("referrer-policy")).toBe("same-origin");
+  });
+});
+
+describe("sign-in rate limits", () => {
+  it("returns 429 after 10 attempts from one IP in 15 minutes", async () => {
+    const base = await start({ loginLimits: undefined });
+    for (let i = 0; i < 10; i++) {
+      const r = await fetch(`${base}/oauth/login`, { method: "POST", body: new URLSearchParams({ txn: "x", auth_id: `MA_IP${i}0000` }) });
+      expect(r.status).toBe(400);
+    }
+    const r = await fetch(`${base}/oauth/login`, { method: "POST", body: new URLSearchParams({ txn: "x", auth_id: "MA_IPX0000" }) });
+    expect(r.status).toBe(429);
+    expect(await r.text()).toContain("Too many sign-in attempts");
+  });
+
+  it("returns 429 after 10 attempts for one Auth ID, whatever the IP budget", async () => {
+    const base = await start({ loginLimits: { perIp: 1000 } });
+    for (let i = 0; i < 10; i++) {
+      expect((await fetch(`${base}/oauth/login`, { method: "POST", body: new URLSearchParams({ txn: "x", auth_id: "MA_TARGET1" }) })).status).toBe(400);
+    }
+    expect((await fetch(`${base}/oauth/login`, { method: "POST", body: new URLSearchParams({ txn: "x", auth_id: " ma_target1 " }) })).status).toBe(429);
+    expect((await fetch(`${base}/oauth/login`, { method: "POST", body: new URLSearchParams({ txn: "x", auth_id: "MA_OTHER22" }) })).status).toBe(400);
   });
 });
