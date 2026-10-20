@@ -58,6 +58,23 @@ export interface Config {
     /** Check that an SMS/MMS `from` is a messaging number on this account before sending. */
     verifySender: boolean;
   };
+  /** Server-side reminder calls (hosted connector only; the stdio server never offers them). */
+  reminders: {
+    /** VOBIZ_REMINDERS (default true). */
+    enabled: boolean;
+    /** Cloud Tasks + Firestore backend when project, location and queue are all set; otherwise in-memory. */
+    gcpProject?: string;
+    tasksLocation?: string;
+    tasksQueue?: string;
+    firestoreDatabase: string;
+    firestoreCollection: string;
+    /** Active (scheduled/snoozed/calling) reminders per account. */
+    maxActive: number;
+    /** Reminder call attempts per destination per UTC day. */
+    maxCallsPerDay: number;
+  };
+  /** Served verbatim at GET /.well-known/openai-apps-challenge (OpenAI Apps domain verification). */
+  openaiAppsChallenge?: string;
 }
 
 export class ConfigError extends Error {}
@@ -130,6 +147,31 @@ function list(v: string | undefined): string[] {
 /** A client that does not expand `${VAR}` / `$VAR` placeholders passes them through literally: treat those as unset. */
 function unexpanded(v: string | undefined): boolean {
   return !!v && /^\$\{?[A-Za-z_:.][\w:.]*\}?$/.test(v.trim());
+}
+
+function opt(name: string, v: string | undefined, re: RegExp, what: string): string | undefined {
+  const t = v?.trim();
+  if (!t) return undefined;
+  if (!re.test(t)) throw new ConfigError(`${name} must be ${what}`);
+  return t;
+}
+
+function remindersConfig(env: NodeJS.ProcessEnv): Config["reminders"] {
+  const gcpProject = opt("VOBIZ_GCP_PROJECT", env.VOBIZ_GCP_PROJECT, /^[a-z][a-z0-9-]{4,28}[a-z0-9]$/, "a GCP project id");
+  const tasksLocation = opt("VOBIZ_TASKS_LOCATION", env.VOBIZ_TASKS_LOCATION, /^[a-z]+-[a-z]+\d+$/, "a Cloud Tasks location such as asia-south1");
+  const tasksQueue = opt("VOBIZ_TASKS_QUEUE", env.VOBIZ_TASKS_QUEUE, /^[A-Za-z0-9-]{1,100}$/, "a Cloud Tasks queue id (letters, digits, -)");
+  const set = [gcpProject, tasksLocation, tasksQueue].filter(Boolean).length;
+  if (set !== 0 && set !== 3) throw new ConfigError("Set all of VOBIZ_GCP_PROJECT, VOBIZ_TASKS_LOCATION and VOBIZ_TASKS_QUEUE for the Cloud Tasks backend, or none of them");
+  return {
+    enabled: bool(env.VOBIZ_REMINDERS, true),
+    gcpProject,
+    tasksLocation,
+    tasksQueue,
+    firestoreDatabase: opt("VOBIZ_FIRESTORE_DATABASE", env.VOBIZ_FIRESTORE_DATABASE, /^(\(default\)|[a-z][a-z0-9-]{2,62})$/, "(default) or a Firestore database id") ?? "(default)",
+    firestoreCollection: opt("VOBIZ_FIRESTORE_COLLECTION", env.VOBIZ_FIRESTORE_COLLECTION, /^[A-Za-z0-9_-]{1,100}$/, "a Firestore collection id (letters, digits, _ and -)") ?? "reminders",
+    maxActive: int("VOBIZ_MAX_ACTIVE_REMINDERS", env.VOBIZ_MAX_ACTIVE_REMINDERS, 20, 1, 1000),
+    maxCallsPerDay: int("VOBIZ_MAX_REMINDER_CALLS_PER_DAY", env.VOBIZ_MAX_REMINDER_CALLS_PER_DAY, 10, 1, 1000),
+  };
 }
 
 export function loadConfig(rawEnv: NodeJS.ProcessEnv = process.env): Config {
@@ -232,6 +274,8 @@ export function loadConfig(rawEnv: NodeJS.ProcessEnv = process.env): Config {
       maxMessagesPerHour: int("VOBIZ_MAX_MESSAGES_PER_HOUR", env.VOBIZ_MAX_MESSAGES_PER_HOUR, 200, 1, 1000000),
       verifySender: bool(env.VOBIZ_VERIFY_SENDER, true),
     },
+    reminders: remindersConfig(env),
+    openaiAppsChallenge: opt("VOBIZ_OPENAI_APPS_CHALLENGE", env.VOBIZ_OPENAI_APPS_CHALLENGE, /^[^\x00-\x1f\x7f]{1,1024}$/, "printable text (max 1024 characters)"),
     webhookSignature: signatureMode(env.VOBIZ_WEBHOOK_SIGNATURE),
     allowAnyUrlHost: bool(env.VOBIZ_ALLOW_ANY_URL_HOST, false),
     allowedUrlHosts: [

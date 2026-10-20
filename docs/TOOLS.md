@@ -1,6 +1,6 @@
 # Vobiz MCP tool reference
 
-Generated from the tool registry (106 tools). Regenerate with `npm run docs:tools`.
+Generated from the tool registry (110 tools). Regenerate with `npm run docs:tools`.
 
 | Tool | Kind | Required inputs |
 |---|---|---|
@@ -108,6 +108,10 @@ Generated from the tool registry (106 tools). Regenerate with `npm run docs:tool
 | `delete_sub_account` | **write, destructive** | `sub_auth_id`, `confirm` |
 | `get_sub_account_kyc_status` | read-only | `sub_auth_id` |
 | `create_sub_account_kyc_session` | **write, destructive** | `sub_auth_id`, `confirm` |
+| `schedule_reminder_call` | **write, destructive** | `at`, `message`, `confirm` |
+| `list_reminder_calls` | read-only | — |
+| `get_reminder_call` | read-only | `reminder_id` |
+| `cancel_reminder_call` | **write, destructive** | `reminder_id`, `confirm` |
 | `list_vobiz_skills` | read-only | — |
 | `get_vobiz_skill` | read-only | `name` |
 
@@ -1234,6 +1238,51 @@ Start a Vobiz-hosted KYC session for a sub-account. flow_type email (default) ha
 | `webhook_url` | string |  | Public https endpoint that receives KYC events. Omit for no callbacks. |
 | `expires_in_days` | integer |  | Days until the link expires (Vobiz default 7).; min 1; max 90 |
 | `confirm` | boolean | yes | Must be true, set only after the user explicitly approved: starting KYC for this sub-account (the email flow emails the customer). |
+
+## schedule_reminder_call
+
+Vobiz: use this when the user wants a PHONE CALL at a time — a wake-up call, a reminder call, 'call me at…'. Not for text or in-app reminders. The server places the call itself at that time, speaks the message, and lets the user press 1 to snooze, 2 to confirm, 9 to stop; it retries when there is no answer. Confirm the time (in the user's timezone), the message and the number with the user, then pass confirm: true. Call it ONCE per reminder: nothing has to stay open or be polled afterwards. `at` is ISO 8601 with an offset (2026-10-21T06:00:00+05:30), a local time without an offset (read in the timezone chosen at sign-in), or "now". `to` defaults to the user's own number from sign-in; `from` defaults to the caller ID chosen at sign-in, else the first voice number on the account. At most 30 days ahead.
+
+| Input | Type | Required | Notes |
+|---|---|---|---|
+| `at` | string | yes | When to call: ISO 8601 with offset, local ISO time without offset (sign-in timezone), or "now". |
+| `message` | string | yes | What the call says after the intro, in plain words (max 400 characters). |
+| `kind` | `wake_up` | `reminder` |  | wake_up opens with a good-morning greeting; reminder (default) with a reminder greeting. |
+| `to` | string |  | Number to call, E.164. One number only. Defaults to the user's own number from sign-in.; pattern `^\+?[1-9]\d{6,14}$` |
+| `from` | string |  | Caller ID: a voice number on this account, E.164.; pattern `^\+?[1-9]\d{6,14}$` |
+| `language` | `da-DK` | `nl-NL` | `en-AU` | `en-GB` | `en-US` | `en-IN` | `fr-FR` | `fr-CA` | `de-DE` | `it-IT` | `pl-PL` | `pt-PT` | `pt-BR` | `ru-RU` | `es-ES` | `es-US` | `sv-SE` | `hi-IN` |  | Speech language (default en-US). |
+| `voice` | `WOMAN` | `MAN` |  | Speech voice (default WOMAN). |
+| `snooze_minutes` | integer |  | Pressing 1 calls again after this many minutes (default 10).; min 1; max 60 |
+| `max_attempts` | integer |  | Total call attempts including retries (default 3).; min 1; max 5 |
+| `retry_minutes` | integer |  | Minutes between retries after no answer, busy or voicemail (default 5).; min 1; max 30 |
+| `confirm` | boolean | yes | Must be true, set only after the user confirmed the time, message and number. |
+| `idempotency_key` | string |  | Unique key for this intended operation (e.g. a UUID). Repeating it replays the first result instead of acting again.; pattern `^[A-Za-z0-9_.:-]{8,128}$` |
+
+## list_reminder_calls
+
+List the reminder and wake-up calls scheduled on this Vobiz account, newest first, with their status and next call time in the user's timezone. Read-only.
+
+| Input | Type | Required | Notes |
+|---|---|---|---|
+| `status` | `scheduled` | `calling` | `snoozed` | `done` | `stopped` | `cancelled` | `failed` | `active` |  | Filter by status; active = scheduled, snoozed or calling. |
+| `limit` | integer |  | Max reminders to return (default 20).; min 1; max 50 |
+
+## get_reminder_call
+
+Return ONE reminder call with every attempt so far and what happened on each (answered and confirmed, snoozed, not answered, busy, voicemail…). Read-only.
+
+| Input | Type | Required | Notes |
+|---|---|---|---|
+| `reminder_id` | string | yes | pattern `^[A-Za-z0-9_-]{4,100}$` |
+
+## cancel_reminder_call
+
+Cancel ONE scheduled or snoozed reminder call so no further calls are placed for it. Needs confirm: true after the user agrees. Cancelling an already finished reminder changes nothing.
+
+| Input | Type | Required | Notes |
+|---|---|---|---|
+| `reminder_id` | string | yes | pattern `^[A-Za-z0-9_-]{4,100}$` |
+| `confirm` | boolean | yes | Must be true, set only after the user confirmed cancelling this reminder. |
 
 ## list_vobiz_skills
 

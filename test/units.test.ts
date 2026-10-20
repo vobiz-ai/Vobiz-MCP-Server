@@ -278,3 +278,43 @@ describe("client placeholders", () => {
     expect(cfg.enableCalls).toBe(false);
   });
 });
+
+describe("reminder-call configuration", () => {
+  it("defaults to enabled with the in-memory backend and brief limits", () => {
+    const c = loadConfig({});
+    expect(c.reminders).toEqual({
+      enabled: true,
+      gcpProject: undefined,
+      tasksLocation: undefined,
+      tasksQueue: undefined,
+      firestoreDatabase: "(default)",
+      firestoreCollection: "reminders",
+      maxActive: 20,
+      maxCallsPerDay: 10,
+    });
+    expect(c.openaiAppsChallenge).toBeUndefined();
+  });
+
+  it("parses the Cloud Tasks backend, limits and the OpenAI challenge", () => {
+    const c = loadConfig({
+      VOBIZ_REMINDERS: "false",
+      VOBIZ_GCP_PROJECT: "integrations-510010",
+      VOBIZ_TASKS_LOCATION: "asia-south1",
+      VOBIZ_TASKS_QUEUE: "vobiz-reminders",
+      VOBIZ_FIRESTORE_DATABASE: "mcp-db",
+      VOBIZ_FIRESTORE_COLLECTION: "reminders_prod",
+      VOBIZ_MAX_ACTIVE_REMINDERS: "5",
+      VOBIZ_MAX_REMINDER_CALLS_PER_DAY: "3",
+      VOBIZ_OPENAI_APPS_CHALLENGE: "abc123",
+    });
+    expect(c.reminders).toMatchObject({ enabled: false, gcpProject: "integrations-510010", tasksLocation: "asia-south1", tasksQueue: "vobiz-reminders", firestoreDatabase: "mcp-db", firestoreCollection: "reminders_prod", maxActive: 5, maxCallsPerDay: 3 });
+    expect(c.openaiAppsChallenge).toBe("abc123");
+  });
+
+  it("rejects a partial or malformed backend config", () => {
+    expect(() => loadConfig({ VOBIZ_GCP_PROJECT: "integrations-510010" })).toThrow(/all of VOBIZ_GCP_PROJECT/);
+    expect(() => loadConfig({ VOBIZ_TASKS_LOCATION: "Asia South" })).toThrow(/VOBIZ_TASKS_LOCATION/);
+    expect(() => loadConfig({ VOBIZ_FIRESTORE_COLLECTION: "a/b" })).toThrow(/VOBIZ_FIRESTORE_COLLECTION/);
+    expect(() => loadConfig({ VOBIZ_MAX_ACTIVE_REMINDERS: "0" })).toThrow(/VOBIZ_MAX_ACTIVE_REMINDERS/);
+  });
+});

@@ -7,7 +7,10 @@ import { loadConfig } from "../dist/config.js";
 import { silentLogger } from "../dist/logger.js";
 import { createServer } from "../dist/server.js";
 
-const server = createServer(loadConfig({ VOBIZ_LOG_LEVEL: "silent" }), silentLogger);
+// The reminder tools register only when a ReminderService is present (hosted connector); a stub with the
+// default limits is enough to list them. Nothing is ever scheduled here.
+const reminders = { limits: { maxActive: 20, maxCallsPerDay: 10, maxDaysAhead: 30 } };
+const server = createServer(loadConfig({ VOBIZ_LOG_LEVEL: "silent" }), silentLogger, undefined, { reminders });
 const [a, b] = InMemoryTransport.createLinkedPair();
 const client = new Client({ name: "docs", version: "0" });
 await Promise.all([server.connect(a), client.connect(b)]);

@@ -4,6 +4,19 @@ import type { FlowStore } from "./flows.js";
 import type { IdempotencyStore } from "./idempotency.js";
 import type { EventStore } from "./webhooks.js";
 import type { Logger } from "./logger.js";
+import type { ReminderService } from "./reminders/types.js";
+
+/** What the user chose at sign-in on the hosted connector (absent in stdio and single-account HTTP mode). */
+export interface ConnectionProfile {
+  /** read = read-only tools; assistant = reminder calls to callMeOn plus a few lookups; full = every tool. */
+  scope: "read" | "assistant" | "full";
+  /** The user's own number, E.164: where reminder calls go (forced in assistant scope). */
+  callMeOn?: string;
+  /** Caller ID for reminder calls, E.164; blank = the first voice number on the account. */
+  callFrom?: string;
+  /** IANA timezone used to read and describe reminder times. */
+  timezone?: string;
+}
 
 export interface ToolContext {
   client: VobizClient;
@@ -24,6 +37,9 @@ export interface ToolContext {
   events?: EventStore;
   /** When true, only read-only tools are registered. */
   readOnly: boolean;
+  /** Server-side reminder calls: present only on the hosted connector. */
+  reminders?: ReminderService;
+  profile?: ConnectionProfile;
 }
 
 /** Shared mutable state that must survive across MCP sessions in one process (HTTP mode). */
