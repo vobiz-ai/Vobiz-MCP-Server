@@ -58,8 +58,10 @@ export interface ReminderInput {
   maxAttempts: number;
   /** No answer / busy / voicemail / no input → retry after this many minutes (1..30). */
   retryMinutes: number;
-  /** Optional https MP3/WAV played before the spoken message (phase 2: user audio). */
+  /** Optional https MP3/WAV played before the spoken message. */
   audioUrl?: string;
+  /** Optional id of a file in the account's audio library (src/media); the service mints a /media/:token URL at answer time. Takes precedence over audioUrl. */
+  audioId?: string;
 }
 
 export interface Attempt {
