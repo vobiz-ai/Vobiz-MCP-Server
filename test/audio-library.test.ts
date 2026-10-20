@@ -22,6 +22,9 @@ import {
   type GcsBucketLike,
   type GcsFileLike,
 } from "../src/media/index.js";
+import { IMPORT_FAILED } from "../src/media/service.js";
+import type { PinnedRequest } from "../src/media/fetch.js";
+import type { HostLookup } from "../src/util.js";
 
 const AUTH = "MA_TESTAUDIO1";
 const OTHER = "MA_TESTAUDIO2";
@@ -267,8 +270,10 @@ describe("createMediaService", () => {
   let dir: string;
   let clock: Date;
   let processor: FakeProcessor;
-  const make = (o: { limits?: Partial<AudioLimits>; fetchImpl?: typeof fetch; importTimeoutMs?: number } = {}) =>
-    createMediaService({ store: new LocalDiskMediaStore(dir), processor, log: silentLogger, now: () => clock, ...o });
+  /** Every name resolves to one public address unless a test passes its own lookup. */
+  const publicDns: HostLookup = async () => [{ address: "93.184.215.14", family: 4 }];
+  const make = (o: { limits?: Partial<AudioLimits>; request?: PinnedRequest; lookup?: HostLookup; importTimeoutMs?: number } = {}) =>
+    createMediaService({ store: new LocalDiskMediaStore(dir), processor, log: silentLogger, now: () => clock, lookup: publicDns, ...o });
 
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), "vobiz-media-svc-"));
@@ -333,26 +338,29 @@ describe("createMediaService", () => {
   });
 
   describe("importFromUrl", () => {
-    type Handler = (url: string, init: RequestInit) => Response | Promise<Response>;
+    type Handler = (url: string, init: { signal: AbortSignal }) => Response | Promise<Response>;
+    /** A PinnedRequest that records each URL and the address the connection was pinned to. */
     const fakeFetch = (h: Handler) => {
       const seen: string[] = [];
-      const impl = (async (input: string | URL, init: RequestInit = {}) => {
-        seen.push(String(input));
-        return h(String(input), init);
-      }) as typeof fetch;
-      return { impl, seen };
+      const pinned: string[] = [];
+      const impl: PinnedRequest = async (url, o) => {
+        seen.push(url.href);
+        pinned.push(o.address);
+        return h(url.href, { signal: o.signal });
+      };
+      return { impl, seen, pinned };
     };
 
     it("downloads an https file and stores it with origin = URL without query", async () => {
       const f = fakeFetch(() => new Response(Buffer.from("mp3data"), { status: 200 }));
-      const m = await make({ fetchImpl: f.impl }).importFromUrl(AUTH, "https://cdn.example.com/a/alarm.mp3?sig=SECRET#x", "Alarm");
+      const m = await make({ request: f.impl }).importFromUrl(AUTH, "https://cdn.example.com/a/alarm.mp3?sig=SECRET#x", "Alarm");
       expect(m).toMatchObject({ name: "Alarm", source: "url", origin: "https://cdn.example.com/a/alarm.mp3", bytes: 11 });
       expect(JSON.stringify(m)).not.toContain("SECRET");
     });
 
     it("refuses http, credentials and private hosts without fetching", async () => {
       const f = fakeFetch(() => new Response("x"));
-      const svc = make({ fetchImpl: f.impl });
+      const svc = make({ request: f.impl });
       expect(await kindOf(svc.importFromUrl(AUTH, "http://cdn.example.com/a.mp3", "a"))).toMatchObject({ kind: "invalid_input" });
       expect(await kindOf(svc.importFromUrl(AUTH, "https://u:p@cdn.example.com/a.mp3", "a"))).toMatchObject({ kind: "invalid_input" });
       expect(await kindOf(svc.importFromUrl(AUTH, "not a url", "a"))).toMatchObject({ kind: "invalid_input" });
@@ -371,16 +379,16 @@ describe("createMediaService", () => {
           return new Response(Buffer.from("ok"));
         });
       const ok = chain(3);
-      await expect(make({ fetchImpl: ok.impl }).importFromUrl(AUTH, "https://cdn.example.com/r", "three")).resolves.toMatchObject({ origin: "https://cdn.example.com/r" });
+      await expect(make({ request: ok.impl }).importFromUrl(AUTH, "https://cdn.example.com/r", "three")).resolves.toMatchObject({ origin: "https://cdn.example.com/r" });
       expect(ok.seen).toHaveLength(4);
       const tooMany = chain(4);
-      expect(await kindOf(make({ fetchImpl: tooMany.impl }).importFromUrl(AUTH, "https://cdn.example.com/r", "four"))).toMatchObject({ kind: "invalid_input" });
+      expect(await kindOf(make({ request: tooMany.impl }).importFromUrl(AUTH, "https://cdn.example.com/r", "four"))).toMatchObject({ kind: "invalid_input" });
       expect(tooMany.seen).toHaveLength(4);
       const toPrivate = chain(1, "127.0.0.1");
-      expect(await kindOf(make({ fetchImpl: toPrivate.impl }).importFromUrl(AUTH, "https://cdn.example.com/r", "p"))).toMatchObject({ kind: "not_allowed" });
+      expect(await kindOf(make({ request: toPrivate.impl }).importFromUrl(AUTH, "https://cdn.example.com/r", "p"))).toMatchObject({ kind: "not_allowed" });
       expect(toPrivate.seen).toHaveLength(1);
       const toHttp = fakeFetch(() => new Response(null, { status: 301, headers: { location: "http://cdn.example.com/x" } }));
-      expect(await kindOf(make({ fetchImpl: toHttp.impl }).importFromUrl(AUTH, "https://cdn.example.com/r", "h"))).toMatchObject({ kind: "invalid_input" });
+      expect(await kindOf(make({ request: toHttp.impl }).importFromUrl(AUTH, "https://cdn.example.com/r", "h"))).toMatchObject({ kind: "invalid_input" });
     });
 
     it("aborts a streamed body beyond maxInputBytes and refuses an oversized Content-Length", async () => {
@@ -396,28 +404,81 @@ describe("createMediaService", () => {
             }),
           ),
       );
-      expect(await kindOf(make({ fetchImpl: endless.impl, limits: { maxInputBytes: 10_000 } }).importFromUrl(AUTH, "https://cdn.example.com/a", "a"))).toMatchObject({ kind: "invalid_input", status: 413 });
+      expect(await kindOf(make({ request: endless.impl, limits: { maxInputBytes: 10_000 } }).importFromUrl(AUTH, "https://cdn.example.com/a", "a"))).toMatchObject({ kind: "invalid_input", status: 413 });
       expect(pulled).toBeLessThan(20);
       const declared = fakeFetch(() => new Response("x", { headers: { "content-length": "999999999" } }));
-      expect(await kindOf(make({ fetchImpl: declared.impl }).importFromUrl(AUTH, "https://cdn.example.com/a", "a"))).toMatchObject({ status: 413 });
+      expect(await kindOf(make({ request: declared.impl }).importFromUrl(AUTH, "https://cdn.example.com/a", "a"))).toMatchObject({ status: 413 });
       expect(processor.calls).toBe(0);
     });
 
     it("maps HTTP errors and times out a slow server", async () => {
       const notFound = fakeFetch(() => new Response("nope", { status: 404 }));
-      const r = await kindOf(make({ fetchImpl: notFound.impl }).importFromUrl(AUTH, "https://cdn.example.com/a", "a"));
-      expect(r).toMatchObject({ kind: "invalid_input", status: 502 });
-      expect(r.message).toContain("HTTP 404");
+      const r = await kindOf(make({ request: notFound.impl }).importFromUrl(AUTH, "https://cdn.example.com/a", "a"));
+      expect(r).toMatchObject({ kind: "invalid_input", status: 502, message: IMPORT_FAILED });
+      expect(r.message).not.toContain("404");
       const hang = fakeFetch(
         (_u, init) =>
           new Promise<Response>((_res, rej) => init.signal!.addEventListener("abort", () => rej(new DOMException("aborted", "AbortError")))),
       );
-      expect(await kindOf(make({ fetchImpl: hang.impl, importTimeoutMs: 30 }).importFromUrl(AUTH, "https://cdn.example.com/a", "a"))).toMatchObject({ kind: "invalid_input", status: 504 });
+      expect(await kindOf(make({ request: hang.impl, importTimeoutMs: 30 }).importFromUrl(AUTH, "https://cdn.example.com/a", "a"))).toMatchObject({ kind: "invalid_input", status: 504, message: IMPORT_FAILED });
+    });
+
+    it("answers every network and upstream failure with one generic message", async () => {
+      const cases: [string, Partial<{ request: PinnedRequest; lookup: HostLookup }>][] = [
+        ["dns", { lookup: async () => { throw Object.assign(new Error("ENOTFOUND"), { code: "ENOTFOUND" }); } }],
+        ["reset", { request: async () => { throw Object.assign(new Error("ECONNRESET 10.9.8.7"), { code: "ECONNRESET" }); } }],
+        ["500", { request: fakeFetch(() => new Response("internal detail", { status: 500 })).impl }],
+        ["redirect loop", { request: fakeFetch(() => new Response(null, { status: 302, headers: { location: "/again" } })).impl }],
+        ["bad redirect", { request: fakeFetch(() => new Response(null, { status: 302, headers: { location: "https://[bad" } })).impl }],
+      ];
+      for (const [label, o] of cases) {
+        const r = await kindOf(make(o).importFromUrl(AUTH, "https://cdn.example.com/a", `x ${label}`));
+        expect(r, label).toMatchObject({ kind: "invalid_input", message: IMPORT_FAILED });
+      }
+      expect(processor.calls).toBe(0);
+    });
+
+    it("allows only https on 443 or 8443, on every hop", async () => {
+      const f = fakeFetch(() => new Response(Buffer.from("ok")));
+      const svc = make({ request: f.impl });
+      for (const port of ["80", "22", "6379", "8080"]) {
+        expect(await kindOf(svc.importFromUrl(AUTH, `https://cdn.example.com:${port}/a.mp3`, `p${port}`))).toMatchObject({ kind: "invalid_input" });
+      }
+      expect(f.seen).toEqual([]);
+      await expect(svc.importFromUrl(AUTH, "https://cdn.example.com:8443/a.mp3", "alt port")).resolves.toBeTruthy();
+      const toPort = fakeFetch((u) => (u.includes("final") ? new Response("ok") : new Response(null, { status: 302, headers: { location: "https://cdn.example.com:2375/final" } })));
+      expect(await kindOf(make({ request: toPort.impl }).importFromUrl(AUTH, "https://cdn.example.com/r", "redir port"))).toMatchObject({ kind: "invalid_input" });
+      expect(toPort.seen).toHaveLength(1);
+    });
+
+    it("resolves DNS on every hop and refuses a hop whose name resolves to a private address", async () => {
+      const dns: Record<string, string[]> = { "cdn.example.com": ["93.184.215.14"], "evil.example.net": ["93.184.215.20", "169.254.169.254"] };
+      const asked: string[] = [];
+      const lookup: HostLookup = async (h) => (asked.push(h), (dns[h] ?? []).map((address) => ({ address, family: 4 })));
+      const f = fakeFetch(() => new Response(null, { status: 302, headers: { location: "https://evil.example.net/x.mp3" } }));
+      expect(await kindOf(make({ request: f.impl, lookup }).importFromUrl(AUTH, "https://cdn.example.com/r", "hop"))).toMatchObject({ kind: "not_allowed" });
+      expect(asked).toEqual(["cdn.example.com", "evil.example.net"]);
+      expect(f.seen).toEqual(["https://cdn.example.com/r"]);
+    });
+
+    it("pins the connection to the vetted address: a rebinding DNS answer is never used", async () => {
+      // First answer public, every later answer private (classic rebinding).
+      let n = 0;
+      const lookup: HostLookup = async () => [{ address: n++ === 0 ? "93.184.215.14" : "127.0.0.1", family: 4 }];
+      const f = fakeFetch(() => new Response(Buffer.from("mp3")));
+      await expect(make({ request: f.impl, lookup }).importFromUrl(AUTH, "https://rebind.example.com/a.mp3", "rebind")).resolves.toBeTruthy();
+      expect(n).toBe(1);
+      expect(f.pinned).toEqual(["93.184.215.14"]);
+      // A redirect back to the same name is re-resolved, gets the private answer, and is refused before connecting.
+      n = 0;
+      const back = fakeFetch((u) => (u.endsWith("/again") ? new Response("x") : new Response(null, { status: 302, headers: { location: "/again" } })));
+      expect(await kindOf(make({ request: back.impl, lookup }).importFromUrl(AUTH, "https://rebind.example.com/a.mp3", "rebind 2"))).toMatchObject({ kind: "not_allowed" });
+      expect(back.pinned).toEqual(["93.184.215.14"]);
     });
 
     it("checks name and caps before downloading", async () => {
       const f = fakeFetch(() => new Response("x"));
-      const svc = make({ fetchImpl: f.impl, limits: { maxPerAccount: 1 } });
+      const svc = make({ request: f.impl, limits: { maxPerAccount: 1 } });
       await svc.add(AUTH, Buffer.from("a"), { name: "Alarm", source: "upload" });
       expect(await kindOf(svc.importFromUrl(AUTH, "https://cdn.example.com/a", "alarm"))).toMatchObject({ kind: "invalid_input" });
       expect(await kindOf(svc.importFromUrl(AUTH, "https://cdn.example.com/a", "other"))).toMatchObject({ kind: "not_allowed" });

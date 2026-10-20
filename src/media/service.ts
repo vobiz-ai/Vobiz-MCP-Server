@@ -8,7 +8,8 @@
 import { randomBytes } from "node:crypto";
 import { VobizError } from "../errors.js";
 import type { Logger } from "../logger.js";
-import { isPrivateHost } from "../util.js";
+import { isPrivateHostLiteral, resolvePublicHost, type HostLookup } from "../util.js";
+import { pinnedRequest, type PinnedRequest } from "./fetch.js";
 import { isValidAudioId } from "./store.js";
 import type { AudioLimits, AudioMeta, AudioProcessor, MediaService, MediaStore } from "./types.js";
 
@@ -21,6 +22,10 @@ export const DEFAULT_AUDIO_LIMITS: AudioLimits = {
 
 export const IMPORT_TIMEOUT_MS = 15_000;
 export const IMPORT_MAX_REDIRECTS = 3;
+/** The only ports a URL import may use, on every hop. */
+export const IMPORT_PORTS = ["", "443", "8443"];
+/** The one message for every network or upstream HTTP failure (no upstream status or detail is echoed). */
+export const IMPORT_FAILED = "The audio link could not be downloaded.";
 const NAME_MAX = 80;
 const ORIGIN_MAX = 300;
 const NAME_RE = /^[\p{L}\p{M}\p{N} ._()-]+$/u;
@@ -30,8 +35,10 @@ export interface MediaServiceOptions {
   processor: AudioProcessor;
   limits?: Partial<AudioLimits>;
   log: Logger;
-  /** For URL imports (tests inject a fake). Default global fetch. */
-  fetchImpl?: typeof fetch;
+  /** One pinned GET per hop for URL imports (tests inject a fake). Default node:https pinned to the vetted address. */
+  request?: PinnedRequest;
+  /** DNS for URL imports (tests inject a fake). Default dns.promises.lookup({ all: true, verbatim: true }). */
+  lookup?: HostLookup;
   now?: () => Date;
   /** URL import timeout, default 15 s. */
   importTimeoutMs?: number;
@@ -65,15 +72,20 @@ function checkImportUrl(raw: string): URL {
   }
   if (u.protocol !== "https:") throw new VobizError("invalid_input", "The audio link must start with https://.", 400);
   if (u.username || u.password) throw new VobizError("invalid_input", "The audio link must not contain credentials.", 400);
-  if (isPrivateHost(u.hostname)) throw new VobizError("not_allowed", "The audio link must be a public internet address.", 403);
+  if (!IMPORT_PORTS.includes(u.port)) throw new VobizError("invalid_input", "The audio link must use the standard https port (443).", 400);
+  if (isPrivateHostLiteral(u.hostname)) throw notPublic();
   return u;
 }
+
+const notPublic = () => new VobizError("not_allowed", "The audio link must be a public internet address.", 403);
+const importFailed = (status = 502) => new VobizError("invalid_input", IMPORT_FAILED, status);
 
 export function createMediaService(o: MediaServiceOptions): MediaService {
   const limits: AudioLimits = { ...DEFAULT_AUDIO_LIMITS, ...o.limits };
   const { store, processor, log } = o;
   const now = o.now ?? (() => new Date());
-  const fetchImpl = o.fetchImpl ?? fetch;
+  const requestImpl = o.request ?? pinnedRequest;
+  const lookup = o.lookup;
   const importTimeoutMs = o.importTimeoutMs ?? IMPORT_TIMEOUT_MS;
 
   /** Name and cap checks that do not need the audio; run before any download or conversion. */
@@ -118,44 +130,50 @@ export function createMediaService(o: MediaServiceOptions): MediaService {
     return meta;
   }
 
+  /**
+   * GET with every hop vetted: https on 443/8443, no credentials, and every DNS answer public. The connection is
+   * pinned to the first vetted address, so DNS rebinding between the check and the connect cannot redirect it.
+   */
   async function download(start: URL): Promise<Buffer> {
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort(), importTimeoutMs);
+    const failed = () => importFailed(ac.signal.aborted ? 504 : 502);
     try {
       let url = start;
       let res: Response | undefined;
       for (let hop = 0; ; hop++) {
+        url = checkImportUrl(url.href);
+        const vetted = await untilAborted(resolvePublicHost(url.hostname, lookup), ac.signal);
+        if (!vetted) throw failed(); // DNS outlived the import timeout
+        if (!vetted.ok) throw vetted.reason === "private" ? notPublic() : importFailed();
+        const { address, family } = vetted.addresses[0];
         try {
-          res = await fetchImpl(url, { redirect: "manual", signal: ac.signal, headers: { Accept: "audio/*, application/octet-stream;q=0.9, */*;q=0.5" } });
+          res = await requestImpl(url, { address, family, signal: ac.signal, headers: { Accept: "audio/*, application/octet-stream;q=0.9, */*;q=0.5" } });
         } catch {
-          throw ac.signal.aborted
-            ? new VobizError("invalid_input", "The audio link took too long to download.", 504)
-            : new VobizError("invalid_input", "The audio link could not be reached.", 502);
+          throw failed();
         }
         if (res.status >= 300 && res.status < 400 && res.headers.get("location")) {
           await res.body?.cancel().catch(() => undefined);
-          if (hop >= IMPORT_MAX_REDIRECTS) throw new VobizError("invalid_input", "The audio link redirects too many times.", 400);
-          let next: URL;
+          if (hop >= IMPORT_MAX_REDIRECTS) throw importFailed();
           try {
-            next = new URL(res.headers.get("location")!, url);
+            url = new URL(res.headers.get("location")!, url);
           } catch {
-            throw new VobizError("invalid_input", "The audio link redirects to an invalid address.", 400);
+            throw importFailed();
           }
-          url = checkImportUrl(next.href);
           continue;
         }
         break;
       }
       if (!res.ok) {
         await res.body?.cancel().catch(() => undefined);
-        throw new VobizError("invalid_input", `The audio link answered HTTP ${res.status}. Use a public link that downloads the file directly.`, 502);
+        throw importFailed();
       }
       const declared = Number(res.headers.get("content-length"));
       if (Number.isFinite(declared) && declared > limits.maxInputBytes) {
         await res.body?.cancel().catch(() => undefined);
         throw tooLarge(limits);
       }
-      if (!res.body) throw new VobizError("invalid_input", "The audio link returned no data.", 502);
+      if (!res.body) throw importFailed();
       const reader = res.body.getReader();
       const chunks: Buffer[] = [];
       let total = 0;
@@ -172,9 +190,7 @@ export function createMediaService(o: MediaServiceOptions): MediaService {
         }
       } catch (e) {
         if (e instanceof VobizError) throw e;
-        throw ac.signal.aborted
-          ? new VobizError("invalid_input", "The audio link took too long to download.", 504)
-          : new VobizError("invalid_input", "The audio download was interrupted.", 502);
+        throw failed();
       } finally {
         reader.releaseLock?.();
       }
@@ -220,6 +236,25 @@ export function createMediaService(o: MediaServiceOptions): MediaService {
       return stream ? { meta, stream } : undefined;
     },
   };
+}
+
+/** Resolves with `p`, or with undefined as soon as `signal` aborts. */
+function untilAborted<T>(p: Promise<T>, signal: AbortSignal): Promise<T | undefined> {
+  if (signal.aborted) return Promise.resolve(undefined);
+  return new Promise<T | undefined>((resolve, reject) => {
+    const onAbort = () => resolve(undefined);
+    signal.addEventListener("abort", onAbort, { once: true });
+    p.then(
+      (v) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(v);
+      },
+      (e) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(e);
+      },
+    );
+  });
 }
 
 function tooLarge(limits: AudioLimits): VobizError {
