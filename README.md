@@ -19,7 +19,7 @@ It also ships the **Vobiz Agent Skills**, so the model knows how each Vobiz prod
 
 | | |
 |---|---|
-| **Tools** | 110 in 13 toolsets: calls, in-call control, conferences, audio streams, IVR/XML, records, numbers, SIP trunks and endpoints, applications, sub-accounts, billing, SMS/MMS/RCS, opt-outs, skills, and reminder calls (hosted connector) |
+| **Tools** | 114 in 13 toolsets: calls, in-call control, conferences, audio streams, IVR/XML, records, numbers, SIP trunks and endpoints, applications, sub-accounts, billing, SMS/MMS/RCS, opt-outs, skills, and reminder calls with your own audio (hosted connector) |
 | **Prompts** | 15: one per Vobiz skill, e.g. `vobiz-voice-xml`, `vobiz-sip-trunking` |
 | **Resources** | `vobiz://skills/index` and `vobiz://skills/{name}` (with completion) |
 | **Transports** | stdio (`npx`), Streamable HTTP for one account, hosted multi-tenant Streamable HTTP with OAuth 2.1 |
@@ -32,6 +32,16 @@ It also ships the **Vobiz Agent Skills**, so the model knows how each Vobiz prod
 On the hosted connector (`https://mcp.vobiz.ai/mcp`) you can say *"wake me up at 6 tomorrow"* or *"call me at 3 to remind me about the dentist"*. The client calls `schedule_reminder_call` once and the server does the rest: it places the call at that time from your Vobiz number, speaks the message, and lets you press **1** to snooze, **2** to confirm or **9** to stop. It retries when nobody answers. Nothing depends on the chat staying open.
 
 At sign-in you choose **Full access**, **Personal assistant** (only reminder calls to your own number, plus your balance, numbers and call status) or **Read-only**, and enter your own number, an optional caller ID and your timezone. Manage reminders with `list_reminder_calls`, `get_reminder_call` and `cancel_reminder_call`. Operators: see [docs/HOSTING.md](docs/HOSTING.md#reminder-calls).
+
+#### Your own audio on a reminder call
+
+Say *"use this MP3 as my alarm"* or *"let me record the message"*. Your audio plays at the start of the call, before the spoken message. There are three ways to add it to your private audio library:
+
+- **Upload page.** `create_audio_upload_link` gives you a one-time link (valid 15 minutes). Open it to pick or drop a file, or press **Record** to record from your microphone (up to 5 minutes), then name it.
+- **Straight from the chat.** If you attached the file and your assistant can run code, it uploads the file to the same link itself.
+- **A public link.** Paste an https link and the assistant saves it with `import_audio_from_url`.
+
+Then say *"use the audio Morning alarm"* and the assistant passes that name as `audio` to `schedule_reminder_call`. MP3, WAV, M4A, OGG, WEBM, AAC and FLAC work, up to 15 MB and 5 minutes each. See your files with `list_audio` and remove one with `delete_audio`. Operators: see [docs/HOSTING.md](docs/HOSTING.md#audio-library).
 
 ## Contents
 
@@ -100,7 +110,7 @@ You need a Vobiz account, plus its **Auth ID** and **Auth Token** from the overv
 | Claude (web, Desktop, mobile) | **Settings → Connectors → Add custom connector** → `https://mcp.vobiz.ai/mcp` | Click **Connect** and sign in ([5 steps](#connect-claude-in-five-steps)) |
 | Claude Code | `claude mcp add --transport http vobiz https://mcp.vobiz.ai/mcp` | Run `/mcp`, pick **vobiz**, sign in |
 | Claude Code (plugin: server + skills) | `/plugin install vobiz --marketplace vobiz-ai/Vobiz-MCP-Server` | Enter your Auth ID and Auth Token when asked |
-| Claude Desktop (local extension) | Open `vobiz-mcp-v1.2.3.mcpb` from the [latest release](https://github.com/vobiz-ai/Vobiz-MCP-Server/releases/latest) | Enter your Auth ID and Auth Token |
+| Claude Desktop (local extension) | Open `vobiz-mcp-v1.3.0.mcpb` from the [latest release](https://github.com/vobiz-ai/Vobiz-MCP-Server/releases/latest) | Enter your Auth ID and Auth Token |
 | OpenAI Codex (CLI, IDE, app) | `codex mcp add vobiz --url https://mcp.vobiz.ai/mcp` | The Vobiz sign-in opens automatically |
 | ChatGPT | **Plugins → + → Add custom MCP server** → `https://mcp.vobiz.ai/mcp` | Sign in, then use **@Vobiz** |
 | Gemini CLI | `gemini mcp add -s user --transport http vobiz https://mcp.vobiz.ai/mcp` | Run `/mcp auth vobiz` |
@@ -120,13 +130,13 @@ Local options run the server on your machine with `npx` and need Node.js 22.9 or
 | Client | Install |
 |---|---|
 | Claude (web, Desktop, mobile) | Settings → Connectors → Add custom connector → `https://mcp.vobiz.ai/mcp` |
-| Claude Desktop extension | Open `vobiz-mcp-v1.2.3.mcpb` from the [latest release](https://github.com/vobiz-ai/Vobiz-MCP-Server/releases/latest) |
+| Claude Desktop extension | Open `vobiz-mcp-v1.3.0.mcpb` from the [latest release](https://github.com/vobiz-ai/Vobiz-MCP-Server/releases/latest) |
 | Claude Code | `/plugin install vobiz --marketplace vobiz-ai/Vobiz-MCP-Server` (MCP server + skills) |
-| OpenAI Codex | `codex mcp add vobiz --env VOBIZ_AUTH_ID=MA_XXXXXXXX --env VOBIZ_AUTH_TOKEN=YOUR_AUTH_TOKEN -- npx -y @vobiz/mcp@1.2.3` |
+| OpenAI Codex | `codex mcp add vobiz --env VOBIZ_AUTH_ID=MA_XXXXXXXX --env VOBIZ_AUTH_TOKEN=YOUR_AUTH_TOKEN -- npx -y @vobiz/mcp@1.3.0` |
 | Gemini CLI | `gemini extensions install https://github.com/vobiz-ai/Vobiz-MCP-Server` |
-| Cursor | [One-click install](https://cursor.com/en/install-mcp?name=vobiz&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsIkB2b2Jpei9tY3BAMS4yLjMiXSwiZW52Ijp7IlZPQklaX0FVVEhfSUQiOiIke2VudjpWT0JJWl9BVVRIX0lEfSIsIlZPQklaX0FVVEhfVE9LRU4iOiIke2VudjpWT0JJWl9BVVRIX1RPS0VOfSJ9fQ%3D%3D) |
-| VS Code / Copilot | [One-click install](https://insiders.vscode.dev/redirect/mcp/install?name=vobiz&config=%7B%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22%40vobiz%2Fmcp%401.2.3%22%5D%2C%22env%22%3A%7B%22VOBIZ_AUTH_ID%22%3A%22%24%7Benv%3AVOBIZ_AUTH_ID%7D%22%2C%22VOBIZ_AUTH_TOKEN%22%3A%22%24%7Benv%3AVOBIZ_AUTH_TOKEN%7D%22%7D%7D) |
-| Goose | `goose configure` → Add Extension → `npx -y @vobiz/mcp@1.2.3` ([deeplink](docs/INSTALL.md#goose)) |
+| Cursor | [One-click install](https://cursor.com/en/install-mcp?name=vobiz&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsIkB2b2Jpei9tY3BAMS4zLjAiXSwiZW52Ijp7IlZPQklaX0FVVEhfSUQiOiIke2VudjpWT0JJWl9BVVRIX0lEfSIsIlZPQklaX0FVVEhfVE9LRU4iOiIke2VudjpWT0JJWl9BVVRIX1RPS0VOfSJ9fQ%3D%3D) |
+| VS Code / Copilot | [One-click install](https://insiders.vscode.dev/redirect/mcp/install?name=vobiz&config=%7B%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22%40vobiz%2Fmcp%401.3.0%22%5D%2C%22env%22%3A%7B%22VOBIZ_AUTH_ID%22%3A%22%24%7Benv%3AVOBIZ_AUTH_ID%7D%22%2C%22VOBIZ_AUTH_TOKEN%22%3A%22%24%7Benv%3AVOBIZ_AUTH_TOKEN%7D%22%7D%7D) |
+| Goose | `goose configure` → Add Extension → `npx -y @vobiz/mcp@1.3.0` ([deeplink](docs/INSTALL.md#goose)) |
 | Windsurf, Zed, Cline, JetBrains, Continue, LM Studio, Warp, ChatGPT | [docs/INSTALL.md](docs/INSTALL.md) |
 
 Any other MCP client:
@@ -138,7 +148,7 @@ Any other MCP client:
       "command": "npx",
       "args": [
         "-y",
-        "@vobiz/mcp@1.2.3"
+        "@vobiz/mcp@1.3.0"
       ],
       "env": {
         "VOBIZ_AUTH_ID": "MA_XXXXXXXX",
@@ -151,7 +161,7 @@ Any other MCP client:
 
 Calling, messaging and account changes stay off until you add `VOBIZ_ENABLE_CALLS`, `VOBIZ_ENABLE_MESSAGING` or `VOBIZ_ENABLE_PROVISIONING` set to `"true"` to `env`.
 
-To self-host the remote connector: `docker run -p 3000:3000 -e VOBIZ_HOSTED_URL=https://mcp.example.com -e VOBIZ_HOSTED_SECRET="$(openssl rand -hex 32)" ghcr.io/vobiz-ai/vobiz-mcp:v1.2.3` ([docs/HOSTING.md](docs/HOSTING.md)).
+To self-host the remote connector: `docker run -p 3000:3000 -e VOBIZ_HOSTED_URL=https://mcp.example.com -e VOBIZ_HOSTED_SECRET="$(openssl rand -hex 32)" ghcr.io/vobiz-ai/vobiz-mcp:v1.3.0` ([docs/HOSTING.md](docs/HOSTING.md)).
 <!-- install:end -->
 
 ## Tools
@@ -171,10 +181,10 @@ Every tool has a `title`, input validation, and annotations: `readOnlyHint: true
 | `sip` | `list_sip_endpoints`, `get_sip_endpoint`, `list_trunk_credentials`, `list_ip_acl_entries`, `list_origination_uris` | `create_sip_endpoint`, `update_sip_endpoint`, `delete_sip_endpoint`, `create_trunk_credential`, `update_trunk_credential`, `delete_trunk_credential`, `add_ip_acl_entry`, `update_ip_acl_entry`, `delete_ip_acl_entry`, `create_origination_uri`, `update_origination_uri`, `delete_origination_uri` |
 | `subaccounts` | `list_sub_accounts`, `get_sub_account`, `get_sub_account_kyc_status` | `create_sub_account`, `update_sub_account`, `delete_sub_account`, `create_sub_account_kyc_session` |
 | `messaging` | `list_messaging_numbers`, `preview_message_cost`, `list_messages`, `get_message`, `list_conversations`, `get_conversation_messages`, `list_broadcasts`, `get_broadcast`, `check_opt_out`, `list_opt_outs` | `send_message`, `add_opt_out`, `remove_opt_out` |
-| `reminders` (hosted only) | `list_reminder_calls`, `get_reminder_call` | `schedule_reminder_call`, `cancel_reminder_call` |
+| `reminders` (hosted only) | `list_reminder_calls`, `get_reminder_call`, `list_audio` | `schedule_reminder_call`, `cancel_reminder_call`, `create_audio_upload_link`, `import_audio_from_url`, `delete_audio` |
 | `skills` | `list_vobiz_skills`, `get_vobiz_skill` | |
 
-**Choosing tools.** 110 tools is a lot for some clients. Load only what you need:
+**Choosing tools.** 114 tools is a lot for some clients. Load only what you need:
 
 - `VOBIZ_TOOLSETS=calls,call_control,records,skills` registers just those groups.
 - `VOBIZ_READ_ONLY=true` keeps only the read-only tools.

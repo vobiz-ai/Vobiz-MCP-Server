@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.3.0
+
+- **Your own audio on reminder calls.** Say "use this MP3 as my alarm" or "let me record the message", and the audio plays at the start of the call, before the spoken message. Each account has a private audio library. Add files on a one-time upload page (pick, drop or record from the microphone), by a direct upload from the assistant's code sandbox, or from a public https link. New tools: `create_audio_upload_link`, `import_audio_from_url`, `list_audio`, `delete_audio`. They are also part of the personal assistant sign-in.
+- `schedule_reminder_call` takes `audio`: the name or id of a library file. It cannot be combined with `audio_url`. The result shows the chosen audio.
+- Library files are converted for phone calls (8 kHz mono WAV, loudness-normalised) and kept in Google Cloud Storage (`VOBIZ_MEDIA_BUCKET`) or on local disk. Vobiz fetches them through short-lived sealed links, never public URLs. New routes: `GET`/`PUT /upload/:token` and `GET`/`HEAD /media/:token`.
+- New settings: `VOBIZ_MEDIA_BUCKET`, `VOBIZ_MEDIA_DIR`, `VOBIZ_MEDIA_MAX_INPUT_MB`, `VOBIZ_MEDIA_MAX_DURATION_SEC`, `VOBIZ_MEDIA_MAX_PER_ACCOUNT` and `VOBIZ_MEDIA_MAX_UPLOADS_PER_DAY`. The Docker image includes ffmpeg.
+
 ## 1.2.3
 
 - Reminder-call XML uses `finishOnKey="none"` on the key-press prompt. The media server rejects an empty value, which ended calls before the message played.

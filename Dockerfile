@@ -12,6 +12,7 @@ LABEL io.modelcontextprotocol.server.name="io.github.vobiz-ai/vobiz-mcp" \
       org.opencontainers.image.source="https://github.com/vobiz-ai/Vobiz-MCP-Server" \
       org.opencontainers.image.description="Official Vobiz MCP server (hosted OAuth connector)" \
       org.opencontainers.image.licenses="MIT"
+RUN apk add --no-cache ffmpeg
 WORKDIR /app
 ENV NODE_ENV=production PORT=3000 HOST=0.0.0.0
 COPY --from=build /app/node_modules ./node_modules

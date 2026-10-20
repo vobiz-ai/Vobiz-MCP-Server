@@ -1,6 +1,6 @@
 {
   "name": "@vobiz/mcp",
-  "version": "1.2.3",
+  "version": "1.3.0",
   "description": "Official Vobiz MCP server: voice calls, in-call control, VobizXML IVRs, call records, recordings, phone numbers, SIP trunks, SMS/MMS/RCS and the Vobiz Agent Skills for Claude and any MCP client.",
   "mcpName": "io.github.vobiz-ai/vobiz-mcp",
   "keywords": [
@@ -78,6 +78,7 @@
   },
   "dependencies": {
     "@google-cloud/firestore": "^9.3.1",
+    "@google-cloud/storage": "^7.22.0",
     "@google-cloud/tasks": "^7.3.0",
     "@modelcontextprotocol/sdk": "^1.32.1",
     "express": "5.3.0",

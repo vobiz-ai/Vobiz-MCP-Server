@@ -17,6 +17,7 @@ import {
   formatLocalTime,
   type Reminder,
   type ReminderInput,
+  type ReminderServiceOptions,
   type ScheduledJob,
 } from "../src/reminders/index.js";
 import { answerScript, inactiveScript, menuText, noResponseText, snoozedScript } from "../src/reminders/script.js";
@@ -70,7 +71,7 @@ function input(over: Partial<ReminderInput> = {}): ReminderInput {
   };
 }
 
-function setup(o: { routes?: Route[]; env?: Record<string, string>; limits?: Record<string, number> } = {}) {
+function setup(o: { routes?: Route[]; env?: Record<string, string>; limits?: Record<string, number>; media?: Pick<ReminderServiceOptions, "mediaUrl" | "mediaExists"> } = {}) {
   let clock = T0.getTime();
   const fetch = mockFetch(o.routes ?? [ownNumberRoute, callOk]);
   const store = new MemoryStore();
@@ -85,6 +86,7 @@ function setup(o: { routes?: Route[]; env?: Record<string, string>; limits?: Rec
     fetchImpl: fetch.impl,
     limits: o.limits,
     now: () => new Date(clock),
+    ...o.media,
   });
   const advance = (ms: number) => (clock += ms);
   const posts = () => fetch.calls.filter((c) => c.method === "POST");
@@ -108,9 +110,12 @@ describe("reminder scripts", () => {
       .toMatchInlineSnapshot(`
       "<?xml version="1.0" encoding="UTF-8"?>
       <Response>
-          <Play>https://cdn.example.com/a.mp3?x=1&amp;y=2</Play>
-          <Gather action="https://mcp.example.test/r/vbzn_abc/input" method="POST" inputType="dtmf" numDigits="1" finishOnKey="none" executionTimeout="10">
-              <Speak language="en-IN" voice="MAN">Good morning! This is your Vobiz wake-up call. Gym &lt;Dial&gt;+1900&lt;/Dial&gt; &amp; &quot;eat&quot; Press 1 to snooze for 1 minute, 2 to confirm, 9 to stop these calls.</Speak>
+          <Gather action="https://mcp.example.test/r/vbzn_abc/input" method="POST" inputType="dtmf speech" numDigits="1" finishOnKey="none" executionTimeout="8" speechModel="command_and_search" language="en-IN" hints="snooze, later, confirm, yes, done, okay, stop, cancel, no">
+              <Play>https://cdn.example.com/a.mp3?x=1&amp;y=2</Play>
+              <Speak language="en-IN" voice="MAN">Good morning! This is your Vobiz wake-up call. Gym &lt;Dial&gt;+1900&lt;/Dial&gt; &amp; &quot;eat&quot; Press 1 or say snooze to call again in 1 minute. Press 2 or say confirm. Press 9 or say stop to end these calls.</Speak>
+          </Gather>
+          <Gather action="https://mcp.example.test/r/vbzn_abc/input" method="POST" inputType="dtmf speech" numDigits="1" finishOnKey="none" executionTimeout="8" speechModel="command_and_search" language="en-IN" hints="snooze, later, confirm, yes, done, okay, stop, cancel, no">
+              <Speak language="en-IN" voice="MAN">Press 1 or say snooze. Press 2 or say confirm. Press 9 or say stop.</Speak>
           </Gather>
           <Speak language="en-IN" voice="MAN">No response. I will call again in 5 minutes. Goodbye.</Speak>
       </Response>
@@ -123,7 +128,7 @@ describe("reminder scripts", () => {
     expect(x).toContain("Hello. This is your reminder call from Vobiz. Call mum");
     expect(x).toContain(">No response. Goodbye.</Speak>");
     expect(x).not.toContain("<Play>");
-    expect(menuText(10)).toBe("Press 1 to snooze for 10 minutes, 2 to confirm, 9 to stop these calls.");
+    expect(menuText(10)).toBe("Press 1 or say snooze to call again in 10 minutes. Press 2 or say confirm. Press 9 or say stop to end these calls.");
     expect(noResponseText(1)).toBe("No response. I will call again in 1 minute. Goodbye.");
   });
 
@@ -492,7 +497,7 @@ describe("ReminderService call flow", () => {
     await t.service.schedule(ACCOUNT, input({ message: "Pay rent & bills" }));
     const { ans } = await t.fireLast();
     const xml = await t.service.answerXml(ans);
-    expect(xml).toContain("Pay rent &amp; bills Press 1 to snooze for 10 minutes");
+    expect(xml).toContain("Pay rent &amp; bills Press 1 or say snooze to call again in 10 minutes");
     expect(xml).toContain(`action="${PUBLIC}/r/${ans}/input"`);
     expect(xml).toContain("I will call again in 5 minutes.");
     expect(await t.service.answerXml("vbzn_bogus")).toBeUndefined();
@@ -749,5 +754,80 @@ describe("createReminderBackend", () => {
     expect((gcp.scheduler as CloudTasksScheduler).parent).toBe("projects/p1/locations/asia-south1/queues/reminders");
     expect(() => createReminderBackend({ ...env, VOBIZ_PUBLIC_URL: "" }, log)).toThrow("VOBIZ_PUBLIC_URL");
     expect(() => createReminderBackend({ VOBIZ_MAX_REMINDER_CALLS_PER_DAY: "0" }, log)).toThrow();
+  });
+});
+
+// ── audio library (audioId) ─────────────────────────────────────
+
+describe("ReminderService with the audio library", () => {
+  const library = new Map([[AUTH_ID, new Set(["a_alarm0000000000"])]]);
+  const media = (): Pick<ReminderServiceOptions, "mediaUrl" | "mediaExists"> & { minted: string[] } => {
+    const minted: string[] = [];
+    return {
+      minted,
+      mediaUrl: (account, id) => {
+        minted.push(`${account.authId}/${id}`);
+        return `${PUBLIC}/media/${sealer.seal("med", { authId: account.authId, id }, 7200)}.wav`;
+      },
+      mediaExists: async (authId, id) => library.get(authId)?.has(id) ?? false,
+    };
+  };
+
+  it("plays a fresh /media URL for audioId, and audioId wins over audioUrl", async () => {
+    const m = media();
+    const t = setup({ media: m });
+    const r = await t.service.schedule(ACCOUNT, input({ audioId: "a_alarm0000000000", audioUrl: "https://cdn.example.com/other.mp3" }));
+    expect(r.audioId).toBe("a_alarm0000000000");
+    expect(JSON.stringify(await t.store.list(AUTH_ID))).not.toContain("vbzm_");
+    const { ans } = await t.fireLast();
+    const xml = (await t.service.answerXml(ans))!;
+    const play = /<Play>([^<]+)<\/Play>/.exec(xml)![1]!;
+    expect(play.startsWith(`${PUBLIC}/media/vbzm_`)).toBe(true);
+    expect(xml).not.toContain("other.mp3");
+    expect(sealer.open("med", play.slice(`${PUBLIC}/media/`.length, -".wav".length))).toMatchObject({ authId: AUTH_ID, id: "a_alarm0000000000" });
+    expect(m.minted).toEqual([`${AUTH_ID}/a_alarm0000000000`]);
+    expect(xml.indexOf("<Play>")).toBeGreaterThan(xml.indexOf("<Gather")); // the audio plays inside the first Gather
+    expect(xml.indexOf("<Play>")).toBeLessThan(xml.indexOf("<Speak"));
+  });
+
+  it("refuses an audioId that is not in the account's library, or when there is no library", async () => {
+    const t = setup({ media: media() });
+    await expect(t.service.schedule(ACCOUNT, input({ audioId: "a_missing" }))).rejects.toMatchObject({ kind: "not_found" });
+    await expect(t.service.schedule({ ...ACCOUNT, authId: "MA_OTHER1" }, input({ audioId: "a_alarm0000000000" }))).rejects.toMatchObject({ kind: "not_found" });
+    await expect(t.service.schedule(ACCOUNT, input({ audioId: "../etc/passwd" }))).rejects.toMatchObject({ kind: "invalid_input" });
+    expect(t.scheduler.jobs).toEqual([]);
+    const bare = setup();
+    await expect(bare.service.schedule(ACCOUNT, input({ audioId: "a_alarm0000000000" }))).rejects.toMatchObject({ kind: "invalid_input", message: expect.stringContaining("no audio library") });
+  });
+
+  it("plays only the message when the file was deleted after scheduling or the library is down", async () => {
+    let state: "ok" | "gone" | "down" = "ok";
+    const m = media();
+    const t = setup({
+      media: {
+        mediaUrl: m.mediaUrl,
+        mediaExists: async (authId, id) => {
+          if (state === "down") throw new Error("storage down");
+          return state === "ok" && (library.get(authId)?.has(id) ?? false);
+        },
+      },
+    });
+    await t.service.schedule(ACCOUNT, input({ audioId: "a_alarm0000000000" }));
+    const { ans } = await t.fireLast();
+    state = "gone";
+    const gone = (await t.service.answerXml(ans))!;
+    expect(gone).not.toContain("<Play>");
+    expect(gone).toContain("Take your medicine");
+    state = "down";
+    expect(await t.service.answerXml(ans)).not.toContain("<Play>");
+    state = "ok";
+    expect(await t.service.answerXml(ans)).toContain("<Play>");
+  });
+
+  it("keeps playing audioUrl when no audioId is set", async () => {
+    const t = setup({ media: media() });
+    await t.service.schedule(ACCOUNT, input({ audioUrl: "https://cdn.example.com/alarm.mp3" }));
+    const { ans } = await t.fireLast();
+    expect(await t.service.answerXml(ans)).toContain("<Play>https://cdn.example.com/alarm.mp3</Play>");
   });
 });

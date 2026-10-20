@@ -6,10 +6,22 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:
  *   client/txn/code/access/refresh  OAuth (hosted.ts)
  *   job                              a scheduled reminder-call job (Cloud Tasks payload)
  *   ans                              per-call context behind /r/:token/answer|input|hangup
+ *   upl                              a one-time audio upload link (/upload/:token)
+ *   med                              a short-lived audio URL handed to Vobiz in <Play> (/media/:token)
  */
-export type SealKind = "client" | "txn" | "code" | "access" | "refresh" | "job" | "ans";
+export type SealKind = "client" | "txn" | "code" | "access" | "refresh" | "job" | "ans" | "upl" | "med";
 
-const PREFIX: Record<SealKind, string> = { client: "vbzc_", txn: "vbzt_", code: "vbzo_", access: "vbza_", refresh: "vbzr_", job: "vbzj_", ans: "vbzn_" };
+const PREFIX: Record<SealKind, string> = {
+  client: "vbzc_",
+  txn: "vbzt_",
+  code: "vbzo_",
+  access: "vbza_",
+  refresh: "vbzr_",
+  job: "vbzj_",
+  ans: "vbzn_",
+  upl: "vbzu_",
+  med: "vbzm_",
+};
 
 /** Authenticated encryption (AES-256-GCM) for every token this server hands out. */
 export class Sealer {

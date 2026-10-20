@@ -58,8 +58,10 @@ export interface ReminderInput {
   maxAttempts: number;
   /** No answer / busy / voicemail / no input → retry after this many minutes (1..30). */
   retryMinutes: number;
-  /** Optional https MP3/WAV played before the spoken message (phase 2: user audio). */
+  /** Optional https MP3/WAV played before the spoken message. */
   audioUrl?: string;
+  /** Optional id of a file in the account's audio library (src/media); the service mints a /media/:token URL at answer time. Takes precedence over audioUrl. */
+  audioId?: string;
 }
 
 export interface Attempt {
@@ -174,8 +176,8 @@ export interface ReminderService {
   fire(jobToken: string): Promise<{ fired: boolean; reason?: string }>;
   /** VobizXML for the answered call (GET|POST /r/:token/answer); undefined when the token is invalid or the reminder is no longer active. */
   answerXml(ansToken: string): Promise<string | undefined>;
-  /** VobizXML after a key press (POST /r/:token/input). */
-  inputXml(ansToken: string, digits: string): Promise<string | undefined>;
+  /** VobizXML after a key press or a spoken word (POST /r/:token/input: Digits and/or Speech). */
+  inputXml(ansToken: string, digits: string, speech?: string): Promise<string | undefined>;
   /** Final call outcome (POST /r/:token/hangup): classifies, records the attempt and schedules a retry when due. */
   hangup(ansToken: string, params: HangupParams): Promise<void>;
 }
