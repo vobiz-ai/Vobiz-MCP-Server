@@ -79,6 +79,10 @@ export function scriptXml(s: CallScript, playUrl: string | "missing" | undefined
     checkUrl: () => {
       // No call-control URLs (Gather/Redirect/Record) are ever emitted here.
     },
+    checkDestination: () => {
+      // A call script only plays or speaks; it never dials, so no destination can reach this hook.
+      throw new Error("call scripts never emit Dial");
+    },
   });
 }
 
