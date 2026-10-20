@@ -48,6 +48,7 @@ import type { MediaService } from "./media/types.js";
 import { createMediaBackend, createMediaService } from "./media/index.js";
 import { createMediaRouter, mintMediaUrl, mintUploadUrl } from "./media/router.js";
 import { createCallScriptBackend, type CallScriptBackend } from "./callscript/index.js";
+import { createFirestoreSharedBackend, type SharedStoreBackend } from "./guard/shared-store.js";
 import { createLogger, type Logger } from "./logger.js";
 import { createServer, createSharedState } from "./server.js";
 import { SERVER_VERSION } from "./version.js";
@@ -175,6 +176,8 @@ export interface HostedOptions {
   mediaAvailable?: () => Promise<boolean>;
   /** make_call say/play: sealed call scripts served at /c/:token/answer|hangup. */
   callScripts?: CallScriptBackend;
+  /** Cross-replica idempotency records and rate counters for money-spending tools (Firestore in production). */
+  sharedBackend?: SharedStoreBackend;
 }
 
 export function createHostedApp(o: HostedOptions): express.Express {
@@ -219,7 +222,7 @@ export function createHostedApp(o: HostedOptions): express.Express {
     if (s) {
       tenants.delete(authId);
     } else {
-      s = createSharedState(cfg);
+      s = createSharedState(cfg, false, { backend: o.sharedBackend, multiTenant: true, log });
       if (tenants.size >= 5000) tenants.delete(tenants.keys().next().value as string);
     }
     tenants.set(authId, s);
@@ -816,6 +819,10 @@ export async function runHosted(): Promise<void> {
     else trustedEgressCidrs = [...new Set([...trustedEgressCidrs, ...got.cidrs])];
   }
   log.info(`oauth: ${trustedEgressCidrs.length} trusted client egress range(s) skip the per-IP limits on /token and /register`);
+  // Idempotency records and call/message rate counters shared by every replica, so a retried make_call never dials
+  // twice and the caps do not multiply by the instance count.
+  const sharedBackend = cfg.reminders.gcpProject ? createFirestoreSharedBackend(cfg.reminders.gcpProject, cfg.reminders.firestoreDatabase) : undefined;
+  log.info(sharedBackend ? "guard: shared idempotency and rate counters in Firestore (collections idempotency and counters)" : "guard: idempotency and rate counters in memory (single replica only)");
   // Refresh-token families and used codes: Firestore (shared by every replica) when a GCP project is configured.
   const grants: GrantStore = cfg.reminders.gcpProject
     ? new FirestoreGrantStore({ projectId: cfg.reminders.gcpProject, databaseId: cfg.reminders.firestoreDatabase })
@@ -838,6 +845,7 @@ export async function runHosted(): Promise<void> {
     mediaRouter,
     mediaAvailable,
     callScripts,
+    sharedBackend,
     allowedOrigins: list(process.env.VOBIZ_ALLOWED_ORIGINS),
     excludeTools: process.env.VOBIZ_HOSTED_EXCLUDED_TOOLS === undefined ? undefined : (list(process.env.VOBIZ_HOSTED_EXCLUDED_TOOLS) ?? []),
     accessTtlSec: ttl("VOBIZ_ACCESS_TOKEN_TTL_SEC", 3600, MAX_ACCESS_TTL),

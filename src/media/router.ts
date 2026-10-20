@@ -11,7 +11,7 @@
  */
 import { randomBytes } from "node:crypto";
 import express, { type NextFunction, type Request, type Response, type Router } from "express";
-import { BRAND_BASE_CSS, VOBIZ_LOGO_SVG } from "../brand.js";
+import { BRAND_BASE_CSS, VOBIZ_LOGO_SVG, faviconLinkTag } from "../brand.js";
 import type { Config } from "../config.js";
 import { VobizError } from "../errors.js";
 import type { Logger } from "../logger.js";
@@ -89,7 +89,7 @@ function pageCsp(nonce: string): string {
     "font-src https://fonts.gstatic.com",
     "connect-src 'self'",
     "media-src blob:",
-    "img-src data:",
+    "img-src 'self' data:",
     "form-action 'none'",
     "frame-ancestors 'none'",
     "base-uri 'none'",
@@ -98,7 +98,7 @@ function pageCsp(nonce: string): string {
 
 function shell(o: { title: string; body: string; nonce?: string; script?: string; links: Config["links"] }): string {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="robots" content="noindex"><meta name="referrer" content="no-referrer"><title>${esc(o.title)} · Vobiz MCP Server</title>
+<meta name="robots" content="noindex"><meta name="referrer" content="no-referrer"><title>${esc(o.title)} · Vobiz MCP Server</title>${faviconLinkTag()}
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600&display=swap">
 <style>
