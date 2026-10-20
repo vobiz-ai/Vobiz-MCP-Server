@@ -53,4 +53,7 @@ export class FakeReminders implements ReminderService {
     return undefined;
   }
   async hangup(): Promise<void> {}
+  async sweepStale(): Promise<number> {
+    return 0;
+  }
 }

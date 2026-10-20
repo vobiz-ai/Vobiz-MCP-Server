@@ -9,6 +9,7 @@ The official [Model Context Protocol](https://modelcontextprotocol.io) server fo
 - read billing transactions
 - send SMS, MMS and RCS messages
 - schedule reminder and wake-up calls (hosted connector)
+- call someone and play audio or speak text in one step: `make_call` with `say` / `play` (hosted connector)
 
 It also ships the **Vobiz Agent Skills**, so the model knows how each Vobiz product works before it acts.
 
@@ -32,6 +33,10 @@ It also ships the **Vobiz Agent Skills**, so the model knows how each Vobiz prod
 On the hosted connector (`https://mcp.vobiz.ai/mcp`) you can say *"wake me up at 6 tomorrow"* or *"call me at 3 to remind me about the dentist"*. The client calls `schedule_reminder_call` once and the server does the rest: it places the call at that time from your Vobiz number, speaks the message, and lets you press **1** to snooze, **2** to confirm or **9** to stop. It retries when nobody answers. Nothing depends on the chat staying open.
 
 At sign-in you choose **Full access**, **Personal assistant** (only reminder calls to your own number, plus your balance, numbers and call status) or **Read-only**, and enter your own number, an optional caller ID and your timezone. Manage reminders with `list_reminder_calls`, `get_reminder_call` and `cancel_reminder_call`. Operators: see [docs/HOSTING.md](docs/HOSTING.md#reminder-calls).
+
+### "Call me and play this"
+
+On the hosted connector, *"call +919876543210 and play my alarm"* or *"call +919876543210 and say 'Your table is ready'"* is one `make_call` with `say` (text) and/or `play` (a file in your audio library, or a direct https `.mp3`/`.wav` link). The connector hosts the call script: the call plays or speaks the content, then hangs up (`loop: 0` repeats the audio until you hang up). A web page such as Pixabay, YouTube, Spotify or SoundCloud cannot be played; give a direct file link or add the file to your audio library first. See [docs/TOOLS.md](docs/TOOLS.md#make_call).
 
 #### Your own audio on a reminder call
 
@@ -110,7 +115,7 @@ You need a Vobiz account, plus its **Auth ID** and **Auth Token** from the overv
 | Claude (web, Desktop, mobile) | **Settings → Connectors → Add custom connector** → `https://mcp.vobiz.ai/mcp` | Click **Connect** and sign in ([5 steps](#connect-claude-in-five-steps)) |
 | Claude Code | `claude mcp add --transport http vobiz https://mcp.vobiz.ai/mcp` | Run `/mcp`, pick **vobiz**, sign in |
 | Claude Code (plugin: server + skills) | `/plugin install vobiz --marketplace vobiz-ai/Vobiz-MCP-Server` | Enter your Auth ID and Auth Token when asked |
-| Claude Desktop (local extension) | Open `vobiz-mcp-v1.3.0.mcpb` from the [latest release](https://github.com/vobiz-ai/Vobiz-MCP-Server/releases/latest) | Enter your Auth ID and Auth Token |
+| Claude Desktop (local extension) | Open `vobiz-mcp-v1.4.0.mcpb` from the [latest release](https://github.com/vobiz-ai/Vobiz-MCP-Server/releases/latest) | Enter your Auth ID and Auth Token |
 | OpenAI Codex (CLI, IDE, app) | `codex mcp add vobiz --url https://mcp.vobiz.ai/mcp` | The Vobiz sign-in opens automatically |
 | ChatGPT | **Plugins → + → Add custom MCP server** → `https://mcp.vobiz.ai/mcp` | Sign in, then use **@Vobiz** |
 | Gemini CLI | `gemini mcp add -s user --transport http vobiz https://mcp.vobiz.ai/mcp` | Run `/mcp auth vobiz` |
@@ -130,13 +135,13 @@ Local options run the server on your machine with `npx` and need Node.js 22.9 or
 | Client | Install |
 |---|---|
 | Claude (web, Desktop, mobile) | Settings → Connectors → Add custom connector → `https://mcp.vobiz.ai/mcp` |
-| Claude Desktop extension | Open `vobiz-mcp-v1.3.0.mcpb` from the [latest release](https://github.com/vobiz-ai/Vobiz-MCP-Server/releases/latest) |
+| Claude Desktop extension | Open `vobiz-mcp-v1.4.0.mcpb` from the [latest release](https://github.com/vobiz-ai/Vobiz-MCP-Server/releases/latest) |
 | Claude Code | `/plugin install vobiz --marketplace vobiz-ai/Vobiz-MCP-Server` (MCP server + skills) |
-| OpenAI Codex | `codex mcp add vobiz --env VOBIZ_AUTH_ID=MA_XXXXXXXX --env VOBIZ_AUTH_TOKEN=YOUR_AUTH_TOKEN -- npx -y @vobiz/mcp@1.3.0` |
+| OpenAI Codex | `codex mcp add vobiz --env VOBIZ_AUTH_ID=MA_XXXXXXXX --env VOBIZ_AUTH_TOKEN=YOUR_AUTH_TOKEN -- npx -y @vobiz/mcp@1.4.0` |
 | Gemini CLI | `gemini extensions install https://github.com/vobiz-ai/Vobiz-MCP-Server` |
-| Cursor | [One-click install](https://cursor.com/en/install-mcp?name=vobiz&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsIkB2b2Jpei9tY3BAMS4zLjAiXSwiZW52Ijp7IlZPQklaX0FVVEhfSUQiOiIke2VudjpWT0JJWl9BVVRIX0lEfSIsIlZPQklaX0FVVEhfVE9LRU4iOiIke2VudjpWT0JJWl9BVVRIX1RPS0VOfSJ9fQ%3D%3D) |
-| VS Code / Copilot | [One-click install](https://insiders.vscode.dev/redirect/mcp/install?name=vobiz&config=%7B%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22%40vobiz%2Fmcp%401.3.0%22%5D%2C%22env%22%3A%7B%22VOBIZ_AUTH_ID%22%3A%22%24%7Benv%3AVOBIZ_AUTH_ID%7D%22%2C%22VOBIZ_AUTH_TOKEN%22%3A%22%24%7Benv%3AVOBIZ_AUTH_TOKEN%7D%22%7D%7D) |
-| Goose | `goose configure` → Add Extension → `npx -y @vobiz/mcp@1.3.0` ([deeplink](docs/INSTALL.md#goose)) |
+| Cursor | [One-click install](https://cursor.com/en/install-mcp?name=vobiz&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsIkB2b2Jpei9tY3BAMS40LjAiXSwiZW52Ijp7IlZPQklaX0FVVEhfSUQiOiIke2VudjpWT0JJWl9BVVRIX0lEfSIsIlZPQklaX0FVVEhfVE9LRU4iOiIke2VudjpWT0JJWl9BVVRIX1RPS0VOfSJ9fQ%3D%3D) |
+| VS Code / Copilot | [One-click install](https://insiders.vscode.dev/redirect/mcp/install?name=vobiz&config=%7B%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22%40vobiz%2Fmcp%401.4.0%22%5D%2C%22env%22%3A%7B%22VOBIZ_AUTH_ID%22%3A%22%24%7Benv%3AVOBIZ_AUTH_ID%7D%22%2C%22VOBIZ_AUTH_TOKEN%22%3A%22%24%7Benv%3AVOBIZ_AUTH_TOKEN%7D%22%7D%7D) |
+| Goose | `goose configure` → Add Extension → `npx -y @vobiz/mcp@1.4.0` ([deeplink](docs/INSTALL.md#goose)) |
 | Windsurf, Zed, Cline, JetBrains, Continue, LM Studio, Warp, ChatGPT | [docs/INSTALL.md](docs/INSTALL.md) |
 
 Any other MCP client:
@@ -148,7 +153,7 @@ Any other MCP client:
       "command": "npx",
       "args": [
         "-y",
-        "@vobiz/mcp@1.3.0"
+        "@vobiz/mcp@1.4.0"
       ],
       "env": {
         "VOBIZ_AUTH_ID": "MA_XXXXXXXX",
@@ -161,7 +166,7 @@ Any other MCP client:
 
 Calling, messaging and account changes stay off until you add `VOBIZ_ENABLE_CALLS`, `VOBIZ_ENABLE_MESSAGING` or `VOBIZ_ENABLE_PROVISIONING` set to `"true"` to `env`.
 
-To self-host the remote connector: `docker run -p 3000:3000 -e VOBIZ_HOSTED_URL=https://mcp.example.com -e VOBIZ_HOSTED_SECRET="$(openssl rand -hex 32)" ghcr.io/vobiz-ai/vobiz-mcp:v1.3.0` ([docs/HOSTING.md](docs/HOSTING.md)).
+To self-host the remote connector: `docker run -p 3000:3000 -e VOBIZ_HOSTED_URL=https://mcp.example.com -e VOBIZ_HOSTED_SECRET="$(openssl rand -hex 32)" ghcr.io/vobiz-ai/vobiz-mcp:v1.4.0` ([docs/HOSTING.md](docs/HOSTING.md)).
 <!-- install:end -->
 
 ## Tools
@@ -238,15 +243,15 @@ Everything below is enforced by the server, not left to the model.
 | Outbound calls | Off (`VOBIZ_ENABLE_CALLS`) |
 | Sending messages, changing opt-outs | Off (`VOBIZ_ENABLE_MESSAGING`) |
 | Buying or releasing numbers; changing trunks, SIP endpoints, credentials, IP allow-lists, applications and sub-accounts; deleting recordings | Off (`VOBIZ_ENABLE_PROVISIONING`). Purchases also need `VOBIZ_MAX_NUMBER_COST` > 0. |
-| Explicit confirmation | `confirm: true` on every call, message, transfer, recording, purchase and account change. MCP clients also prompt for every destructive tool. |
-| Idempotency | `idempotency_key` replays the first result instead of acting twice. Identical calls inside `VOBIZ_DUPLICATE_CALL_WINDOW_SEC` are refused. Unknown outcomes stay blocked. |
-| Call limits | Destination countries and blocked prefixes, plus caps on duration, per-minute and per-hour calls, and concurrency. A balance floor applies to prepaid accounts. |
+| Explicit confirmation | When the MCP client supports elicitation, calls, messages, transfers, holds, recordings, audio streams, purchases, number releases and other account changes are approved by the user in a prompt from the server that names the destination number, URL host or fee; a decline does nothing. Other clients use `confirm: true`, which the model sets on the user's behalf (model-attested). MCP clients also prompt for every destructive tool. |
+| Idempotency | `idempotency_key` replays the first result instead of acting twice. Identical calls inside `VOBIZ_DUPLICATE_CALL_WINDOW_SEC` are refused. Unknown outcomes stay blocked. With a shared store (hosted connector on Firestore) records and call/message caps are shared by every replica; in multi-tenant mode `VOBIZ_IDEMPOTENCY_FILE` is ignored. |
+| Call limits | Destination countries and blocked prefixes (also for every `<Dial>` number the server builds), plus caps on duration, per-minute and per-hour calls, and concurrency. A concurrency slot is reserved before the checks run, so simultaneous requests cannot overshoot the cap. A balance floor applies to prepaid accounts. |
 | Message limits | Recipients per send, messages per minute and per hour, recipient countries. Senders must be messaging numbers on the account. Opt-outs are respected. |
 | Number purchases | Cost cap, daily cap, balance pre-check, already-owned check |
 | Call-control URLs | https only, approved hosts only (hosted mode: any public host). No credentials in URLs. |
 | Tenant isolation | The account comes from the credentials only. No tool accepts an account ID. |
 | Secrets | Auth tokens, SIP passwords and other secrets are redacted from results. Logs carry route templates and status codes only, never phone numbers or tokens. |
-| Untrusted content | Message bodies, caller names and callback payloads are data, never instructions. |
+| Untrusted content | Message bodies, caller names and callback payloads are data, never instructions. Tools that return them mark each item `untrusted: true` and add a top-level `notice` and `untrusted_fields`; all other fields are unchanged. |
 
 ## Configuration
 
@@ -262,7 +267,8 @@ All settings are environment variables. Every one is optional except credentials
 | URLs | `VOBIZ_ALLOWED_URL_HOSTS`, `VOBIZ_ALLOW_ANY_URL_HOST` (false) |
 | Links | `VOBIZ_CONSOLE_URL`, `VOBIZ_PRIVACY_URL`, `VOBIZ_DOCS_URL`, `VOBIZ_DOCS_MCP_URL` (public Vobiz URLs) |
 | Single-account HTTP | `PORT` (3000), `HOST` (127.0.0.1), `VOBIZ_HTTP_SECRET`, `VOBIZ_PUBLIC_URL`, `VOBIZ_REMOTE_ALLOW_CALLS` (false), `VOBIZ_WEBHOOK_SIGNATURE` (`require`), `VOBIZ_ANSWER_TEXT` |
-| Hosted connector | `VOBIZ_HOSTED_URL`, `VOBIZ_HOSTED_SECRET`, `VOBIZ_ACCESS_TOKEN_TTL_SEC` (3600), `VOBIZ_REFRESH_TOKEN_TTL_SEC` (2592000), `VOBIZ_CIMD_HOSTS` (`claude.ai`), `VOBIZ_ALLOWED_ORIGINS` (`https://claude.ai,https://claude.com`), `VOBIZ_HOSTED_EXCLUDED_TOOLS` |
+| Hosted connector | `VOBIZ_HOSTED_URL`, `VOBIZ_HOSTED_SECRET`, `VOBIZ_ACCESS_TOKEN_TTL_SEC` (3600, max 86400), `VOBIZ_REFRESH_TOKEN_TTL_SEC` (2592000), `VOBIZ_ALLOWED_ORIGINS` (`https://claude.ai,https://claude.com,https://chatgpt.com,https://chat.openai.com`), `VOBIZ_HOSTED_EXCLUDED_TOOLS` |
+| Hosted connector OAuth | `VOBIZ_TRUSTED_CLIENTS` (none; `redirect-host=Display Name`), `VOBIZ_LOGIN_MAX_PER_IP` (10), `VOBIZ_LOGIN_MAX_PER_AUTH_ID` (10), `VOBIZ_TRUSTED_EGRESS_CIDRS` (Anthropic's published ranges), `VOBIZ_TRUSTED_EGRESS_URL` |
 
 ## Run modes
 

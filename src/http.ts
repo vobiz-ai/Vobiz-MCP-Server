@@ -74,6 +74,9 @@ async function readParams(req: http.IncomingMessage, url: URL): Promise<Record<s
 export function createHttpHandler(opts: HttpOptions): http.RequestListener {
   const { cfg, log } = opts;
   const shared = createSharedState(cfg, true);
+  // TODO(call-scripts): make_call `say` / `play` are hosted-connector only for now. This handler is plain node:http, so
+  // serving /c/:token/* here needs an Express bridge (or a port of the router) plus a Sealer keyed from `secret`; until
+  // then make_call answers say/play with invalid_input pointing at the hosted connector or an own answer_url.
   const newServer = () => createServer(cfg, log, opts.fetchImpl, { readOnly: opts.readOnly, shared });
   const sse = new Map<string, SSEServerTransport>();
   const answerXml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n    <Speak>${escapeXml(opts.answerText)}</Speak>\n</Response>\n`;

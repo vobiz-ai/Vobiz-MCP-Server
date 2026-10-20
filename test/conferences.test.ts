@@ -114,7 +114,9 @@ describe("conference tools: reads", () => {
       muted: false,
       deaf: true,
       join_time_seconds: 12,
+      untrusted: true,
     });
+    expect(r.data.untrusted_fields).toContain("caller_name");
   });
 
   it("reports a 200 {error:failed} payload as details unavailable", async () => {

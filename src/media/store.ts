@@ -7,6 +7,7 @@
  *
  * <hash> is the first 16 hex chars of sha256(authId), so the Auth ID itself never appears in a path.
  * The JSON sidecar is the source of truth for metadata; list() reads only sidecars.
+ * The daily upload counter lives apart from the library, at `counters/<hash>.json`, so deleting files never resets it.
  */
 import { createReadStream } from "node:fs";
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
@@ -42,6 +43,20 @@ export function cleanMeta(m: unknown): AudioMeta | undefined {
   };
   if (typeof r.origin === "string" && r.origin) out.origin = r.origin;
   return out;
+}
+
+const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Next value of a {day, count} counter: +1 on the same day, 1 on a new day. */
+function nextCount(prev: unknown, day: string): number {
+  const p = prev && typeof prev === "object" ? (prev as { day?: unknown; count?: unknown }) : {};
+  const n = Number(p.count);
+  return p.day === day && Number.isInteger(n) && n >= 0 ? n + 1 : 1;
+}
+
+/** Relative path of an account's daily counter. */
+export function counterPath(authId: string): string {
+  return `counters/${accountHash(authId)}.json`;
 }
 
 const newestFirst = (a: AudioMeta, b: AudioMeta) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0);
@@ -122,6 +137,42 @@ export class LocalDiskMediaStore implements MediaStore {
     await rm(p.wav, { force: true });
     return true;
   }
+
+  async count(authId: string): Promise<number> {
+    try {
+      return (await readdir(this.folder(authId))).filter((n) => n.endsWith(".json") && isValidAudioId(n.slice(0, -5))).length;
+    } catch {
+      return 0;
+    }
+  }
+
+  /** Per-process queue per counter file, so concurrent increments in this process never lose an update. */
+  private readonly counterLocks = new Map<string, Promise<unknown>>();
+
+  incrementDaily(authId: string, day: string): Promise<number> {
+    if (!DAY_RE.test(day)) return Promise.reject(new Error("invalid day"));
+    const file = join(this.dir, ...counterPath(authId).split("/"));
+    const prev = this.counterLocks.get(file) ?? Promise.resolve();
+    const run = prev.catch(() => undefined).then(async () => {
+      let cur: unknown;
+      try {
+        cur = JSON.parse(await readFile(file, "utf8"));
+      } catch {
+        cur = undefined;
+      }
+      const count = nextCount(cur, day);
+      await mkdir(join(this.dir, "counters"), { recursive: true, mode: 0o700 });
+      const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
+      await writeFile(tmp, JSON.stringify({ day, count }), { mode: 0o600 });
+      await rename(tmp, file); // atomic replace: a reader sees the old or the new counter, never a torn one
+      return count;
+    });
+    this.counterLocks.set(file, run);
+    void run.finally(() => {
+      if (this.counterLocks.get(file) === run) this.counterLocks.delete(file);
+    }).catch(() => undefined);
+    return run;
+  }
 }
 
 // ── Google Cloud Storage ─────────────────────────────────────────
@@ -130,7 +181,12 @@ export class LocalDiskMediaStore implements MediaStore {
 
 export interface GcsFileLike {
   name: string;
-  save(data: Buffer | string, o?: { contentType?: string; resumable?: boolean; metadata?: Record<string, unknown> }): Promise<unknown>;
+  save(
+    data: Buffer | string,
+    o?: { contentType?: string; resumable?: boolean; metadata?: Record<string, unknown>; preconditionOpts?: { ifGenerationMatch?: number | string } },
+  ): Promise<unknown>;
+  /** Object metadata incl. `generation` and custom `metadata`; rejects with code 404 when missing. */
+  getMetadata?(): Promise<[{ generation?: number | string; metadata?: Record<string, unknown> }, ...unknown[]]>;
   download(): Promise<[Buffer]>;
   exists(): Promise<[boolean]>;
   delete(o?: { ignoreNotFound?: boolean }): Promise<unknown>;
@@ -151,6 +207,10 @@ export interface GcsMediaStoreOptions {
 
 /** Hard cap on sidecars read per list() (maxPerAccount is far below it). */
 const LIST_SCAN = 1000;
+/** Attempts for a contended counter update (412 precondition failures), with jittered backoff. */
+const COUNTER_ATTEMPTS = 8;
+
+const errCode = (e: unknown) => Number((e as { code?: unknown })?.code ?? (e as { response?: { status?: unknown } })?.response?.status);
 
 export class GcsMediaStore implements MediaStore {
   private readonly prefix: string;
@@ -221,6 +281,47 @@ export class GcsMediaStore implements MediaStore {
     const sidecars = files.filter((f) => f.name.endsWith(".json")).slice(0, LIST_SCAN);
     const metas = await Promise.all(sidecars.map((f) => this.readSidecar(f, authId)));
     return metas.filter((m): m is AudioMeta => !!m).sort(newestFirst);
+  }
+
+  async count(authId: string): Promise<number> {
+    const [files] = await (await this.bucket()).getFiles({ prefix: this.folder(authId), matchGlob: "**.json", autoPaginate: true });
+    return files.filter((f) => f.name.endsWith(".json") && isValidAudioId(f.name.slice(this.folder(authId).length, -5))).length;
+  }
+
+  /**
+   * Compare-and-swap on one small object per account. The count is read from object metadata together with its
+   * generation (one call), and written back with ifGenerationMatch (0 = must not exist yet); a concurrent writer
+   * makes the write fail with 412 and this retries, so replicas never lose an increment.
+   */
+  async incrementDaily(authId: string, day: string): Promise<number> {
+    if (!DAY_RE.test(day)) throw new Error("invalid day");
+    const f = (await this.bucket()).file(`${this.prefix}${counterPath(authId)}`);
+    if (!f.getMetadata) throw new Error("GCS client without getMetadata");
+    for (let attempt = 1; ; attempt++) {
+      let generation: number | string = 0;
+      let prev: unknown;
+      try {
+        const [md] = await f.getMetadata();
+        generation = md.generation ?? 0;
+        prev = md.metadata;
+      } catch (e) {
+        if (errCode(e) !== 404) throw e;
+      }
+      const count = nextCount(prev, day);
+      try {
+        await f.save(JSON.stringify({ day, count }), {
+          contentType: "application/json",
+          resumable: false,
+          metadata: { cacheControl: "private, no-store", metadata: { day, count: String(count) } },
+          preconditionOpts: { ifGenerationMatch: generation },
+        });
+        return count;
+      } catch (e) {
+        const code = errCode(e);
+        if ((code !== 412 && code !== 409) || attempt >= COUNTER_ATTEMPTS) throw e;
+        await new Promise((r) => setTimeout(r, Math.random() * 25 * attempt));
+      }
+    }
   }
 
   async delete(authId: string, id: string): Promise<boolean> {

@@ -9,14 +9,50 @@
  *  - key that failed definitively → may be retried (the record is dropped)
  *
  * Without an explicit key, a fingerprint of the parameters blocks identical requests inside a
- * short window. Limits: records live in this process (and optionally a JSON file); several server
- * processes do not share them, and Vobiz itself does not deduplicate.
+ * short window. Records live in this process (and optionally a JSON file) unless a SharedStoreBackend
+ * (src/guard/shared-store.ts) is passed, in which case every replica sees the same records. Vobiz itself
+ * does not deduplicate.
  */
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync, renameSync } from "node:fs";
 import { VobizError } from "./errors.js";
+import type { SharedStoreBackend } from "./guard/shared-store.js";
 
 type State = "in_flight" | "done" | "unknown";
+
+/** Deep copy with object keys in sorted order; undefined members are dropped as JSON.stringify would. */
+function stableSort(v: unknown): unknown {
+  if (Array.isArray(v)) return v.map((x) => (x === undefined ? null : stableSort(x)));
+  if (v && typeof v === "object" && !(v instanceof Date)) {
+    const out: Record<string, unknown> = {};
+    for (const k of Object.keys(v as Record<string, unknown>).sort()) {
+      const x = (v as Record<string, unknown>)[k];
+      if (x !== undefined) out[k] = stableSort(x);
+    }
+    return out;
+  }
+  return v;
+}
+
+/** Same rules for a local or shared record: conflict, in progress, unknown outcome, or replay. */
+function replayOrThrow(e: { state: State; fingerprint: string; result?: Record<string, unknown> }, fingerprint: string): Record<string, unknown> {
+  if (e.fingerprint !== fingerprint) {
+    throw new VobizError(
+      "idempotency_conflict",
+      "This idempotency_key was already used with different parameters. Use a new key for a different operation.",
+    );
+  }
+  if (e.state === "in_flight") {
+    throw new VobizError("in_progress", "An identical request with this key is still running. Wait for it instead of sending another.");
+  }
+  if (e.state === "unknown") {
+    throw new VobizError(
+      "outcome_unknown",
+      "A previous attempt with this key ended with an unknown outcome, so it is not being sent again. Check list_live_calls / list_call_records (or list_phone_numbers) first.",
+    );
+  }
+  return { ...(e.result ?? {}), replayed: true };
+}
 
 interface Entry {
   state: State;
@@ -36,8 +72,9 @@ export class IdempotencyStore {
     if (file) this.load();
   }
 
+  /** Stable hash of `parts`: object keys are sorted at every depth (nested objects are never dropped). */
   static fingerprint(parts: Record<string, unknown>): string {
-    return createHash("sha256").update(JSON.stringify(parts, Object.keys(parts).sort())).digest("hex");
+    return createHash("sha256").update(JSON.stringify(stableSort(parts))).digest("hex");
   }
 
   private prune(): void {
@@ -56,22 +93,12 @@ export class IdempotencyStore {
       this.entries.set(key, { state: "in_flight", fingerprint, createdAt: this.now() });
       return undefined;
     }
-    if (e.fingerprint !== fingerprint) {
-      throw new VobizError(
-        "idempotency_conflict",
-        "This idempotency_key was already used with different parameters. Use a new key for a different operation.",
-      );
-    }
-    if (e.state === "in_flight") {
-      throw new VobizError("in_progress", "An identical request with this key is still running. Wait for it instead of sending another.");
-    }
-    if (e.state === "unknown") {
-      throw new VobizError(
-        "outcome_unknown",
-        "A previous attempt with this key ended with an unknown outcome, so it is not being sent again. Check list_live_calls / list_call_records (or list_phone_numbers) first.",
-      );
-    }
-    return { ...(e.result ?? {}), replayed: true };
+    return replayOrThrow(e, fingerprint);
+  }
+
+  /** Record lifetime (used for shared records too). */
+  get ttl(): number {
+    return this.ttlMs;
   }
 
   /** Forgets a finished record older than `ms` (unknown outcomes are kept). */
@@ -129,16 +156,27 @@ export class IdempotencyStore {
   }
 }
 
+export interface IdempotencyOptions {
+  /** Cross-replica records (hosted mode): consulted instead of the local store when present. */
+  shared?: { backend: SharedStoreBackend; scope: string };
+  /** A finished record older than this is forgotten first (automatic duplicate windows). */
+  replaceDoneOlderThanMs?: number;
+}
+
 /**
  * Runs `op` under idempotency protection. Errors marked as "maybe applied" (outcome_unknown) keep
- * the key blocked; other errors release it.
+ * the key blocked; other errors release it. With `opts.shared` the records live in the shared backend;
+ * if that backend cannot be reached the operation is refused (fail closed), never run unprotected.
  */
 export async function withIdempotency(
   store: IdempotencyStore,
   key: string,
   fingerprint: string,
   op: () => Promise<Record<string, unknown>>,
+  opts: IdempotencyOptions = {},
 ): Promise<Record<string, unknown>> {
+  if (opts.shared) return withSharedIdempotency(opts.shared, store.ttl, key, fingerprint, op, opts.replaceDoneOlderThanMs);
+  if (opts.replaceDoneOlderThanMs !== undefined) store.dropIfOlder(key, opts.replaceDoneOlderThanMs);
   const replay = store.begin(key, fingerprint);
   if (replay) return replay;
   try {
@@ -150,4 +188,34 @@ export async function withIdempotency(
     else store.fail(key);
     throw err;
   }
+}
+
+const sharedUnavailable = () =>
+  new VobizError("service_unavailable", "The server's shared duplicate-protection store is not reachable, so nothing was sent. Try again shortly.");
+
+async function withSharedIdempotency(
+  shared: { backend: SharedStoreBackend; scope: string },
+  ttlMs: number,
+  key: string,
+  fingerprint: string,
+  op: () => Promise<Record<string, unknown>>,
+  replaceDoneOlderThanMs?: number,
+): Promise<Record<string, unknown>> {
+  const { backend, scope } = shared;
+  const begun = await backend.idempotencyBegin(scope, key, fingerprint, ttlMs, { replaceDoneOlderThanMs }).catch(() => {
+    throw sharedUnavailable();
+  });
+  if (begun.kind === "existing") return replayOrThrow(begun.record, fingerprint);
+  let result: Record<string, unknown>;
+  try {
+    result = await op();
+  } catch (err) {
+    const unknown = err instanceof VobizError && err.kind === "outcome_unknown";
+    await (unknown ? backend.idempotencyMarkUnknown(scope, key) : backend.idempotencyRelease(scope, key)).catch(() => {});
+    throw err;
+  }
+  // The operation happened: report it even if the record cannot be updated (the in_flight record then
+  // turns into "unknown" after STALE_IN_FLIGHT_MS, which still blocks a blind repeat).
+  await backend.idempotencySucceed(scope, key, result).catch(() => {});
+  return result;
 }

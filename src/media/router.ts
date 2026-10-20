@@ -4,13 +4,14 @@
  *   PUT      /upload/:token   raw audio body (the page, or `curl --data-binary` from a code sandbox) → 201 JSON
  *   GET|HEAD /media/:token    the stored 8 kHz WAV, fetched by Vobiz for <Play> on a reminder call
  *
- * Tokens are sealed by this server: "upl" (one account, one upload, 15 minutes) and "med" (one file, 2 hours).
+ * Tokens are sealed by this server: "upl" (one account, one upload attempt, 15 minutes) and "med" (one file, 20 minutes:
+ * the reminder service mints it when the call is answered, and Vobiz fetches it within seconds).
  * Nothing else authenticates these routes, so a token never appears in logs, and responses never echo it.
  * Every failure maps to a 4xx (or 503 when storage is down); log lines carry the error kind only.
  */
 import { randomBytes } from "node:crypto";
 import express, { type NextFunction, type Request, type Response, type Router } from "express";
-import { BRAND_BASE_CSS, VOBIZ_LOGO_SVG } from "../brand.js";
+import { BRAND_BASE_CSS, VOBIZ_LOGO_SVG, faviconLinkTag } from "../brand.js";
 import type { Config } from "../config.js";
 import { VobizError } from "../errors.js";
 import type { Logger } from "../logger.js";
@@ -18,7 +19,7 @@ import type { Sealer } from "../sealer.js";
 import type { AudioMeta, MediaService, MediaUrlPayload, UploadPayload } from "./types.js";
 
 export const UPLOAD_TTL_SEC = 900;
-export const MEDIA_TTL_SEC = 7200;
+export const MEDIA_TTL_SEC = 1200;
 /** Longest recording the upload page makes. */
 export const RECORD_MAX_SEC = 300;
 /** The same rule the service applies; checked here first so a bad name never costs a conversion. */
@@ -49,7 +50,7 @@ export function mintUploadUrl(sealer: Sealer, baseUrl: string, authId: string, n
 }
 
 /**
- * The URL handed to Vobiz in <Play>: seal("med", { authId, id }, 2 h). The `.wav` suffix is for media servers that
+ * The URL handed to Vobiz in <Play>: seal("med", { authId, id }, 20 min), minted at answer time and never cached. The `.wav` suffix is for media servers that
  * pick the decoder from the extension; the route accepts the token with or without it.
  */
 export function mintMediaUrl(sealer: Sealer, baseUrl: string, authId: string, id: string): string {
@@ -88,7 +89,7 @@ function pageCsp(nonce: string): string {
     "font-src https://fonts.gstatic.com",
     "connect-src 'self'",
     "media-src blob:",
-    "img-src data:",
+    "img-src 'self' data:",
     "form-action 'none'",
     "frame-ancestors 'none'",
     "base-uri 'none'",
@@ -97,7 +98,7 @@ function pageCsp(nonce: string): string {
 
 function shell(o: { title: string; body: string; nonce?: string; script?: string; links: Config["links"] }): string {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="robots" content="noindex"><meta name="referrer" content="no-referrer"><title>${esc(o.title)} · Vobiz MCP Server</title>
+<meta name="robots" content="noindex"><meta name="referrer" content="no-referrer"><title>${esc(o.title)} · Vobiz MCP Server</title>${faviconLinkTag()}
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600&display=swap">
 <style>
@@ -194,8 +195,8 @@ x.setRequestHeader("X-Audio-Name",encodeURIComponent(n));if(blobName)x.setReques
 x.upload.onprogress=function(e){if(e.lengthComputable){bar.max=e.total;bar.value=e.loaded;if(e.loaded>=e.total)save.textContent="Converting…"}};
 x.onload=function(){var r={};try{r=JSON.parse(x.responseText)}catch(e){}
 if(x.status===201){form.hidden=true;done.hidden=false;doneName.textContent=r.name||n;doneSay.textContent="use the audio "+(r.name||n);return}
-bar.hidden=true;save.disabled=false;save.textContent="Save audio";
-fail(x.status===410?"This upload link has expired or was already used. Go back to your chat and ask for a new one.":(r.message||"The upload did not go through. Try again."))};
+bar.hidden=true;save.textContent="Link used";
+fail(x.status===410?"This upload link has expired or was already used. Go back to your chat and ask for a new one.":(r.message||"The upload did not go through.")+" Each link works once: go back to your chat and ask for a new upload link.")};
 x.onerror=function(){bar.hidden=true;save.disabled=false;save.textContent="Save audio";fail("The upload did not go through. Check your connection and try again.")};
 x.send(blob)});
 })();`;
@@ -316,6 +317,7 @@ export function createMediaRouter(service: MediaService, o: MediaRouterOptions):
         return res.status(400).json({ error: "invalid_input", message: "Give the audio a name (X-Audio-Name header or ?name=): 1 to 80 letters, digits, spaces and - _ . ( )." });
       }
       // Claim the link before the (slow) conversion so two concurrent uploads with one link cannot both land.
+      // One link = one attempt: the claim is kept even when the upload fails (the attempt was counted).
       prune();
       used.set(p.jti, p.exp * 1000);
       try {
@@ -324,7 +326,6 @@ export function createMediaRouter(service: MediaService, o: MediaRouterOptions):
         log.info("media: upload saved");
         return res.status(201).json(audioView(meta));
       } catch (err) {
-        used.delete(p.jti); // nothing was saved: the same link may try again
         const s = statusFor(err);
         log.info(`media: upload refused (${s.kind})`);
         return res.status(s.status).json({ error: s.kind, message: s.message });

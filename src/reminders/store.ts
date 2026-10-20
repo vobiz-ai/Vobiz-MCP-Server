@@ -6,7 +6,7 @@
  *   FirestoreStore  hosted (Cloud Run): collection `reminders`, document `${accountHash}_${rid}`
  */
 import { createHash } from "node:crypto";
-import type { Reminder, ReminderStatus, ReminderStore } from "./types.js";
+import type { LimitSnapshot, Reminder, ReminderStatus, ReminderStore } from "./types.js";
 
 type Patch = Partial<Reminder> | ((current: Reminder) => Partial<Reminder> | undefined);
 
@@ -19,13 +19,20 @@ export function accountHash(authId: string): string {
 const FIELDS: (keyof Reminder)[] = [
   "id", "authId", "clientId", "status", "createdAt", "updatedAt", "nextAt", "attempts", "idempotencyKey",
   "kind", "message", "at", "timezone", "to", "from", "language", "voice", "snoozeMinutes", "maxAttempts",
-  "retryMinutes", "audioUrl", "audioId",
+  "retryMinutes", "audioUrl", "audioId", "toDigits",
 ];
+
+/** Statuses that count against ReminderLimits.maxActive. */
+export const ACTIVE_STATUSES: ReminderStatus[] = ["scheduled", "snoozed", "calling"];
+
+const digits = (v: unknown) => (typeof v === "string" ? v.replace(/\D/g, "") : "");
 
 function clean(r: Partial<Reminder> & Record<string, unknown>): Reminder {
   const out: Record<string, unknown> = {};
   for (const k of FIELDS) if (r[k] !== undefined) out[k] = r[k];
   out.attempts = Array.isArray(r.attempts) ? r.attempts.map((a) => ({ ...a })) : [];
+  // Derived, never trusted from input: every write (Firestore rewrites the whole document) backfills it on old records.
+  if (typeof r.to === "string") out.toDigits = digits(r.to);
   return out as unknown as Reminder;
 }
 
@@ -71,6 +78,29 @@ export class MemoryStore implements ReminderStore {
     const r = [...this.rows.values()].find((x) => x.authId === authId && x.idempotencyKey === key);
     return r ? clean({ ...r }) : undefined;
   }
+  private snapshot(authId: string, toDigits: string): LimitSnapshot {
+    const mine = [...this.rows.values()].filter((r) => r.authId === authId);
+    return {
+      active: mine.filter((r) => ACTIVE_STATUSES.includes(r.status)).length,
+      destination: mine.filter((r) => r.toDigits === toDigits).map((r) => clean({ ...r })),
+    };
+  }
+  async countActive(authId: string): Promise<number> {
+    return this.snapshot(authId, "").active;
+  }
+  async listByDestination(authId: string, toDigits: string): Promise<Reminder[]> {
+    return this.snapshot(authId, digits(toDigits)).destination;
+  }
+  async createGuarded(r: Reminder, guard: (s: LimitSnapshot) => void): Promise<void> {
+    // No await between the guard and the write: atomic within this process.
+    guard(this.snapshot(r.authId, digits(r.to)));
+    const k = this.key(r.authId, r.id);
+    if (this.rows.has(k)) throw new Error("reminder already exists");
+    this.rows.set(k, clean({ ...r }));
+  }
+  async listByStatus(status: ReminderStatus, limit = 500): Promise<Reminder[]> {
+    return [...this.rows.values()].filter((r) => r.status === status).slice(0, limit).map((r) => clean({ ...r }));
+  }
 }
 
 // ── Firestore ─────────────────────────────────────────────────────
@@ -89,6 +119,8 @@ interface Query {
   orderBy(field: string, dir?: "asc" | "desc"): Query;
   limit(n: number): Query;
   get(): Promise<QuerySnap>;
+  /** Aggregate count (server-side; reads no documents). Optional so a minimal fake can omit it. */
+  count?(): { get(): Promise<{ data(): { count: number } }> };
 }
 interface DocRef {
   get(): Promise<DocSnap>;
@@ -99,7 +131,9 @@ interface Collection extends Query {
 }
 interface Tx {
   get(ref: DocRef): Promise<DocSnap>;
+  get(query: Query): Promise<QuerySnap>;
   set(ref: DocRef, data: Record<string, unknown>): unknown;
+  create(ref: DocRef, data: Record<string, unknown>): unknown;
 }
 export interface FirestoreLike {
   collection(name: string): Collection;
@@ -118,6 +152,12 @@ export interface FirestoreStoreOptions {
 
 /** Status filtering happens in memory over the newest records, so only one composite index is needed: (account ASC, createdAt DESC). */
 const LIST_SCAN = 500;
+/**
+ * Ceiling for the equality queries behind the limits (account + status, account + toDigits). They run on the
+ * automatic single-field indexes, so no composite index is needed. Far above any cap: an account cannot hold
+ * this many active reminders, and a destination gets at most VOBIZ_MAX_REMINDER_CALLS_PER_DAY a day.
+ */
+const LIMIT_SCAN = 2000;
 
 export class FirestoreStore implements ReminderStore {
   private readonly collection: string;
@@ -195,5 +235,75 @@ export class FirestoreStore implements ReminderStore {
     const snap = await (await this.col()).where("account", "==", accountHash(authId)).where("idempotencyKey", "==", key).limit(5).get();
     const d = snap.docs.map((x) => x.data()).find((x) => !!x && x.authId === authId);
     return d ? clean(d) : undefined;
+  }
+
+  private rows(snap: QuerySnap, authId: string): Reminder[] {
+    return snap.docs
+      .map((d) => d.data())
+      .filter((d): d is Record<string, unknown> => !!d && d.authId === authId)
+      .map((d) => clean(d));
+  }
+
+  /** account == h AND status == s, one equality query per active status. */
+  private activeQueries(col: Collection, authId: string): Query[] {
+    const h = accountHash(authId);
+    return ACTIVE_STATUSES.map((s) => col.where("account", "==", h).where("status", "==", s));
+  }
+
+  /** account == h AND toDigits == d, plus account == h AND to == +d for records written before toDigits existed. */
+  private destinationQueries(col: Collection, authId: string, toDigits: string): Query[] {
+    const h = accountHash(authId);
+    const d = digits(toDigits);
+    return [col.where("account", "==", h).where("toDigits", "==", d).limit(LIMIT_SCAN), col.where("account", "==", h).where("to", "==", `+${d}`).limit(LIMIT_SCAN)];
+  }
+
+  private dedupe(lists: Reminder[][]): Reminder[] {
+    const seen = new Map<string, Reminder>();
+    for (const r of lists.flat()) if (!seen.has(r.id)) seen.set(r.id, r);
+    return [...seen.values()];
+  }
+
+  async countActive(authId: string): Promise<number> {
+    const col = await this.col();
+    const counts = await Promise.all(
+      this.activeQueries(col, authId).map(async (q) =>
+        q.count ? (await q.count().get()).data().count : this.rows(await q.limit(LIMIT_SCAN).get(), authId).length,
+      ),
+    );
+    return counts.reduce((a, b) => a + b, 0);
+  }
+
+  async listByDestination(authId: string, toDigits: string): Promise<Reminder[]> {
+    const col = await this.col();
+    const snaps = await Promise.all(this.destinationQueries(col, authId, toDigits).map((q) => q.get()));
+    return this.dedupe(snaps.map((s) => this.rows(s, authId)));
+  }
+
+  async createGuarded(r: Reminder, guard: (s: LimitSnapshot) => void): Promise<void> {
+    const db = await this.db();
+    const col = db.collection(this.collection);
+    // Per-account lock document (no account/status fields, so no query ever returns it). Every guarded create reads
+    // and rewrites it, so two schedules on one account conflict and Firestore retries the later one, which then sees
+    // the earlier insert. Without it, the queries' pessimistic locks cover only documents that already exist.
+    const lock = col.doc(`${accountHash(r.authId)}__limits`);
+    await db.runTransaction(async (tx) => {
+      await tx.get(lock);
+      const active = await Promise.all(this.activeQueries(col, r.authId).map((q) => tx.get(q.limit(LIMIT_SCAN))));
+      const dest = await Promise.all(this.destinationQueries(col, r.authId, digits(r.to)).map((q) => tx.get(q)));
+      guard({
+        active: active.reduce((n, s) => n + this.rows(s, r.authId).length, 0),
+        destination: this.dedupe(dest.map((s) => this.rows(s, r.authId))),
+      });
+      tx.set(lock, { updatedAt: new Date().toISOString() });
+      tx.create(col.doc(FirestoreStore.docId(r.authId, r.id)), this.toDoc(r));
+    });
+  }
+
+  async listByStatus(status: ReminderStatus, limit = 500): Promise<Reminder[]> {
+    const snap = await (await this.col()).where("status", "==", status).limit(limit).get();
+    return snap.docs
+      .map((d) => d.data())
+      .filter((d): d is Record<string, unknown> => !!d && typeof d.authId === "string")
+      .map((d) => clean(d));
   }
 }

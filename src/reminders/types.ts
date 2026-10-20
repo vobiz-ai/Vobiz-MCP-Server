@@ -69,9 +69,17 @@ export interface Attempt {
   n: number;
   scheduledFor: string;
   startedAt?: string;
+  /** When this attempt was claimed by a job delivery (the lease: a claim older than 10 minutes with no call placed is dead). */
+  claimedAt?: string;
+  /** When the Call API accepted the request (2xx). */
+  placedAt?: string;
+  /** From the Call API response; callbacks carrying a different RequestUUID are rejected. UUID-shaped only. */
   requestUuid?: string;
+  /** From the first callback that carries it; later callbacks with a different CallUUID are rejected. UUID-shaped only. */
   callUuid?: string;
-  /** Digit pressed on this attempt, if any. */
+  /** Why the attempt failed before a hangup could classify it: outcome_unknown, daily_cap, stale_claim. */
+  error?: string;
+  /** Key pressed on this attempt (DTMF only), the digit a spoken word matched, or "unrecognised". Never a transcript. */
   digits?: string;
   outcome?: AttemptOutcome;
   hangupCause?: string;
@@ -94,6 +102,16 @@ export interface Reminder extends ReminderInput {
   nextAt: string | null;
   attempts: Attempt[];
   idempotencyKey?: string;
+  /** Digits-only destination (derived from `to` by the stores); the per-destination daily cap queries it. */
+  toDigits?: string;
+}
+
+/** What a guarded create sees, read inside the same transaction as the write. */
+export interface LimitSnapshot {
+  /** Active (scheduled/snoozed/calling) reminders on the account. */
+  active: number;
+  /** Every reminder on the account to the new reminder's destination. */
+  destination: Reminder[];
 }
 
 /** Durable reminder records. Implementations: MemoryStore (tests, single process) and FirestoreStore (hosted). */
@@ -114,6 +132,18 @@ export interface ReminderStore {
     patch: Partial<Reminder> | ((current: Reminder) => Partial<Reminder> | undefined),
   ): Promise<Reminder | undefined>;
   findByIdempotencyKey(authId: string, key: string): Promise<Reminder | undefined>;
+  /** Active (scheduled/snoozed/calling) reminders on the account, however many records it has. */
+  countActive(authId: string): Promise<number>;
+  /** Every reminder on the account to this destination (digits only), however many records it has. */
+  listByDestination(authId: string, toDigits: string): Promise<Reminder[]>;
+  /**
+   * Creates `r` after `guard` accepted the account's current counts (guard throws to refuse). Firestore runs the
+   * read and the write in one transaction serialised on a per-account lock document, so parallel schedules
+   * cannot both pass the same count; MemoryStore does it synchronously.
+   */
+  createGuarded(r: Reminder, guard: (s: LimitSnapshot) => void): Promise<void>;
+  /** Reminders in one status across all accounts (maintenance sweeps), at most `limit`. */
+  listByStatus(status: ReminderStatus, limit?: number): Promise<Reminder[]>;
 }
 
 export interface ScheduledJob {
@@ -174,10 +204,24 @@ export interface ReminderService {
   cancel(authId: string, id: string): Promise<Reminder | undefined>;
   /** Job delivery (POST /jobs/fire). Places the call for the attempt, or ignores a stale job. Never throws to the caller. */
   fire(jobToken: string): Promise<{ fired: boolean; reason?: string }>;
-  /** VobizXML for the answered call (GET|POST /r/:token/answer); undefined when the token is invalid or the reminder is no longer active. */
-  answerXml(ansToken: string): Promise<string | undefined>;
-  /** VobizXML after a key press or a spoken word (POST /r/:token/input: Digits and/or Speech). */
-  inputXml(ansToken: string, digits: string, speech?: string): Promise<string | undefined>;
+  /**
+   * VobizXML for the answered call (GET|POST /r/:token/answer); undefined when the token is invalid, the reminder is
+   * no longer active, or the callback's CallUUID / RequestUUID belong to a different call than this attempt.
+   */
+  answerXml(ansToken: string, ids?: CallbackIds): Promise<string | undefined>;
+  /** VobizXML after a key press or a spoken word (POST /r/:token/input: Digits and/or Speech). Same binding as answerXml. */
+  inputXml(ansToken: string, digits: string, speech?: string, ids?: CallbackIds): Promise<string | undefined>;
   /** Final call outcome (POST /r/:token/hangup): classifies, records the attempt and schedules a retry when due. */
   hangup(ansToken: string, params: HangupParams): Promise<void>;
+  /**
+   * Maintenance (for a future cron): reminders stuck in "calling" for over `olderThanMinutes` (default 30) get the
+   * attempt marked failed (error stale_claim) and the reminder marked failed. Returns how many were swept.
+   */
+  sweepStale(olderThanMinutes?: number): Promise<number>;
+}
+
+/** Call identifiers a Vobiz callback carries, used to bind the callback to the attempt's call. */
+export interface CallbackIds {
+  callUuid?: string;
+  requestUuid?: string;
 }
