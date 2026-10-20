@@ -20,12 +20,13 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Config } from "../config.js";
 import type { ToolContext } from "../context.js";
 import { VobizError } from "../errors.js";
+import { CONFIRM_NOTE, hostOf, requireApproval, supportsFormElicitation, type ToolExtra } from "../guard/confirm.js";
 import { PAGINATION_NOTE, assertAllowedUrl, callId, handler, isPrivateHost, listField, ok, pageInfo, phoneNumber, toE164 } from "../util.js";
 import { callAction } from "./control.js";
 
 type Rec = Record<string, unknown>;
 
-const confirm = (what: string) => z.boolean().describe(`Must be true, set only after the user explicitly approved: ${what}.`);
+const confirm = (what: string) => z.boolean().describe(`Must be true, set only after the user explicitly approved: ${what}.` + CONFIRM_NOTE);
 const e164Path = (n: string) => encodeURIComponent(toE164(n));
 const streamId = z.string().trim().regex(/^[A-Za-z0-9_-]{4,64}$/, "must be a Vobiz stream ID");
 const recordingId = z.string().trim().regex(/^[A-Za-z0-9_-]{4,64}$/, "must be a Vobiz recording ID");
@@ -44,13 +45,16 @@ function lowerAccountPath(ctx: ToolContext, suffix: string): string {
   return `/api/v1/account/${encodeURIComponent(ctx.client.authId)}${suffix}`;
 }
 
-function requireProvisioning(ctx: ToolContext, confirmed: boolean | undefined, what: string): void {
+/** Provisioning must be enabled, and the human must approve (elicitation when supported, else confirm: true). */
+async function requireProvisioning(server: McpServer, extra: ToolExtra, ctx: ToolContext, confirmed: boolean | undefined, what: string, detail: string): Promise<void> {
   if (!ctx.cfg.enableProvisioning) {
     throw new VobizError("provisioning_disabled", "Account changes are disabled on this server. An administrator must set VOBIZ_ENABLE_PROVISIONING=true.");
   }
-  if (confirmed !== true) {
-    throw new VobizError("confirmation_required", `Ask the user to approve ${what}, then call again with confirm: true.`);
-  }
+  await requireApproval(server, extra, {
+    confirmed,
+    message: `Change your Vobiz account: ${detail}. Approve?`,
+    fallback: `Ask the user to approve ${what}, then call again with confirm: true.`,
+  });
 }
 
 /** The wss:// counterpart of assertAllowedUrl: same host policy, WebSocket scheme only. */
@@ -123,12 +127,16 @@ export function registerMediaTools(server: McpServer, ctx: ToolContext): void {
       },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },
-    handler(async (a) => {
-      if (a.confirm !== true) {
-        throw new VobizError("confirmation_required", "Ask the user to approve streaming this call's audio to the given server, then call again with confirm: true.");
-      }
+    handler(async (a, extra: ToolExtra) => {
+      const fallback = "Ask the user to approve streaming this call's audio to the given server, then call again with confirm: true.";
+      if (a.confirm !== true && !supportsFormElicitation(server.server.getClientCapabilities())) throw new VobizError("confirmation_required", fallback);
       assertAllowedWss(cfg, a.service_url, "service_url");
       if (a.status_callback_url) assertAllowedUrl(cfg, a.status_callback_url, "status_callback_url");
+      await requireApproval(server, extra, {
+        confirmed: a.confirm,
+        message: `Send the live audio of call ${a.call_uuid} to the WebSocket server at ${hostOf(a.service_url)}${a.bidirectional ? ", which may also play audio into the call" : ""}. Approve?`,
+        fallback,
+      });
       if (a.bidirectional && a.audio_track && a.audio_track !== "inbound") {
         throw new VobizError("invalid_input", "A bidirectional stream must use audio_track inbound. To capture both sides, start two one-way streams.");
       }
@@ -306,8 +314,8 @@ export function registerMediaTools(server: McpServer, ctx: ToolContext): void {
       inputSchema: { recording_id: recordingId, confirm: confirm("permanently deleting this recording") },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
-    handler(async (a) => {
-      requireProvisioning(ctx, a.confirm, "permanently deleting this recording");
+    handler(async (a, extra: ToolExtra) => {
+      await requireProvisioning(server, extra, ctx, a.confirm, "permanently deleting this recording", `permanently delete recording ${a.recording_id} (cannot be restored)`);
       try {
         const res = await ctx.client.request("DELETE", ctx.client.accountPath(`/Recording/${encodeURIComponent(a.recording_id)}/`), { route: "DELETE Recording/{id}/" });
         return ok({ ok: true, deleted: true, recording_id: a.recording_id, http_status: res.status });
@@ -336,8 +344,8 @@ export function registerMediaTools(server: McpServer, ctx: ToolContext): void {
       },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },
-    handler(async (a) => {
-      requireProvisioning(ctx, a.confirm, "releasing this number (a release fee applies)");
+    handler(async (a, extra: ToolExtra) => {
+      await requireProvisioning(server, extra, ctx, a.confirm, "releasing this number (a release fee applies)", `release phone number ${toE164(a.phone_number)}${a.immediate ? " immediately (cannot be cancelled)" : " (24-hour cancellable cooldown)"}; a number-release fee is charged`);
       const res = await ctx.client.request<Rec>("DELETE", ctx.client.accountPath(`/numbers/${e164Path(a.phone_number)}`), {
         query: a.immediate ? { immediate: "true" } : undefined,
         route: "DELETE numbers/{e164}",
@@ -367,8 +375,8 @@ export function registerMediaTools(server: McpServer, ctx: ToolContext): void {
       inputSchema: { phone_number: phoneNumber, confirm: confirm("cancelling the release of this number") },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
-    handler(async (a) => {
-      requireProvisioning(ctx, a.confirm, "cancelling this number's release");
+    handler(async (a, extra: ToolExtra) => {
+      await requireProvisioning(server, extra, ctx, a.confirm, "cancelling this number's release", `cancel the pending release of ${toE164(a.phone_number)} (the release fee is refunded)`);
       const res = await ctx.client.request<Rec>("POST", lowerAccountPath(ctx, `/numbers/${e164Path(a.phone_number)}/cancel-release`), {
         route: "POST numbers/{e164}/cancel-release",
       });
@@ -401,8 +409,8 @@ export function registerMediaTools(server: McpServer, ctx: ToolContext): void {
       },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
-    handler(async (a) => {
-      requireProvisioning(ctx, a.confirm, "assigning this number to the sub-account");
+    handler(async (a, extra: ToolExtra) => {
+      await requireProvisioning(server, extra, ctx, a.confirm, "assigning this number to the sub-account", `move ${toE164(a.phone_number)} to sub-account ${a.sub_account_id}`);
       const res = await ctx.client.request<Rec>("POST", lowerAccountPath(ctx, `/numbers/${e164Path(a.phone_number)}/assign-subaccount`), {
         body: { sub_account_id: a.sub_account_id },
         route: "POST numbers/{e164}/assign-subaccount",
@@ -421,8 +429,8 @@ export function registerMediaTools(server: McpServer, ctx: ToolContext): void {
       inputSchema: { phone_number: phoneNumber, confirm: confirm("returning this number to the parent account pool") },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
-    handler(async (a) => {
-      requireProvisioning(ctx, a.confirm, "returning this number to the parent pool");
+    handler(async (a, extra: ToolExtra) => {
+      await requireProvisioning(server, extra, ctx, a.confirm, "returning this number to the parent pool", `return ${toE164(a.phone_number)} from its sub-account to the main account pool`);
       try {
         const res = await ctx.client.request<Rec>("DELETE", lowerAccountPath(ctx, `/numbers/${e164Path(a.phone_number)}/assign-subaccount`), {
           route: "DELETE numbers/{e164}/assign-subaccount",

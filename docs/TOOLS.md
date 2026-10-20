@@ -127,7 +127,7 @@ Place ONE outbound call through Vobiz (POST /Account/{auth_id}/Call/); `say` (te
 |---|---|---|---|
 | `to` | string | yes | Destination number in E.164, e.g. +919876543210. One number only.; pattern `^\+?[1-9]\d{6,14}$` |
 | `from` | string | yes | Caller ID: a Vobiz number on this account, E.164.; pattern `^\+?[1-9]\d{6,14}$` |
-| `confirm` | boolean | yes | Must be true, set only after the user explicitly confirmed this call (destination and caller ID). |
+| `confirm` | boolean | yes | Must be true, set only after the user explicitly confirmed this call (destination and caller ID). If your client supports MCP elicitation, the server asks the user to approve directly and this flag is not relied on; otherwise it is your attestation that the user approved. |
 | `answer_url` | string |  | Your own URL that returns VobizXML when the call is answered. Not combinable with say/play. Defaults to the server's VOBIZ_DEFAULT_ANSWER_URL. |
 | `say` | string |  | Text spoken when the call is answered (max 600 characters), e.g. "Your table is ready." |
 | `language` | `da-DK` | `nl-NL` | `en-AU` | `en-GB` | `en-US` | `en-IN` | `fr-FR` | `fr-CA` | `de-DE` | `it-IT` | `pl-PL` | `pt-PT` | `pt-BR` | `ru-RU` | `es-ES` | `es-US` | `sv-SE` | `hi-IN` |  | Speech language for `say` (default en-US). |
@@ -207,7 +207,7 @@ Blind-transfer a LIVE call (POST /Call/{uuid}/): Vobiz stops the current flow on
 | `aleg_method` | `GET` | `POST` |  |  |
 | `bleg_url` | string |  | XML URL for the B leg (approved host only). |
 | `bleg_method` | `GET` | `POST` |  |  |
-| `confirm` | boolean | yes | Must be true, set only after the user explicitly asked to transfer this call. |
+| `confirm` | boolean | yes | Must be true, set only after the user explicitly asked to transfer this call. If your client supports MCP elicitation, the server asks the user to approve directly and this flag is not relied on; otherwise it is your attestation that the user approved. |
 
 ## hold_call
 
@@ -218,7 +218,7 @@ Puts a leg on hold by transferring it to a hosted flow that plays hold music (or
 | `call_uuid` | string | yes | pattern `^[A-Za-z0-9_-]{8,64}$` |
 | `legs` | `aleg` | `bleg` | `both` |  | Which call leg: aleg (default), bleg or both. |
 | `music_url` | string |  | Hold music (https .mp3/.wav). Silence if omitted. |
-| `confirm` | boolean | yes | Must be true, set only after the user explicitly asked to put this call on hold. |
+| `confirm` | boolean | yes | Must be true, set only after the user explicitly asked to put this call on hold. If your client supports MCP elicitation, the server asks the user to approve directly and this flag is not relied on; otherwise it is your attestation that the user approved. |
 
 ## unhold_call
 
@@ -229,7 +229,7 @@ Takes a leg off emulated hold by transferring it to `resume_url` (XML on an appr
 | `call_uuid` | string | yes | pattern `^[A-Za-z0-9_-]{8,64}$` |
 | `resume_url` | string | yes | XML URL that should control the call after hold (approved host). |
 | `legs` | `aleg` | `bleg` | `both` |  | Which call leg: aleg (default), bleg or both. |
-| `confirm` | boolean | yes | Must be true, set only after the user explicitly asked to take this call off hold. |
+| `confirm` | boolean | yes | Must be true, set only after the user explicitly asked to take this call off hold. If your client supports MCP elicitation, the server asks the user to approve directly and this flag is not relied on; otherwise it is your attestation that the user approved. |
 
 ## play_audio
 
@@ -285,7 +285,7 @@ Start recording a LIVE call (POST /Call/{uuid}/Record/). Recording may require c
 | `time_limit` | integer |  | Max seconds to record (Vobiz max 28800; default 60).; min 1; max 28800 |
 | `file_format` | `mp3` | `wav` |  |  |
 | `record_channel_type` | `mono` | `stereo` |  |  |
-| `confirm` | boolean | yes | Must be true, set only after the user explicitly asked to record this call. |
+| `confirm` | boolean | yes | Must be true, set only after the user explicitly asked to record this call. If your client supports MCP elicitation, the server asks the user to approve directly and this flag is not relied on; otherwise it is your attestation that the user approved. |
 
 ## stop_recording
 
@@ -495,7 +495,7 @@ Create a Vobiz application (app_name and answer_url required). URLs must be on a
 | `fallback_method` | `GET` | `POST` |  |  |
 | `default_number_app` | boolean |  |  |
 | `default_endpoint_app` | boolean |  |  |
-| `confirm` | boolean | yes | Must be true, set only after the user explicitly approved: creating this application. |
+| `confirm` | boolean | yes | Must be true, set only after the user explicitly approved: creating this application. If your client supports MCP elicitation, the server asks the user to approve directly and this flag is not relied on; otherwise it is your attestation that the user approved. |
 
 ## update_application
 
@@ -513,7 +513,7 @@ Change a Vobiz application's URLs or flags. Note: Vobiz resets default_endpoint_
 | `fallback_method` | `GET` | `POST` |  |  |
 | `default_number_app` | boolean |  |  |
 | `default_endpoint_app` | boolean |  |  |
-| `confirm` | boolean | yes | Must be true, set only after the user explicitly approved: changing this application. |
+| `confirm` | boolean | yes | Must be true, set only after the user explicitly approved: changing this application. If your client supports MCP elicitation, the server asks the user to approve directly and this flag is not relied on; otherwise it is your attestation that the user approved. |
 
 ## delete_application
 
@@ -522,7 +522,7 @@ Delete a Vobiz application. Linked numbers are unlinked (inbound calls to them s
 | Input | Type | Required | Notes |
 |---|---|---|---|
 | `app_id` | string | yes | pattern `^\d{5,25}$` |
-| `confirm` | boolean | yes | Must be true, set only after the user explicitly approved: deleting this application. |
+| `confirm` | boolean | yes | Must be true, set only after the user explicitly approved: deleting this application. If your client supports MCP elicitation, the server asks the user to approve directly and this flag is not relied on; otherwise it is your attestation that the user approved. |
 
 ## search_available_numbers
 
@@ -546,7 +546,7 @@ Buy one number from Vobiz inventory (POST /numbers/purchase-from-inventory). Thi
 | `phone_number` | string | yes | Number from search_available_numbers, E.164.; pattern `^\+?[1-9]\d{6,14}$` |
 | `currency` | string |  | pattern `^[A-Z]{3}$` |
 | `idempotency_key` | string | yes | Unique key for this intended operation (e.g. a UUID). Repeating it replays the first result instead of acting again.; pattern `^[A-Za-z0-9_.:-]{8,128}$` |
-| `confirm` | boolean | yes | Must be true, set only after the user explicitly approved: buying this number at the quoted fees. |
+| `confirm` | boolean | yes | Must be true, set only after the user explicitly approved: buying this number at the quoted fees. If your client supports MCP elicitation, the server asks the user to approve directly and this flag is not relied on; otherwise it is your attestation that the user approved. |
 
 ## update_phone_number
 
@@ -560,7 +560,7 @@ Change one owned number's configuration: replace its tags, link it to an applica
 | `unlink_application` | boolean |  |  |
 | `trunk_id` | string |  | Trunk to route this number to (sent as trunk_group_id).; pattern `^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$` |
 | `unlink_trunk` | boolean |  |  |
-| `confirm` | boolean | yes | Must be true, set only after the user explicitly approved: changing this number's routing. |
+| `confirm` | boolean | yes | Must be true, set only after the user explicitly approved: changing this number's routing. If your client supports MCP elicitation, the server asks the user to approve directly and this flag is not relied on; otherwise it is your attestation that the user approved. |
 
 ## create_sip_trunk
 
@@ -586,7 +586,7 @@ Create a SIP trunk (POST /trunks). Authenticate with credential_uuid and/or ipac
 | `webhook_url` | string |  | Receives CallInitiated and Hangup events (public https). |
 | `webhook_method` | `GET` | `POST` |  |  |
 | `recording_webhook_enabled` | boolean |  |  |
-| `confirm` | boolean | yes | Must be true, set only after the user explicitly approved: creating this SIP trunk. |
+| `confirm` | boolean | yes | Must be true, set only after the user explicitly approved: creating this SIP trunk. If your client supports MCP elicitation, the server asks the user to approve directly and this flag is not relied on; otherwise it is your attestation that the user approved. |
 
 ## update_sip_trunk
 
@@ -613,7 +613,7 @@ Change a SIP trunk's settings (PUT /trunks/{id}), including limits, auth referen
 | `webhook_url` | string |  | Receives CallInitiated and Hangup events (public https). |
 | `webhook_method` | `GET` | `POST` |  |  |
 | `recording_webhook_enabled` | boolean |  |  |
-| `confirm` | boolean | yes | Must be true, set only after the user explicitly approved: changing this SIP trunk. |
+| `confirm` | boolean | yes | Must be true, set only after the user explicitly approved: changing this SIP trunk. If your client supports MCP elicitation, the server asks the user to approve directly and this flag is not relied on; otherwise it is your attestation that the user approved. |
 
 ## delete_sip_trunk
 
@@ -622,7 +622,7 @@ Delete a SIP trunk (soft delete). Numbers routed to it are unlinked and stop rec
 | Input | Type | Required | Notes |
 |---|---|---|---|
 | `trunk_id` | string | yes | pattern `^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$` |
-| `confirm` | boolean | yes | Must be true, set only after the user explicitly approved: deleting this SIP trunk. |
+| `confirm` | boolean | yes | Must be true, set only after the user explicitly approved: deleting this SIP trunk. If your client supports MCP elicitation, the server asks the user to approve directly and this flag is not relied on; otherwise it is your attestation that the user approved. |
 
 ## send_message
 
@@ -643,7 +643,7 @@ Send a real SMS, MMS or RCS message through Vobiz (POST /api/v1/sms/messages). E
 | `dlt_header_id` | string |  | India TRAI DLT sender header ID. |
 | `dlt_template_id` | string |  | India TRAI DLT content template ID; text must match it. |
 | `idempotency_key` | string | yes | Unique key for this intended operation (e.g. a UUID). Repeating it replays the first result instead of acting again.; pattern `^[A-Za-z0-9_.:-]{8,128}$` |
-| `confirm` | boolean | yes | Must be true, set only after the user explicitly approved this send. |
+| `confirm` | boolean | yes | Must be true, set only after the user explicitly approved this send. If your client supports MCP elicitation, the server asks the user to approve directly and this flag is not relied on; otherwise it is your attestation that the user approved. |
 
 ## preview_message_cost
 
@@ -1080,7 +1080,7 @@ Fork the audio of a LIVE Vobiz call to your WebSocket server in near real time (
 | `status_callback_url` | string |  | https URL (approved host) that receives stream status events (StartStream, PlayedStream, StopStream...). |
 | `status_callback_method` | `GET` | `POST` |  | Default POST. |
 | `extra_headers` | string |  | Comma-separated header:value pairs (e.g. X-Session:abc123) passed with the stream. Use the wss:// URL path, not these headers, to authenticate the socket.; pattern `^[A-Za-z0-9-]{1,64}:[^,\r\n]{1,256}(,[A-Za-z0-9-]{1,64}:[^,\r\n]{1,256})*$` |
-| `confirm` | boolean | yes | Must be true, set only after the user explicitly approved: sending this call's live audio to this WebSocket server. |
+| `confirm` | boolean | yes | Must be true, set only after the user explicitly approved: sending this call's live audio to this WebSocket server. If your client supports MCP elicitation, the server asks the user to approve directly and this flag is not relied on; otherwise it is your attestation that the user approved. |
 
 ## list_audio_streams
 
@@ -1142,7 +1142,7 @@ Permanently delete one call recording from this Vobiz account (DELETE /Recording
 | Input | Type | Required | Notes |
 |---|---|---|---|
 | `recording_id` | string | yes | pattern `^[A-Za-z0-9_-]{4,64}$` |
-| `confirm` | boolean | yes | Must be true, set only after the user explicitly approved: permanently deleting this recording. |
+| `confirm` | boolean | yes | Must be true, set only after the user explicitly approved: permanently deleting this recording. If your client supports MCP elicitation, the server asks the user to approve directly and this flag is not relied on; otherwise it is your attestation that the user approved. |
 
 ## release_phone_number
 
@@ -1152,7 +1152,7 @@ Release a phone number from this Vobiz account (DELETE /numbers/{e164}). This ch
 |---|---|---|---|
 | `phone_number` | string | yes | pattern `^\+?[1-9]\d{6,14}$` |
 | `immediate` | boolean |  | Skip the 24-hour cancellable cooldown. The release then cannot be cancelled. |
-| `confirm` | boolean | yes | Must be true, set only after the user explicitly approved: releasing this number and paying the release fee. |
+| `confirm` | boolean | yes | Must be true, set only after the user explicitly approved: releasing this number and paying the release fee. If your client supports MCP elicitation, the server asks the user to approve directly and this flag is not relied on; otherwise it is your attestation that the user approved. |
 
 ## cancel_number_release
 
@@ -1161,7 +1161,7 @@ Keep a number that is in pending_release (POST /account/{id}/numbers/{e164}/canc
 | Input | Type | Required | Notes |
 |---|---|---|---|
 | `phone_number` | string | yes | pattern `^\+?[1-9]\d{6,14}$` |
-| `confirm` | boolean | yes | Must be true, set only after the user explicitly approved: cancelling the release of this number. |
+| `confirm` | boolean | yes | Must be true, set only after the user explicitly approved: cancelling the release of this number. If your client supports MCP elicitation, the server asks the user to approve directly and this flag is not relied on; otherwise it is your attestation that the user approved. |
 
 ## assign_number_to_subaccount
 
@@ -1171,7 +1171,7 @@ Move a number from this Vobiz account's pool to one of its sub-accounts (POST /a
 |---|---|---|---|
 | `phone_number` | string | yes | pattern `^\+?[1-9]\d{6,14}$` |
 | `sub_account_id` | string | yes | pattern `^SA_[A-Za-z0-9]{4,40}$` |
-| `confirm` | boolean | yes | Must be true, set only after the user explicitly approved: assigning this number to this sub-account. |
+| `confirm` | boolean | yes | Must be true, set only after the user explicitly approved: assigning this number to this sub-account. If your client supports MCP elicitation, the server asks the user to approve directly and this flag is not relied on; otherwise it is your attestation that the user approved. |
 
 ## unassign_number_from_subaccount
 
@@ -1180,7 +1180,7 @@ Move a number from a sub-account back to this Vobiz account's pool (DELETE /acco
 | Input | Type | Required | Notes |
 |---|---|---|---|
 | `phone_number` | string | yes | pattern `^\+?[1-9]\d{6,14}$` |
-| `confirm` | boolean | yes | Must be true, set only after the user explicitly approved: returning this number to the parent account pool. |
+| `confirm` | boolean | yes | Must be true, set only after the user explicitly approved: returning this number to the parent account pool. If your client supports MCP elicitation, the server asks the user to approve directly and this flag is not relied on; otherwise it is your attestation that the user approved. |
 
 ## list_sub_accounts
 

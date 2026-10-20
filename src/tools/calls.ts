@@ -7,6 +7,7 @@ import { IdempotencyStore, withIdempotency } from "../idempotency.js";
 import { classifyHangup } from "../outcomes.js";
 import { assertDestinationAllowed, effectiveTimeLimit } from "../policy.js";
 import { UNTRUSTED_DESCRIPTION, markUntrusted, withUntrustedNotice } from "../guard/untrusted.js";
+import { CONFIRM_NOTE, hostOf, requireApproval, supportsFormElicitation, type ToolExtra } from "../guard/confirm.js";
 import { acquireCallRate, reserveCallSlot, sharedOf, type CallSlot } from "../guard/capacity.js";
 import { assertAllowedUrl, callId, handler, idempotencyKey, ok, phoneNumber, toE164 } from "../util.js";
 import { SPEAK_LANGS } from "../xml.js";
@@ -277,6 +278,8 @@ const PLACEHOLDER_HOW_TO =
   "No answer_url, say or play was given, so this call uses the server's placeholder answer URL: it only speaks a short greeting and ends after a few seconds. " +
   "To put real content on a call, pass `say` (text to speak) and/or `play` (an audio link or library file).";
 
+const supportsElicitation = (server: McpServer) => supportsFormElicitation(server.server.getClientCapabilities());
+
 export function registerCallTools(server: McpServer, ctx: ToolContext): void {
   // ── make_call ────────────────────────────────────────────────
   server.registerTool(
@@ -296,7 +299,7 @@ export function registerCallTools(server: McpServer, ctx: ToolContext): void {
         from: phoneNumber.describe("Caller ID: a Vobiz number on this account, E.164."),
         confirm: z
           .boolean()
-          .describe("Must be true, set only after the user explicitly confirmed this call (destination and caller ID)."),
+          .describe("Must be true, set only after the user explicitly confirmed this call (destination and caller ID)." + CONFIRM_NOTE),
         answer_url: z
           .string()
           .url()
@@ -341,7 +344,7 @@ export function registerCallTools(server: McpServer, ctx: ToolContext): void {
       },
       annotations: { destructiveHint: true, idempotentHint: false, openWorldHint: true, readOnlyHint: false },
     },
-    handler(async (args) => {
+    handler(async (args, extra: ToolExtra) => {
       const { cfg } = ctx;
       if (!cfg.enableCalls) {
         throw new VobizError(
@@ -351,7 +354,7 @@ export function registerCallTools(server: McpServer, ctx: ToolContext): void {
       }
       const toDigits = digitsOnly(args.to);
       const fromDigits = digitsOnly(args.from);
-      if (args.confirm !== true) {
+      if (args.confirm !== true && !supportsElicitation(server)) {
         throw new VobizError(
           "confirmation_required",
           `Ask the user to confirm calling ${toE164(args.to)} from ${toE164(args.from)}, then call make_call again with confirm: true.`,
@@ -370,11 +373,17 @@ export function registerCallTools(server: McpServer, ctx: ToolContext): void {
         );
       }
       const placeholder = !script && !args.answer_url && [ctx.callScripts?.baseUrl, cfg.publicUrl?.replace(/\/+$/, "")].some((b) => b && answerUrl === `${b}/answer`);
-      const extra = script ? { script: script.view, how_to: script.howTo } : placeholder ? { script: { placeholder: true }, how_to: PLACEHOLDER_HOW_TO } : {};
+      const resultExtra = script ? { script: script.view, how_to: script.howTo } : placeholder ? { script: { placeholder: true }, how_to: PLACEHOLDER_HOW_TO } : {};
       const callArgs = script ? { ...args, answer_method: "POST", hangup_url: args.hangup_url ?? script.urls.hangupUrl } : args;
       if (args.answer_url) assertAllowedUrl(cfg, args.answer_url, "answer_url");
       if (args.hangup_url) assertAllowedUrl(cfg, args.hangup_url, "hangup_url");
       const timeLimit = effectiveTimeLimit(cfg, args.time_limit);
+      // Policy checks first, so the user is never asked to approve something the server would refuse.
+      await requireApproval(server, extra, {
+        confirmed: args.confirm,
+        message: `Place a real, billed phone call to ${toE164(args.to)} from ${toE164(args.from)} (up to ${Math.round(timeLimit / 60)} min, per-minute rates apply). Call control comes from ${hostOf(answerUrl)}. Approve?`,
+        fallback: `Ask the user to confirm calling ${toE164(args.to)} from ${toE164(args.from)}, then call make_call again with confirm: true.`,
+      });
 
       const fingerprint = IdempotencyStore.fingerprint({ op: "make_call", from: fromDigits, to: toDigits, answerUrl: script?.fingerprint ?? answerUrl, timeLimit });
       // Without an explicit key, identical calls inside the duplicate window share one automatic key.
@@ -397,7 +406,7 @@ export function registerCallTools(server: McpServer, ctx: ToolContext): void {
               await acquireCallRate(ctx);
               const placed = await placeCall(ctx, { fromDigits, to: args.to, answerUrl, timeLimit, args: callArgs });
               await slot.settle(String(placed.request_uuid));
-              return { ...placed, ...extra };
+              return { ...placed, ...resultExtra };
             } catch (err) {
               await slot.release();
               throw err;
