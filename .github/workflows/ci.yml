@@ -5,22 +5,27 @@ on:
     branches: [main]
   pull_request:
 
-permissions:
-  contents: read
+# Least privilege: nothing by default, each job asks for what it needs.
+permissions: {}
 
 jobs:
   test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     strategy:
       matrix:
         node: [22, 24, 26]
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ matrix.node }}
           cache: npm
-      - run: npm ci
+      # --ignore-scripts: dependency lifecycle scripts never run in CI (the build runs explicitly below).
+      - run: npm ci --ignore-scripts
       - run: npm run lint
       - run: npm run build
       # Mocked tests only: no Vobiz credentials are available (or wanted) in CI.
@@ -35,8 +40,12 @@ jobs:
 
   docker:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Build the hosted connector image
         run: docker build -t vobiz-mcp:ci .
       - name: Start it and check health and OAuth metadata
@@ -45,3 +54,17 @@ jobs:
           for i in $(seq 1 20); do curl -fs localhost:3000/health && break; sleep 1; done
           curl -fs localhost:3000/.well-known/oauth-protected-resource/mcp | grep -q '"resource":"https://mcp.example.test/mcp"'
           test "$(curl -s -o /dev/null -w '%{http_code}' -X POST localhost:3000/mcp)" = "401"
+
+  # Single, stable status check for the branch ruleset: require "ci" instead of every matrix leg by name.
+  ci:
+    if: always()
+    needs: [test, docker]
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: All CI jobs passed
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "needs: $RESULTS"
+          for r in $RESULTS; do [ "$r" = success ] || exit 1; done

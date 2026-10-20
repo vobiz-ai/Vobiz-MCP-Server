@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.4.1
+
+- Release pipeline hardening that missed the 1.4.0 merge: GitHub Actions pinned to commit SHAs with job-scoped permissions, `npm ci --ignore-scripts` in CI, the MCP Registry publisher pinned and checksummed, `:latest` only moving for the highest stable tag, and the Docker image pinning `node:24-alpine` by digest and ffmpeg by version with npm removed from the runtime stage.
+- Version fields in `server.json` and `manifest.json` now match the package (1.4.0 was tagged with them still at 1.3.0, so its npm and GHCR publish never ran; Cloud Run was deployed from the digest).
+
 ## 1.4.0
 
 Security hardening release following a full audit of the hosted connector, plus "call me and play this" on `make_call`.

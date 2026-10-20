@@ -148,7 +148,14 @@ Reminders can be scheduled at most 30 days ahead (the Cloud Tasks limit).
 
 **GCP resources (production).**
 
-- A Cloud Tasks queue in `VOBIZ_TASKS_LOCATION` (for example `gcloud tasks queues create vobiz-reminders --location=asia-south1`). Tasks are HTTP tasks to `<VOBIZ_HOSTED_URL>/jobs/fire`; the job body is a sealed token, so the endpoint needs no OIDC token.
+- A Cloud Tasks queue in `VOBIZ_TASKS_LOCATION`, with bounded retries for transient failures:
+
+  ```bash
+  gcloud tasks queues create vobiz-reminders --location=asia-south1 \
+    --max-attempts=5 --min-backoff=30s --max-backoff=300s --max-dispatches-per-second=10
+  ```
+
+  Tasks are HTTP tasks to `<VOBIZ_HOSTED_URL>/jobs/fire`. The job body is a sealed token that only this server can mint or open, so that token is the authentication. An OIDC token on the task is optional defence in depth (it needs `iam.serviceAccountUser` on the invoking account and invoker checks on the service). `/jobs/fire` answers 503 only for a transient failure and 200 for everything else, including an unreadable token, so a bad job is dropped instead of retried.
 - Firestore in Native mode (the `(default)` database or the one in `VOBIZ_FIRESTORE_DATABASE`).
 - The Cloud Run service account needs `roles/cloudtasks.enqueuer` and `roles/cloudtasks.taskDeleter` on the queue (or `roles/cloudtasks.admin` on the project) and `roles/datastore.user`.
 
@@ -209,3 +216,15 @@ The audio library is on whenever reminder calls are (`VOBIZ_REMINDERS`). Upload 
 - **Per-replica state.** Rate-limit counters (sign-in, `/token`, `/register`, `/authorize`) and idempotency records live in memory on each replica. They protect each process; Vobiz's own CPS limits still apply across the account. Sessions and used authorization codes are shared through the grant store when Firestore is configured.
 - **Logs.** Logs go to stderr and contain route templates, status codes and timings only. Tokens, message text and phone numbers are never logged.
 - **Revocation.** A client ends one session with `POST /revoke`. A user revokes every session at once by rotating their Auth Token in the console: Vobiz refuses the old token on the next call, and the next refresh ends the session. The operator revokes everyone at once by rotating `VOBIZ_HOSTED_SECRET`.
+
+## Deployment hardening
+
+The image and the release pipeline are built to be reproducible and least-privilege. Keep these properties when you fork or self-host.
+
+- **Pinned base image.** The `Dockerfile` pins `node:24-alpine` by digest and `ffmpeg` to an exact Alpine package version. Dependabot (`docker` ecosystem) bumps the digest. When the digest moves to a new Alpine release, bump the `ffmpeg=` pin too (the `Dockerfile` comment shows how).
+- **Small runtime.** The runtime stage removes npm, npx and corepack, runs as the unprivileged `node` user and has a `/health` `HEALTHCHECK`. `.dockerignore` keeps `.env*`, `.git`, `test/` and docs (other than `README.md`) out of the build context.
+- **Pinned CI.** Every action in `.github/workflows` is pinned to a full commit SHA with a `# vX.Y.Z` comment, and Dependabot keeps them current. `npm ci` always runs with `--ignore-scripts`. Tokens are least-privilege per job: the workflow default is `permissions: {}`, and only the npm job gets `id-token: write`, the GitHub release job `contents: write` and the image job `packages: write`. Publishing workflows don't use the shared npm cache.
+- **Verified tools.** The MCP Registry workflow downloads a pinned `mcp-publisher` release and checks its sha256 before running it.
+- **`:latest` moves only forward.** A tag push publishes `ghcr.io/vobiz-ai/vobiz-mcp:<tag>`. It also moves `:latest`, but only when the tag is a stable `vX.Y.Z` (no prerelease suffix) and the highest stable semver tag in the repository. A backport or a release candidate never moves it. To re-point `:latest` by hand, run the **Release** workflow from the tag with **latest** ticked; the same check applies.
+- **Deploy by digest.** Point your platform at `image@sha256:…` rather than a tag, and make your registry's tags immutable.
+- **Edge protection.** In front of `/oauth/login` and `/register`, add a per-IP rate limit at your load balancer or WAF, and require TLS 1.2 or later. Keep in mind that AI clients call `/register` and `/mcp` from shared egress IPs, so set the limits per client range, not only per IP. Keep request logs for `/r/`, `/upload/` and `/media/` out of long-term storage, because those URLs carry sealed tokens.
