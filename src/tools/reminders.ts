@@ -10,6 +10,14 @@ import { handler, idempotencyKey, listField, ok, phoneNumber, toE164 } from "../
 import { SPEAK_LANGS } from "../xml.js";
 import { assertCallerIdOwned } from "./calls.js";
 
+/** Errors from the store or scheduler (not VobizError) are logged by message only before they become internal_error. */
+function logged<T>(ctx: ToolContext, op: string, p: Promise<T>): Promise<T> {
+  return p.catch((err: unknown) => {
+    if (!(err instanceof VobizError)) ctx.log.info(`reminders: ${op} failed: ${err instanceof Error ? err.message : String(err)}`);
+    throw err;
+  });
+}
+
 type Rec = Record<string, unknown>;
 
 const STATUSES = ["scheduled", "calling", "snoozed", "done", "stopped", "cancelled", "failed"] as const satisfies readonly ReminderStatus[];
@@ -192,7 +200,7 @@ export function registerReminderTools(server: McpServer, ctx: ToolContext): void
         from = await firstVoiceNumber(ctx);
       }
 
-      const r = await svc.schedule(
+      const r = await logged(ctx, "schedule", svc.schedule(
         account(ctx),
         {
           kind: args.kind ?? "reminder",
@@ -208,7 +216,7 @@ export function registerReminderTools(server: McpServer, ctx: ToolContext): void
           retryMinutes: args.retry_minutes ?? 5,
         },
         args.idempotency_key ? { idempotencyKey: args.idempotency_key } : undefined,
-      );
+      ));
       return ok({
         ok: true,
         reminder_id: r.id,
@@ -241,7 +249,7 @@ export function registerReminderTools(server: McpServer, ctx: ToolContext): void
     handler(async (args) => {
       const { authId } = account(ctx);
       const status = args.status === "active" ? ACTIVE : args.status ? [args.status] : undefined;
-      const items = await svc.list(authId, { ...(status ? { status } : {}), limit: args.limit ?? 20 });
+      const items = await logged(ctx, "list", svc.list(authId, { ...(status ? { status } : {}), limit: args.limit ?? 20 }));
       return ok({ ok: true, count: items.length, reminders: items.map(summary) });
     }),
   );
@@ -256,7 +264,7 @@ export function registerReminderTools(server: McpServer, ctx: ToolContext): void
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     handler(async ({ reminder_id }) => {
-      const r = await svc.get(account(ctx).authId, reminder_id);
+      const r = await logged(ctx, "get", svc.get(account(ctx).authId, reminder_id));
       if (!r) throw new VobizError("not_found", "No reminder call with this id on this account. Use list_reminder_calls to see them.");
       return ok({ ok: true, ...summary(r), language: r.language, voice: r.voice, snooze_minutes: r.snoozeMinutes, retry_minutes: r.retryMinutes, attempts: r.attempts.map((a) => attemptView(a, r.timezone)) });
     }),
@@ -276,7 +284,7 @@ export function registerReminderTools(server: McpServer, ctx: ToolContext): void
     },
     handler(async ({ reminder_id, confirm }) => {
       const { authId } = account(ctx);
-      const before = await svc.get(authId, reminder_id);
+      const before = await logged(ctx, "get", svc.get(authId, reminder_id));
       if (!before) throw new VobizError("not_found", "No reminder call with this id on this account. Use list_reminder_calls to see them.");
       if (confirm !== true) {
         throw new VobizError("confirmation_required", `Ask the user to confirm cancelling the reminder call at ${formatLocal(before.at, before.timezone)} ("${before.message}"), then call cancel_reminder_call again with confirm: true.`);
@@ -284,7 +292,7 @@ export function registerReminderTools(server: McpServer, ctx: ToolContext): void
       if (!ACTIVE.includes(before.status)) {
         return ok({ ok: true, ...summary(before), cancelled: false, note: `This reminder is already ${before.status}; nothing was changed.` });
       }
-      const r = await svc.cancel(authId, reminder_id);
+      const r = await logged(ctx, "cancel", svc.cancel(authId, reminder_id));
       if (!r) throw new VobizError("not_found", "No reminder call with this id on this account.");
       return ok({ ok: true, ...summary(r), cancelled: r.status === "cancelled", note: r.status === "cancelled" ? "Cancelled. No further calls will be placed for this reminder." : `Reminder is ${r.status}.` });
     }),

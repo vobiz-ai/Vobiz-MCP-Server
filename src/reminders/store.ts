@@ -165,15 +165,14 @@ export class FirestoreStore implements ReminderStore {
 
   async list(authId: string, opts: { status?: ReminderStatus[]; limit?: number } = {}): Promise<Reminder[]> {
     const limit = opts.limit ?? 50;
-    const snap = await (await this.col())
-      .where("account", "==", accountHash(authId))
-      .orderBy("createdAt", "desc")
-      .limit(opts.status?.length ? LIST_SCAN : limit)
-      .get();
+    // Equality-only query: it runs on the automatic single-field index, so no composite index has to be
+    // created per deployment. The account's newest LIST_SCAN records are sorted here instead.
+    const snap = await (await this.col()).where("account", "==", accountHash(authId)).limit(LIST_SCAN).get();
     return snap.docs
       .map((d) => d.data())
       .filter((d): d is Record<string, unknown> => !!d && d.authId === authId)
       .map((d) => clean(d))
+      .sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0))
       .filter((r) => !opts.status?.length || opts.status.includes(r.status))
       .slice(0, limit);
   }
