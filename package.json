@@ -1,6 +1,6 @@
 {
   "name": "@vobiz/mcp",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Official Vobiz MCP server: voice calls, in-call control, VobizXML IVRs, call records, recordings, phone numbers, SIP trunks, SMS/MMS/RCS and the Vobiz Agent Skills for Claude and any MCP client.",
   "mcpName": "io.github.vobiz-ai/vobiz-mcp",
   "keywords": [

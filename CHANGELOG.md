@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.2.1
+
+- Reminder lists no longer need a Firestore composite index, so a fresh deployment works without extra setup.
+- Unexpected scheduler or store errors are logged (message only) instead of disappearing behind a generic error.
+
 ## 1.2.0
 
 - **Reminder calls.** Ask your assistant "wake me up at 6 tomorrow" or "call me at 3 to remind me about the review". The hosted server schedules the call, speaks your message when you pick up, and lets you press 1 to snooze, 2 to confirm or 9 to stop. It calls again when there is no answer. New tools: `schedule_reminder_call`, `list_reminder_calls`, `get_reminder_call`, `cancel_reminder_call`.
