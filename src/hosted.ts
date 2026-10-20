@@ -15,7 +15,7 @@
  * access/refresh tokens, so the server keeps no credential database and every request acts only on
  * the signed-in account. Rotating the Auth Token in the Vobiz console revokes every token at once.
  */
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express, { type Request, type Response } from "express";
@@ -33,6 +33,8 @@ import { createLogger, type Logger } from "./logger.js";
 import { createServer, createSharedState } from "./server.js";
 import { SERVER_VERSION } from "./version.js";
 import { VOBIZ_LOGO_SVG } from "./brand.js";
+import { Sealer } from "./sealer.js";
+export { Sealer };
 
 /** Default exclusions (override with VOBIZ_HOSTED_EXCLUDED_TOOLS): tools that need this process to host callbacks for one account, or that buy things. */
 export const HOSTED_EXCLUDED_TOOLS = ["buy_phone_number", "gather_dtmf", "get_gather_result", "list_webhook_events", "hold_call", "unhold_call"];
@@ -42,42 +44,12 @@ const TXN_TTL = 900;
 const SCOPE = "vobiz";
 const AUTH_ID_RE = /^(MA|SA)_[A-Za-z0-9]{4,40}$/;
 
-type Kind = "client" | "txn" | "code" | "access" | "refresh";
 interface Grant {
   authId: string;
   authToken: string;
   readOnly: boolean;
   clientId: string;
   resource: string;
-}
-
-/** Authenticated encryption for every token this server hands out. */
-export class Sealer {
-  private readonly key: Buffer;
-  constructor(secret: string) {
-    this.key = createHash("sha256").update(`vobiz-mcp-hosted:${secret}`).digest();
-  }
-  seal(kind: Kind, payload: Record<string, unknown>, ttlSec: number): string {
-    const iv = randomBytes(12);
-    const c = createCipheriv("aes-256-gcm", this.key, iv);
-    c.setAAD(Buffer.from(kind));
-    const body = Buffer.concat([c.update(JSON.stringify({ ...payload, exp: Math.floor(Date.now() / 1000) + ttlSec })), c.final()]);
-    return `vbz${kind[0]}_` + Buffer.concat([iv, c.getAuthTag(), body]).toString("base64url");
-  }
-  open<T = Record<string, unknown>>(kind: Kind, token: string): (T & { exp: number }) | undefined {
-    const prefix = `vbz${kind[0]}_`;
-    if (typeof token !== "string" || !token.startsWith(prefix) || token.length > 8192) return undefined;
-    try {
-      const raw = Buffer.from(token.slice(prefix.length), "base64url");
-      const d = createDecipheriv("aes-256-gcm", this.key, raw.subarray(0, 12));
-      d.setAAD(Buffer.from(kind));
-      d.setAuthTag(raw.subarray(12, 28));
-      const v = JSON.parse(Buffer.concat([d.update(raw.subarray(28)), d.final()]).toString("utf8"));
-      return v.exp > Math.floor(Date.now() / 1000) ? v : undefined;
-    } catch {
-      return undefined;
-    }
-  }
 }
 
 export interface HostedOptions {
