@@ -97,6 +97,24 @@ Reminders can be scheduled at most 30 days ahead (the Cloud Tasks limit).
 
 **Memory fallback.** Without the three Cloud Tasks variables, reminders are kept in memory and fired with timers. This is for local development and single-replica tests only: run exactly one replica, and expect every scheduled reminder to be lost on restart or scale-down. The connector logs a warning at startup in this mode.
 
+**Limits.** The active-reminder cap and the per-destination daily cap are counted with equality queries (`account` + `status`, `account` + `toDigits`), which run on Firestore's automatic single-field indexes, so they cover every record however large the account is. The daily cap counts call attempts already started that UTC day plus every attempt a pending reminder to the number may still make. Schedule re-checks both caps in the same Firestore transaction as the write, serialised on a per-account lock document (`<account hash>__limits` in the reminders collection), so parallel schedules cannot overshoot. The daily cap is enforced again when each call fires: an attempt over the cap is recorded as failed (`daily_cap`) and not dialled.
+
+**Fire-time safety.** A job delivered more than 90 seconds before its time is ignored (`too_early`, HTTP 200, so Cloud Tasks does not retry). A Vobiz 500, 502, 504, a 503 without `Retry-After`, or a timeout means the call may already be ringing: the attempt is recorded as `outcome_unknown` and retried after `retry_minutes`, within `max_attempts`. Only a 429, a 503 with `Retry-After`, or a refused connection gives the job back to Cloud Tasks (HTTP 503) for redelivery. A claimed attempt with no sign of a placed call is held for 10 minutes (redeliveries get HTTP 503 `in_progress`) and re-dialled after that. Per-call callback links expire after 15 minutes.
+
+**Callback binding.** Each call's callbacks must carry the same `RequestUUID` the Call API returned and the same `CallUUID` as the first callback that carried one. A callback for another call gets the "no longer active" script (answer and input) or is ignored (hangup), with a `WARNING` log line. A hangup without these fields is still accepted.
+
+**Callback signatures.** Reminder callbacks use `VOBIZ_WEBHOOK_SIGNATURE` when you set it explicitly. When it is unset, they use `verify_if_present`: a signature that is present must be valid, and an unsigned callback is accepted (the sealed per-call token in the URL already authenticates it). Each callback logs one line:
+
+```
+reminders: callback answer r=r_8f2k… n=1 signature=valid callUuid=present
+```
+
+To switch to `require`:
+
+1. Place a few reminder calls on the deployed connector.
+2. Check the logs for `reminders: callback` lines. Every `answer`, `input` and `hangup` line must show `signature=valid`. If any shows `signature=absent`, Vobiz does not sign that callback, and `require` would cut those calls off.
+3. Set `VOBIZ_WEBHOOK_SIGNATURE=require` on the service and redeploy. Unsigned or invalid callbacks then get HTTP 403.
+
 ### Audio library
 
 Users can play their own audio (an alarm sound, a recorded message) at the start of a reminder call, before the spoken message. Files land in one private library per account, three ways:
