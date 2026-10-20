@@ -95,7 +95,7 @@ export function registerAudioTools(server: McpServer, ctx: ToolContext): void {
           upload_url: url,
           expires_in_minutes: 15,
           how_to: [
-            "Give the user upload_url: they open it to upload a file or record from the microphone, then name it. The link works once.",
+            "Give the user upload_url: they open it to upload a file or record from the microphone, then name it. The link works for one attempt: if that upload fails, create a new link to try again.",
             `Or, when the user attached the file in this chat and you can run code, upload it yourself (set Content-Type to the file's type): curl -sS -X PUT -H "Content-Type: audio/mpeg" -H "X-Audio-Name: ${label}" --data-binary @<file> ${url}`,
             `Then the user says "use the audio ${label}": pass that name as audio to schedule_reminder_call.`,
           ],

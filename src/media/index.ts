@@ -6,7 +6,7 @@
  * @google-cloud/storage is imported lazily, on first use, so the npm/stdio server never loads it.
  */
 import type { Logger } from "../logger.js";
-import { FfmpegProcessor } from "./processing.js";
+import { FfmpegProcessor, maxConcurrentFromEnv } from "./processing.js";
 import { DEFAULT_AUDIO_LIMITS } from "./service.js";
 import { DEFAULT_MEDIA_DIR, GcsMediaStore, LocalDiskMediaStore } from "./store.js";
 import type { AudioLimits, AudioProcessor, MediaStore } from "./types.js";
@@ -23,7 +23,18 @@ export {
   type GcsFileLike,
   type GcsMediaStoreOptions,
 } from "./store.js";
-export { FfmpegProcessor, FFMPEG_TIMEOUT_MS, wavDurationSec, type FfmpegProcessorOptions } from "./processing.js";
+export {
+  FfmpegProcessor,
+  FFMPEG_TIMEOUT_MS,
+  DEFAULT_MAX_CONCURRENT,
+  QUEUE_TIMEOUT_MS,
+  Semaphore,
+  sharedSemaphore,
+  maxConcurrentFromEnv,
+  sniffDemuxer,
+  wavDurationSec,
+  type FfmpegProcessorOptions,
+} from "./processing.js";
 export {
   createMediaService,
   normalizeAudioName,
@@ -58,6 +69,7 @@ export function createMediaBackend(env: NodeJS.ProcessEnv, log: Logger): MediaBa
     maxPerAccount: intEnv("VOBIZ_MEDIA_MAX_PER_ACCOUNT", env.VOBIZ_MEDIA_MAX_PER_ACCOUNT, DEFAULT_AUDIO_LIMITS.maxPerAccount, 1, 1000),
     maxUploadsPerDay: intEnv("VOBIZ_MEDIA_MAX_UPLOADS_PER_DAY", env.VOBIZ_MEDIA_MAX_UPLOADS_PER_DAY, DEFAULT_AUDIO_LIMITS.maxUploadsPerDay, 1, 1000),
   };
+  maxConcurrentFromEnv(env); // fail fast on a bad VOBIZ_AUDIO_MAX_CONCURRENT; the processor uses the process-wide semaphore
   const processor = new FfmpegProcessor({ ffmpeg: v("VOBIZ_FFMPEG"), ffprobe: v("VOBIZ_FFPROBE") });
   void processor.available().then((ok) => {
     if (!ok) log.info("media: WARNING ffmpeg/ffprobe not found; audio uploads and imports are disabled. Install ffmpeg or set VOBIZ_FFMPEG and VOBIZ_FFPROBE.");
