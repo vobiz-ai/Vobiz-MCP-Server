@@ -1,6 +1,6 @@
 {
   "name": "vobiz",
-  "version": "1.2.3",
+  "version": "1.3.0",
   "description": "Vobiz calls, conferences, IVRs, call records, numbers, SIP trunks, sub-accounts, billing and SMS/MMS/RCS, plus the Vobiz Agent Skills.",
   "author": {
     "name": "Vobiz",
@@ -59,7 +59,7 @@
       "command": "npx",
       "args": [
         "-y",
-        "@vobiz/mcp@1.2.3"
+        "@vobiz/mcp@1.3.0"
       ],
       "env": {
         "VOBIZ_AUTH_ID": "${user_config.auth_id}",
