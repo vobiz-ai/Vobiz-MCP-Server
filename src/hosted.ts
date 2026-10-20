@@ -25,7 +25,8 @@ import express, { type Request, type Response } from "express";
 import { rateLimit } from "express-rate-limit";
 import { mcpAuthRouter, createOAuthMetadata, getOAuthProtectedResourceMetadataUrl } from "@modelcontextprotocol/sdk/server/auth/router.js";
 import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
-import { InvalidClientMetadataError, InvalidGrantError, InvalidTargetError, InvalidTokenError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
+import { createHash } from "node:crypto";
+import { InvalidClientMetadataError, InvalidGrantError, InvalidTargetError, InvalidTokenError, ServerError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
 import { redirectUriMatches } from "@modelcontextprotocol/sdk/server/auth/handlers/authorize.js";
 import type { AuthorizationParams, OAuthServerProvider } from "@modelcontextprotocol/sdk/server/auth/provider.js";
 import type { OAuthRegisteredClientsStore } from "@modelcontextprotocol/sdk/server/auth/clients.js";
@@ -45,6 +46,7 @@ import { SERVER_VERSION } from "./version.js";
 import { VOBIZ_FAVICON_SVG } from "./brand.js";
 import { Sealer } from "./sealer.js";
 import { classifyClient, redirectUriProblem, verifiedCimdName, type TrustedClient } from "./oauth/clients.js";
+import { FAMILY_MAX_AGE_MS, FirestoreGrantStore, MemoryGrantStore, authIdHash, familyExpired, type GrantFamily, type GrantStore } from "./oauth/grants.js";
 import { ERROR_CSP, consentCsp, consentPage, defaultChoice, errorPage, esc, type Choice, type Scope } from "./oauth/consent.js";
 import { DEFAULT_TIME_ZONE, isValidTimeZone } from "./tz.js";
 export { Sealer };
@@ -78,6 +80,10 @@ const e164 = (v: string): string | undefined => {
 const CODE_TTL = 300;
 const TXN_TTL = 900;
 const SCOPE = "vobiz";
+/** Access tokens never live longer than a day, whatever VOBIZ_ACCESS_TOKEN_TTL_SEC says. */
+export const MAX_ACCESS_TTL = 86400;
+const FAMILY_CACHE_MS = 30_000;
+const newId = () => randomBytes(16).toString("hex");
 const AUTH_ID_RE = /^(MA|SA)_[A-Za-z0-9]{4,40}$/;
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 /** Failed credential attempts allowed per sign-in transaction. */
@@ -106,6 +112,10 @@ interface Grant {
   callFrom?: string;
   tz?: string;
 }
+
+/** Refresh tokens carry their family and token id; access tokens carry the family (absent on tokens from before families). */
+type RefreshGrant = Grant & { fam?: string; jti?: string };
+type AccessGrant = Grant & { fam?: string };
 
 
 /** Grant fields carried from the code into every access/refresh token; older tokens without a scope map from readOnly. */
@@ -137,6 +147,8 @@ export interface HostedOptions {
   fetchImpl?: typeof fetch;
   /** POST /oauth/login attempts per client IP and per submitted Auth ID per 15 minutes (default cfg.oauth, 10 and 10). */
   loginLimits?: { perIp?: number; perAuthId?: number };
+  /** Refresh-token families and used codes (default: in memory; runHosted passes Firestore when configured). */
+  grants?: GrantStore;
   /** Server-side reminder calls; the reminder tools are offered only when this is set. */
   reminders?: ReminderService;
   /** Express router serving /jobs/fire and /r/:token/* for reminder calls, mounted before the 404 handler. */
@@ -172,10 +184,12 @@ export function createHostedApp(o: HostedOptions): express.Express {
   }
   const allowedOrigins = new Set(o.allowedOrigins ?? ["https://claude.ai", "https://claude.com", "https://chatgpt.com", "https://chat.openai.com"]);
   const fetchImpl = o.fetchImpl ?? globalThis.fetch;
-  const ACCESS_TTL = o.accessTtlSec ?? 3600;
+  const ACCESS_TTL = Math.min(o.accessTtlSec ?? 3600, MAX_ACCESS_TTL);
   const REFRESH_TTL = o.refreshTtlSec ?? 30 * 24 * 3600;
   const excludeTools = o.excludeTools ?? HOSTED_EXCLUDED_TOOLS;
-  const usedCodes = new Map<string, number>();
+  const grants = o.grants ?? new MemoryGrantStore();
+  /** Family revocation as seen by verifyAccessToken, cached briefly so /mcp does not read the store on every call. */
+  const familyCache = new Map<string, { at: number; usable: boolean }>();
   const cimdCache = new Map<string, { at: number; client: OAuthClientInformationFull }>();
   const tenants = new Map<string, SharedState>();
   const accountCfg = (g: Pick<Grant, "authId" | "authToken">): Config => ({ ...cfg, authId: g.authId, authToken: g.authToken });
@@ -252,13 +266,40 @@ export function createHostedApp(o: HostedOptions): express.Express {
     }
   }
 
-  const issue = (g: Grant): OAuthTokens => ({
-    access_token: seal.seal("access", { ...g }, ACCESS_TTL),
-    token_type: "Bearer",
-    expires_in: ACCESS_TTL,
-    refresh_token: seal.seal("refresh", { ...g }, REFRESH_TTL),
-    scope: SCOPE,
-  });
+  /** Access + refresh token for one generation of a family; the refresh token never outlives the family. */
+  const issue = (g: Grant, family: Pick<GrantFamily, "id" | "createdAt">, jti: string): OAuthTokens => {
+    const left = Math.floor((family.createdAt + FAMILY_MAX_AGE_MS - Date.now()) / 1000);
+    const grant: Grant = { authId: g.authId, authToken: g.authToken, clientId: g.clientId, resource: g.resource, ...profileOf(g) };
+    return {
+      access_token: seal.seal("access", { ...grant, fam: family.id }, Math.max(1, Math.min(ACCESS_TTL, left))),
+      token_type: "Bearer",
+      expires_in: Math.max(1, Math.min(ACCESS_TTL, left)),
+      refresh_token: seal.seal("refresh", { ...grant, fam: family.id, jti }, Math.max(1, Math.min(REFRESH_TTL, left))),
+      scope: SCOPE,
+    };
+  };
+  /** Legacy refresh tokens (issued before families) are migrated into a family keyed by a hash of the token, once. */
+  const legacyFamilyId = (token: string) => `l${createHash("sha256").update(token).digest("hex").slice(0, 40)}`;
+  const familyUsable = async (fam: string): Promise<boolean> => {
+    const hit = familyCache.get(fam);
+    if (hit && Date.now() - hit.at < FAMILY_CACHE_MS) return hit.usable;
+    let usable = true;
+    try {
+      const f = await grants.get(fam);
+      // A family missing from the store (memory store after a restart) does not block a still-valid access token.
+      usable = !f || (!f.revokedAt && !familyExpired(f));
+    } catch {
+      log.info("oauth: grant store unavailable while checking an access token; allowing it");
+      return true;
+    }
+    if (familyCache.size > 10_000) familyCache.clear();
+    familyCache.set(fam, { at: Date.now(), usable });
+    return usable;
+  };
+  const revokeFamily = async (fam: string, seed?: GrantFamily) => {
+    await grants.revoke(fam, Date.now(), seed);
+    familyCache.set(fam, { at: Date.now(), usable: false });
+  };
 
   /**
    * RFC 8707: a `resource` must name this MCP server (the /mcp URL or its origin; scheme and host compare
@@ -307,20 +348,58 @@ export function createHostedApp(o: HostedOptions): express.Express {
       const c = seal.open<Grant & { cid: string; redirect: string; jti: string }>("code", code);
       if (!c || c.cid !== client.client_id) throw new InvalidGrantError("Invalid or expired authorization code");
       if (redirectUri && redirectUri !== c.redirect) throw new InvalidGrantError("redirect_uri does not match the authorization request");
-      if (usedCodes.has(c.jti)) throw new InvalidGrantError("Authorization code was already used");
-      usedCodes.set(c.jti, c.exp);
-      for (const [k, exp] of usedCodes) if (exp * 1000 < Date.now()) usedCodes.delete(k);
-      return issue({ authId: c.authId, authToken: c.authToken, clientId: client.client_id, resource: c.resource, ...profileOf(c) });
+      // Single use across every replica: the code's jti is recorded in the grant store.
+      if (!(await grants.consumeCode(c.jti, c.exp * 1000))) throw new InvalidGrantError("Authorization code was already used");
+      const family: GrantFamily = { id: newId(), authIdHash: authIdHash(c.authId), clientId: client.client_id, currentJti: newId(), prevJti: null, rotatedAt: null, createdAt: Date.now(), revokedAt: null };
+      if (!(await grants.create(family))) throw new ServerError("Could not start a session; try again");
+      return issue({ ...c, clientId: client.client_id }, family, family.currentJti);
     },
     async exchangeRefreshToken(client, refreshToken, _scopes, resource) {
       if (resource && !resourceOk(resource.href)) throw new InvalidTargetError("resource must be this MCP server's URL");
-      const g = seal.open<Grant>("refresh", refreshToken);
+      const g = seal.open<RefreshGrant>("refresh", refreshToken);
       if (!g || g.clientId !== client.client_id) throw new InvalidGrantError("Invalid or expired refresh token");
-      return issue({ authId: g.authId, authToken: g.authToken, clientId: g.clientId, resource: g.resource, ...profileOf(g) });
+      const now = Date.now();
+      let fam = g.fam;
+      let jti = g.jti;
+      if (!fam || !jti) {
+        fam = legacyFamilyId(refreshToken);
+        jti = "legacy";
+        await grants.create({ id: fam, authIdHash: authIdHash(g.authId), clientId: g.clientId, currentJti: jti, prevJti: null, rotatedAt: null, createdAt: now, revokedAt: null });
+      }
+      const current = await grants.get(fam);
+      if (!current || current.revokedAt) throw new InvalidGrantError("This session has ended; connect again");
+      if (familyExpired(current, now)) {
+        await revokeFamily(fam);
+        throw new InvalidGrantError("This session is older than 90 days; connect again");
+      }
+      const replay = jti !== current.currentJti && !(jti === current.prevJti && current.rotatedAt && now - current.rotatedAt <= 60_000);
+      if (!replay) {
+        // Re-check the sealed credentials with Vobiz: a rotated or revoked Auth Token ends the session here.
+        const status = await checkVobiz(g.authId, g.authToken);
+        const transient = status === "network" || status === 429 || (typeof status === "number" && status >= 500);
+        if (!transient && (status as number) >= 200 && (status as number) <= 299) {
+          if (current.unverifiedAt) await grants.setUnverified(fam, null);
+        } else if (transient) {
+          if (current.unverifiedAt) throw new ServerError("Vobiz could not be reached to re-check this session; try again shortly");
+          log.info(`oauth: refresh allowed once without a credential re-check (Vobiz ${status === "network" ? "unreachable" : `status ${status}`})`);
+          await grants.setUnverified(fam, now);
+        } else {
+          await revokeFamily(fam);
+          throw new InvalidGrantError("Vobiz no longer accepts this account's credentials; connect again");
+        }
+      }
+      const out = await grants.rotate(fam, jti, newId(), now);
+      if (out.kind === "rotated" || out.kind === "grace") return issue(g, out.family, out.family.currentJti);
+      if (out.kind === "reuse") {
+        familyCache.set(fam, { at: Date.now(), usable: false });
+        log.info("oauth: refresh token reuse detected; session revoked");
+      }
+      throw new InvalidGrantError("Invalid or expired refresh token");
     },
     async verifyAccessToken(token): Promise<AuthInfo> {
-      const g = seal.open<Grant>("access", token);
+      const g = seal.open<AccessGrant>("access", token);
       if (!g) throw new InvalidTokenError("Invalid or expired access token");
+      if (g.fam && !(await familyUsable(g.fam))) throw new InvalidTokenError("This session was revoked");
       const p = profileOf(g);
       return {
         token,
@@ -330,6 +409,23 @@ export function createHostedApp(o: HostedOptions): express.Express {
         resource: new URL(g.resource),
         extra: { authId: g.authId, authToken: g.authToken, readOnly: p.readOnly, scope: p.scope, callMeOn: p.callMeOn, callFrom: p.callFrom, tz: p.tz },
       };
+    },
+    // RFC 7009: revoking either token ends its whole family. Unknown, expired or foreign tokens succeed silently.
+    async revokeToken(client, request) {
+      const order = request.token_type_hint === "access_token" ? (["access", "refresh"] as const) : (["refresh", "access"] as const);
+      for (const kind of order) {
+        const g = seal.open<RefreshGrant>(kind, request.token);
+        if (!g) continue;
+        if (g.clientId !== client.client_id) return;
+        if (g.fam) {
+          await revokeFamily(g.fam);
+        } else if (kind === "refresh") {
+          const id = legacyFamilyId(request.token);
+          await revokeFamily(id, { id, authIdHash: authIdHash(g.authId), clientId: g.clientId, currentJti: "legacy", prevJti: null, rotatedAt: null, createdAt: Date.now(), revokedAt: null });
+        }
+        log.info("oauth: session revoked by the client");
+        return;
+      }
     },
   };
 
@@ -351,6 +447,7 @@ export function createHostedApp(o: HostedOptions): express.Express {
     ...createOAuthMetadata({ provider, issuerUrl: new URL(base), scopesSupported: [SCOPE], serviceDocumentationUrl: new URL(cfg.links.docs) }),
     client_id_metadata_document_supported: true,
     token_endpoint_auth_methods_supported: ["none", "client_secret_post"],
+    revocation_endpoint_auth_methods_supported: ["none", "client_secret_post"],
     // RFC 9207: every authorization response carries iss (ChatGPT checks it).
     authorization_response_iss_parameter_supported: true,
   };
@@ -589,10 +686,10 @@ export async function runHosted(): Promise<void> {
   }
   if (cfg.oauth.trustedClients.length) log.info(`oauth: ${cfg.oauth.trustedClients.length} trusted client host(s) from VOBIZ_TRUSTED_CLIENTS`);
   const list = (v?: string) => v?.split(",").map((s) => s.trim()).filter(Boolean);
-  const ttl = (name: string, fallback: number) => {
+  const ttl = (name: string, fallback: number, max = 365 * 24 * 3600) => {
     const v = Number(process.env[name] ?? fallback);
-    if (!Number.isInteger(v) || v < 60 || v > 365 * 24 * 3600) {
-      process.stderr.write(`[vobiz-mcp] ${name} must be a whole number of seconds between 60 and 31536000\n`);
+    if (!Number.isInteger(v) || v < 60 || v > max) {
+      process.stderr.write(`[vobiz-mcp] ${name} must be a whole number of seconds between 60 and ${max}\n`);
       process.exit(1);
     }
     return v;
@@ -652,11 +749,21 @@ export async function runHosted(): Promise<void> {
     });
     remindersRouter = createRemindersRouter(reminders, { baseUrl, signatureMode: cfg.webhookSignature === "off" ? "off" : "verify_if_present", sealer });
   }
+  // Refresh-token families and used codes: Firestore (shared by every replica) when a GCP project is configured.
+  const grants: GrantStore = cfg.reminders.gcpProject
+    ? new FirestoreGrantStore({ projectId: cfg.reminders.gcpProject, databaseId: cfg.reminders.firestoreDatabase })
+    : new MemoryGrantStore();
+  log.info(
+    grants.kind === "firestore"
+      ? `oauth: grant store Firestore (${cfg.reminders.firestoreDatabase}, collections oauth_grants and oauth_codes)`
+      : "oauth: grant store in memory (single replica only; every session ends on restart)",
+  );
   const app = createHostedApp({
     cfg,
     log,
     baseUrl,
     secret,
+    grants,
     reminders,
     remindersRouter,
     media,
@@ -664,7 +771,7 @@ export async function runHosted(): Promise<void> {
     mediaAvailable,
     allowedOrigins: list(process.env.VOBIZ_ALLOWED_ORIGINS),
     excludeTools: process.env.VOBIZ_HOSTED_EXCLUDED_TOOLS === undefined ? undefined : (list(process.env.VOBIZ_HOSTED_EXCLUDED_TOOLS) ?? []),
-    accessTtlSec: ttl("VOBIZ_ACCESS_TOKEN_TTL_SEC", 3600),
+    accessTtlSec: ttl("VOBIZ_ACCESS_TOKEN_TTL_SEC", 3600, MAX_ACCESS_TTL),
     refreshTtlSec: ttl("VOBIZ_REFRESH_TOKEN_TTL_SEC", 30 * 24 * 3600),
   });
   const port = Number(process.env.PORT ?? 3000);
