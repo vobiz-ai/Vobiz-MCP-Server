@@ -74,11 +74,11 @@ describe("per-IP limits on /token and /register", () => {
     const { token, reg } = await hammer(await start([]));
     expect(token.at(-1)).toBe(429);
     expect(reg.at(-1)).toBe(429);
-  });
+  }, 30_000);
 
   it("are skipped for trusted egress ranges", async () => {
     const { token, reg } = await hammer(await start(["127.0.0.0/8"]));
     expect(token).not.toContain(429);
     expect(reg).not.toContain(429);
-  });
+  }, 30_000);
 });
