@@ -75,6 +75,8 @@ export interface Attempt {
   hangupCause?: string;
   billsec?: number;
   endedAt?: string;
+  /** True once the menu was repeated after an invalid key press (re-prompt once, then goodbye). */
+  reprompted?: boolean;
 }
 
 export interface Reminder extends ReminderInput {
@@ -98,8 +100,17 @@ export interface ReminderStore {
   get(authId: string, id: string): Promise<Reminder | undefined>;
   /** Newest first. */
   list(authId: string, opts?: { status?: ReminderStatus[]; limit?: number }): Promise<Reminder[]>;
-  /** Shallow merge; returns the stored record or undefined if missing. */
-  update(authId: string, id: string, patch: Partial<Reminder>): Promise<Reminder | undefined>;
+  /**
+   * Shallow merge; returns the stored record or undefined if missing.
+   * `patch` may be a function of the current record, evaluated atomically (transaction / single process):
+   * returning undefined aborts the write and update resolves undefined. Used for compare-and-set claims
+   * (two deliveries of the same job, repeated hangup callbacks) so a call is never placed twice.
+   */
+  update(
+    authId: string,
+    id: string,
+    patch: Partial<Reminder> | ((current: Reminder) => Partial<Reminder> | undefined),
+  ): Promise<Reminder | undefined>;
   findByIdempotencyKey(authId: string, key: string): Promise<Reminder | undefined>;
 }
 
