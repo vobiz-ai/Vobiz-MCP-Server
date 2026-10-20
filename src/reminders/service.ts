@@ -301,7 +301,9 @@ export function createReminderService(opts: ReminderServiceOptions): ReminderSer
       ACTIVE.includes(cur.status) ? { status: "cancelled", nextAt: null, updatedAt: iso() } : undefined,
     );
     if (!updated) return store.get(authId, id); // unknown (undefined) or already finished (unchanged)
-    await scheduler.cancel(`${id}-${updated.attempts.length + 1}`).catch(() => log.info(`reminder ${id}: job cancel failed (ignored on fire)`));
+    await scheduler
+      .cancel(`${id}-${updated.attempts.length + 1}`)
+      .catch((err: unknown) => log.info(`reminder ${id}: job cancel failed, the job is ignored when it fires (${err instanceof Error ? err.message : String(err)})`));
     log.info(`reminder ${id} cancelled`);
     return updated;
   }
