@@ -3,6 +3,7 @@
  * Credentials are never hardcoded and never logged.
  */
 import type { CallPolicy } from "./policy.js";
+import { parseTrustedClients, type TrustedClient } from "./oauth/clients.js";
 
 export interface Config {
   /** Account Auth ID (MA_... or SA_...). Every request is scoped to this account. */
@@ -90,6 +91,14 @@ export interface Config {
   };
   /** Served verbatim at GET /.well-known/openai-apps-challenge (OpenAI Apps domain verification). */
   openaiAppsChallenge?: string;
+  /** Hosted connector OAuth settings. */
+  oauth: {
+    /** VOBIZ_TRUSTED_CLIENTS: DCR clients whose redirect URIs are all https on one of these hosts show as verified. */
+    trustedClients: TrustedClient[];
+    /** Sign-in attempts (POST /oauth/login) per client IP, and per submitted Auth ID, per 15 minutes. */
+    loginMaxPerIp: number;
+    loginMaxPerAuthId: number;
+  };
 }
 
 export class ConfigError extends Error {}
@@ -186,6 +195,20 @@ function remindersConfig(env: NodeJS.ProcessEnv): Config["reminders"] {
     firestoreCollection: opt("VOBIZ_FIRESTORE_COLLECTION", env.VOBIZ_FIRESTORE_COLLECTION, /^[A-Za-z0-9_-]{1,100}$/, "a Firestore collection id (letters, digits, _ and -)") ?? "reminders",
     maxActive: int("VOBIZ_MAX_ACTIVE_REMINDERS", env.VOBIZ_MAX_ACTIVE_REMINDERS, 20, 1, 1000),
     maxCallsPerDay: int("VOBIZ_MAX_REMINDER_CALLS_PER_DAY", env.VOBIZ_MAX_REMINDER_CALLS_PER_DAY, 10, 1, 1000),
+  };
+}
+
+function oauthConfig(env: NodeJS.ProcessEnv): Config["oauth"] {
+  let trustedClients: TrustedClient[];
+  try {
+    trustedClients = parseTrustedClients(env.VOBIZ_TRUSTED_CLIENTS);
+  } catch (err) {
+    throw new ConfigError((err as Error).message);
+  }
+  return {
+    trustedClients,
+    loginMaxPerIp: int("VOBIZ_LOGIN_MAX_PER_IP", env.VOBIZ_LOGIN_MAX_PER_IP, 10, 1, 10000),
+    loginMaxPerAuthId: int("VOBIZ_LOGIN_MAX_PER_AUTH_ID", env.VOBIZ_LOGIN_MAX_PER_AUTH_ID, 10, 1, 10000),
   };
 }
 
@@ -303,6 +326,7 @@ export function loadConfig(rawEnv: NodeJS.ProcessEnv = process.env): Config {
     },
     reminders: remindersConfig(env),
     media: mediaConfig(env),
+    oauth: oauthConfig(env),
     openaiAppsChallenge: opt("VOBIZ_OPENAI_APPS_CHALLENGE", env.VOBIZ_OPENAI_APPS_CHALLENGE, /^[^\x00-\x1f\x7f]{1,1024}$/, "printable text (max 1024 characters)"),
     webhookSignature: signatureMode(env.VOBIZ_WEBHOOK_SIGNATURE),
     allowAnyUrlHost: bool(env.VOBIZ_ALLOW_ANY_URL_HOST, false),

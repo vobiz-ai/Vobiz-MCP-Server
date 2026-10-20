@@ -42,6 +42,7 @@ import { createServer, createSharedState } from "./server.js";
 import { SERVER_VERSION } from "./version.js";
 import { BRAND_BASE_CSS, VOBIZ_LOGO_SVG } from "./brand.js";
 import { Sealer } from "./sealer.js";
+import { classifyClient, redirectUriProblem, verifiedCimdName, type TrustedClient } from "./oauth/clients.js";
 import { COMMON_TIME_ZONES, DEFAULT_TIME_ZONE, isValidTimeZone } from "./tz.js";
 export { Sealer };
 
@@ -112,8 +113,12 @@ export interface HostedOptions {
   baseUrl: string;
   /** >= 32 characters; keep it stable across restarts and replicas. */
   secret: string;
-  /** Hosts allowed to serve OAuth Client ID Metadata Documents. */
-  cimdHosts?: string[];
+  /**
+   * DCR clients whose redirect URIs are all https on one of these hosts are shown as verified with this name
+   * (default cfg.oauth.trustedClients, from VOBIZ_TRUSTED_CLIENTS). CIMD client_ids are accepted only from the fixed
+   * VERIFIED_CIMD patterns (Claude, Claude Code, ChatGPT, Codex).
+   */
+  trustedClients?: TrustedClient[];
   /** Browser origins allowed to call /mcp (requests without Origin are always allowed). */
   allowedOrigins?: string[];
   /** Tool names the hosted connector never offers (default HOSTED_EXCLUDED_TOOLS). */
@@ -227,8 +232,7 @@ export function createHostedApp(o: HostedOptions): express.Express {
   const seal = new Sealer(o.secret);
   const base = o.baseUrl.replace(/\/+$/, "");
   const mcpUrl = new URL(`${base}/mcp`);
-  // ChatGPT's CIMD client id is https://chatgpt.com/oauth/client.json.
-  const cimdHosts = new Set((o.cimdHosts ?? ["claude.ai", "chatgpt.com"]).map((h) => h.toLowerCase()));
+  const trusted = o.trustedClients ?? cfg.oauth.trustedClients;
   const allowedOrigins = new Set(o.allowedOrigins ?? ["https://claude.ai", "https://claude.com", "https://chatgpt.com", "https://chat.openai.com"]);
   const fetchImpl = o.fetchImpl ?? globalThis.fetch;
   const ACCESS_TTL = o.accessTtlSec ?? 3600;
@@ -281,7 +285,8 @@ export function createHostedApp(o: HostedOptions): express.Express {
     } catch {
       return undefined;
     }
-    if (u.protocol !== "https:" || !cimdHosts.has(u.hostname.toLowerCase())) return undefined;
+    // Only the exact client_id URLs of the clients we verify (VERIFIED_CIMD); any other https client_id is refused.
+    if (u.href !== url || !verifiedCimdName(url)) return undefined;
     const hit = cimdCache.get(url);
     if (hit && Date.now() - hit.at < 3600_000) return hit.client;
     try {
@@ -290,8 +295,10 @@ export function createHostedApp(o: HostedOptions): express.Express {
       const text = await res.text();
       if (text.length > 64 * 1024) return undefined;
       const doc = JSON.parse(text) as Partial<OAuthClientInformationFull>;
-      if (doc.client_id !== url || !Array.isArray(doc.redirect_uris) || !doc.redirect_uris.length) return undefined;
-      const client = { ...doc, client_id: url, token_endpoint_auth_method: "none" } as OAuthClientInformationFull;
+      if (doc.client_id !== url || !Array.isArray(doc.redirect_uris)) return undefined;
+      const redirectUris = doc.redirect_uris.filter((r) => !redirectUriProblem(r));
+      if (!redirectUris.length) return undefined;
+      const client = { ...doc, redirect_uris: redirectUris, client_id: url, token_endpoint_auth_method: "none" } as OAuthClientInformationFull;
       cimdCache.set(url, { at: Date.now(), client });
       return client;
     } catch {
@@ -316,7 +323,7 @@ export function createHostedApp(o: HostedOptions): express.Express {
         TXN_TTL,
       );
       res.setHeader("Content-Security-Policy", consentCsp(params.redirectUri));
-      res.status(200).type("html").send(consentPage({ txn, clientName: client.client_name ?? "An MCP client", redirectHost: new URL(params.redirectUri).host, links: cfg.links }));
+      res.status(200).type("html").send(consentPage({ txn, clientName: classifyClient(client, trusted).name, redirectHost: new URL(params.redirectUri).host, links: cfg.links }));
     },
     async challengeForAuthorizationCode(client, code) {
       const c = seal.open<{ cid: string; challenge: string }>("code", code);
@@ -406,7 +413,7 @@ export function createHostedApp(o: HostedOptions): express.Express {
         .status(200)
         .set("Content-Security-Policy", consentCsp(t.redirect))
         .type("html")
-        .send(consentPage({ txn: String(req.body.txn), clientName: client.client_name ?? "An MCP client", redirectHost: new URL(t.redirect).host, error, links: cfg.links, values }));
+        .send(consentPage({ txn: String(req.body.txn), clientName: classifyClient(client, trusted).name, redirectHost: new URL(t.redirect).host, error, links: cfg.links, values }));
     if (!AUTH_ID_RE.test(authId) || authToken.length < 8 || authToken.length > 256) return again("Enter a valid Auth ID (MA_… or SA_…) and Auth Token.");
     if (!isValidTimeZone(values.tz)) return again("Enter a timezone such as Asia/Kolkata or America/New_York.");
     let callMeOn: string | undefined;
@@ -524,6 +531,10 @@ export async function runHosted(): Promise<void> {
     process.exit(1);
   }
   if (!cfg.defaultAnswerUrl) cfg.defaultAnswerUrl = `${baseUrl}/answer`;
+  if (process.env.VOBIZ_CIMD_HOSTS?.trim()) {
+    log.info("oauth: VOBIZ_CIMD_HOSTS is no longer used (CIMD client_ids are matched exactly against the Claude, Claude Code, ChatGPT and Codex URLs); remove it");
+  }
+  if (cfg.oauth.trustedClients.length) log.info(`oauth: ${cfg.oauth.trustedClients.length} trusted client host(s) from VOBIZ_TRUSTED_CLIENTS`);
   const list = (v?: string) => v?.split(",").map((s) => s.trim()).filter(Boolean);
   const ttl = (name: string, fallback: number) => {
     const v = Number(process.env[name] ?? fallback);
@@ -598,7 +609,6 @@ export async function runHosted(): Promise<void> {
     media,
     mediaRouter,
     mediaAvailable,
-    cimdHosts: list(process.env.VOBIZ_CIMD_HOSTS),
     allowedOrigins: list(process.env.VOBIZ_ALLOWED_ORIGINS),
     excludeTools: process.env.VOBIZ_HOSTED_EXCLUDED_TOOLS === undefined ? undefined : (list(process.env.VOBIZ_HOSTED_EXCLUDED_TOOLS) ?? []),
     accessTtlSec: ttl("VOBIZ_ACCESS_TOKEN_TTL_SEC", 3600),
