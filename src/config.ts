@@ -4,6 +4,7 @@
  */
 import type { CallPolicy } from "./policy.js";
 import { parseTrustedClients, type TrustedClient } from "./oauth/clients.js";
+import { ANTHROPIC_EGRESS_CIDRS, parseCidrList } from "./oauth/cidr.js";
 
 export interface Config {
   /** Account Auth ID (MA_... or SA_...). Every request is scoped to this account. */
@@ -98,6 +99,10 @@ export interface Config {
     /** Sign-in attempts (POST /oauth/login) per client IP, and per submitted Auth ID, per 15 minutes. */
     loginMaxPerIp: number;
     loginMaxPerAuthId: number;
+    /** VOBIZ_TRUSTED_EGRESS_CIDRS: client egress ranges that skip the per-IP limits on /token and /register (default: Anthropic's). */
+    trustedEgressCidrs: string[];
+    /** VOBIZ_TRUSTED_EGRESS_URL: an https range list fetched at startup and added to trustedEgressCidrs. */
+    trustedEgressUrl?: string;
   };
 }
 
@@ -205,10 +210,21 @@ function oauthConfig(env: NodeJS.ProcessEnv): Config["oauth"] {
   } catch (err) {
     throw new ConfigError((err as Error).message);
   }
+  // Unset = Anthropic's published ranges; set (even empty) = exactly the listed ranges.
+  let trustedEgressCidrs = ANTHROPIC_EGRESS_CIDRS;
+  if (env.VOBIZ_TRUSTED_EGRESS_CIDRS !== undefined) {
+    try {
+      trustedEgressCidrs = parseCidrList(env.VOBIZ_TRUSTED_EGRESS_CIDRS);
+    } catch (err) {
+      throw new ConfigError(`VOBIZ_TRUSTED_EGRESS_CIDRS: ${(err as Error).message}`);
+    }
+  }
   return {
     trustedClients,
     loginMaxPerIp: int("VOBIZ_LOGIN_MAX_PER_IP", env.VOBIZ_LOGIN_MAX_PER_IP, 10, 1, 10000),
     loginMaxPerAuthId: int("VOBIZ_LOGIN_MAX_PER_AUTH_ID", env.VOBIZ_LOGIN_MAX_PER_AUTH_ID, 10, 1, 10000),
+    trustedEgressCidrs,
+    trustedEgressUrl: env.VOBIZ_TRUSTED_EGRESS_URL?.trim() ? httpsLink("VOBIZ_TRUSTED_EGRESS_URL", env.VOBIZ_TRUSTED_EGRESS_URL, "") : undefined,
   };
 }
 

@@ -46,6 +46,7 @@ import { SERVER_VERSION } from "./version.js";
 import { VOBIZ_FAVICON_SVG } from "./brand.js";
 import { Sealer } from "./sealer.js";
 import { classifyClient, redirectUriProblem, verifiedCimdName, type TrustedClient } from "./oauth/clients.js";
+import { CidrMatcher, fetchCidrList } from "./oauth/cidr.js";
 import { FAMILY_MAX_AGE_MS, FirestoreGrantStore, MemoryGrantStore, authIdHash, familyExpired, type GrantFamily, type GrantStore } from "./oauth/grants.js";
 import { ERROR_CSP, consentCsp, consentPage, defaultChoice, errorPage, esc, type Choice, type Scope } from "./oauth/consent.js";
 import { DEFAULT_TIME_ZONE, isValidTimeZone } from "./tz.js";
@@ -147,6 +148,11 @@ export interface HostedOptions {
   fetchImpl?: typeof fetch;
   /** POST /oauth/login attempts per client IP and per submitted Auth ID per 15 minutes (default cfg.oauth, 10 and 10). */
   loginLimits?: { perIp?: number; perAuthId?: number };
+  /**
+   * Shared egress ranges of hosted clients (default cfg.oauth.trustedEgressCidrs). Requests from them skip the SDK's
+   * per-IP limits on /token and /register only.
+   */
+  trustedEgressCidrs?: string[];
   /** Refresh-token families and used codes (default: in memory; runHosted passes Firestore when configured). */
   grants?: GrantStore;
   /** Server-side reminder calls; the reminder tools are offered only when this is set. */
@@ -188,6 +194,9 @@ export function createHostedApp(o: HostedOptions): express.Express {
   const REFRESH_TTL = o.refreshTtlSec ?? 30 * 24 * 3600;
   const excludeTools = o.excludeTools ?? HOSTED_EXCLUDED_TOOLS;
   const grants = o.grants ?? new MemoryGrantStore();
+  const egress = new CidrMatcher(o.trustedEgressCidrs ?? cfg.oauth.trustedEgressCidrs);
+  /** Claude's and ChatGPT's backends call /token and /register for all their users from a few shared IPs. */
+  const skipForTrustedEgress = { skip: (req: Request) => egress.has(req.ip) };
   /** Family revocation as seen by verifyAccessToken, cached briefly so /mcp does not read the store on every call. */
   const familyCache = new Map<string, { at: number; usable: boolean }>();
   const cimdCache = new Map<string, { at: number; client: OAuthClientInformationFull }>();
@@ -539,6 +548,9 @@ export function createHostedApp(o: HostedOptions): express.Express {
       scopesSupported: [SCOPE],
       resourceName: "Vobiz",
       serviceDocumentationUrl: new URL(cfg.links.docs),
+      // /authorize keeps the SDK's per-IP limit: it is the user's own browser.
+      tokenOptions: { rateLimit: skipForTrustedEgress },
+      clientRegistrationOptions: { rateLimit: skipForTrustedEgress },
     }),
   );
 
@@ -769,6 +781,15 @@ export async function runHosted(): Promise<void> {
     });
     remindersRouter = createRemindersRouter(reminders, { baseUrl, signatureMode: cfg.webhookSignature === "off" ? "off" : "verify_if_present", sealer });
   }
+  // Shared client egress ranges that skip the per-IP limits on /token and /register: configured list plus an optional
+  // published list fetched now (e.g. OpenAI's https://openai.com/chatgpt-connectors.json).
+  let trustedEgressCidrs = cfg.oauth.trustedEgressCidrs;
+  if (cfg.oauth.trustedEgressUrl) {
+    const got = await fetchCidrList(cfg.oauth.trustedEgressUrl);
+    if (got.error) log.info(`oauth: WARNING could not load VOBIZ_TRUSTED_EGRESS_URL (${got.error}); using the ${trustedEgressCidrs.length} configured ranges only`);
+    else trustedEgressCidrs = [...new Set([...trustedEgressCidrs, ...got.cidrs])];
+  }
+  log.info(`oauth: ${trustedEgressCidrs.length} trusted client egress range(s) skip the per-IP limits on /token and /register`);
   // Refresh-token families and used codes: Firestore (shared by every replica) when a GCP project is configured.
   const grants: GrantStore = cfg.reminders.gcpProject
     ? new FirestoreGrantStore({ projectId: cfg.reminders.gcpProject, databaseId: cfg.reminders.firestoreDatabase })
@@ -784,6 +805,7 @@ export async function runHosted(): Promise<void> {
     baseUrl,
     secret,
     grants,
+    trustedEgressCidrs,
     reminders,
     remindersRouter,
     media,
