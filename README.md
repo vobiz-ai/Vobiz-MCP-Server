@@ -9,6 +9,7 @@ The official [Model Context Protocol](https://modelcontextprotocol.io) server fo
 - read billing transactions
 - send SMS, MMS and RCS messages
 - schedule reminder and wake-up calls (hosted connector)
+- call someone and play audio or speak text in one step: `make_call` with `say` / `play` (hosted connector)
 
 It also ships the **Vobiz Agent Skills**, so the model knows how each Vobiz product works before it acts.
 
@@ -32,6 +33,10 @@ It also ships the **Vobiz Agent Skills**, so the model knows how each Vobiz prod
 On the hosted connector (`https://mcp.vobiz.ai/mcp`) you can say *"wake me up at 6 tomorrow"* or *"call me at 3 to remind me about the dentist"*. The client calls `schedule_reminder_call` once and the server does the rest: it places the call at that time from your Vobiz number, speaks the message, and lets you press **1** to snooze, **2** to confirm or **9** to stop. It retries when nobody answers. Nothing depends on the chat staying open.
 
 At sign-in you choose **Full access**, **Personal assistant** (only reminder calls to your own number, plus your balance, numbers and call status) or **Read-only**, and enter your own number, an optional caller ID and your timezone. Manage reminders with `list_reminder_calls`, `get_reminder_call` and `cancel_reminder_call`. Operators: see [docs/HOSTING.md](docs/HOSTING.md#reminder-calls).
+
+### "Call me and play this"
+
+On the hosted connector, *"call +919876543210 and play my alarm"* or *"call +919876543210 and say 'Your table is ready'"* is one `make_call` with `say` (text) and/or `play` (a file in your audio library, or a direct https `.mp3`/`.wav` link). The connector hosts the call script: the call plays or speaks the content, then hangs up (`loop: 0` repeats the audio until you hang up). A web page such as Pixabay, YouTube, Spotify or SoundCloud cannot be played; give a direct file link or add the file to your audio library first. See [docs/TOOLS.md](docs/TOOLS.md#make_call).
 
 #### Your own audio on a reminder call
 

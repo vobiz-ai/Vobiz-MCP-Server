@@ -41,6 +41,8 @@ Without Docker: `npm ci && npm run build && VOBIZ_HOSTED_URL=… VOBIZ_HOSTED_SE
 | `POST /r/:token/answer`, `/r/:token/input`, `/r/:token/hangup` | Vobiz callbacks for a reminder call (sealed per-call token) |
 | `GET`/`PUT /upload/:token` | Audio upload page, and the raw upload it sends (sealed one-time link, 15 minutes) |
 | `GET`/`HEAD /media/:token` | A library file as WAV, fetched by Vobiz for `<Play>` on a reminder call (sealed link, 20 minutes) |
+| `GET`/`POST /c/:token/answer` | VobizXML for a `make_call` with `say` / `play`: Play and/or Speak, then Hangup (sealed `vbzs_` token, 20 minutes; an invalid or expired token gets a "no longer active" script, never a 4xx) |
+| `POST /c/:token/hangup` | Hangup callback for such a call: `200 {"ok":true}`, logs `calls: script hangup cause=… duration=…` only |
 | `GET /.well-known/openai-apps-challenge` | OpenAI Apps domain verification (`VOBIZ_OPENAI_APPS_CHALLENGE`; 404 when unset) |
 | `GET /health` | Liveness (`{"ok":true,"version":"…"}`) |
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- **"Call me and play this music" in one step.** `make_call` takes `say` (text, up to 600 characters, with `language` and `voice`) and `play` (a direct https `.mp3`/`.wav` link, or the name or id of a file in the audio library), plus `loop` (0..10, 0 = until hangup) and `order`. The hosted connector serves the call's VobizXML itself at `/c/:token/answer` (sealed `vbzs_` token, 20 minutes) and acknowledges `/c/:token/hangup`, so the call plays or speaks the content and then hangs up instead of dropping after the placeholder greeting. Library files get a fresh `/media/:token` link when the call is answered.
+- `make_call` refuses page links (Pixabay, YouTube, Spotify, SoundCloud) for `play` with a clear message, refuses `say` / `play` together with `answer_url`, and lists the library when a name is not found. The result carries `script` and `how_to`; a call that falls back to the placeholder answer URL reports `script: { placeholder: true }`. The `/answer` placeholder itself is unchanged.
+- `say` / `play` need the hosted connector for now; the stdio and single-account HTTP modes answer with `invalid_input` and keep working with your own `answer_url`.
+- `import_audio_from_url` says it needs a direct link to an audio file, not a web page.
+
 ## 1.3.0
 
 - **Your own audio on reminder calls.** Say "use this MP3 as my alarm" or "let me record the message", and the audio plays at the start of the call, before the spoken message. Each account has a private audio library. Add files on a one-time upload page (pick, drop or record from the microphone), by a direct upload from the assistant's code sandbox, or from a public https link. New tools: `create_audio_upload_link`, `import_audio_from_url`, `list_audio`, `delete_audio`. They are also part of the personal assistant sign-in.

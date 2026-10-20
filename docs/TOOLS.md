@@ -121,20 +121,42 @@ Generated from the tool registry (114 tools). Regenerate with `npm run docs:tool
 
 ## make_call
 
-Initiate ONE outbound call through Vobiz (POST /Account/{auth_id}/Call/). Required: `to` (destination, E.164), `from` (caller ID: must be an active number on this account), and `confirm: true` after the user has explicitly approved this exact call. `answer_url` is required unless the server has VOBIZ_DEFAULT_ANSWER_URL configured; Vobiz fetches call-control XML from it when the call is answered. Success means Vobiz ACCEPTED/QUEUED the request and returned a request_uuid; it does NOT mean the call connected. Follow up with get_call_status using the returned request_uuid as call_uuid. Never call this twice for the same intent: if the outcome is unknown, check list_live_calls / list_call_records instead. Pass a unique idempotency_key per intended call: repeating a key replays the first result instead of dialling again. Server policy (enforced, not negotiable by the model): allowed destination countries, blocked prefixes, max duration, per-minute/hour caps, max concurrent calls, minimum balance.
+Place ONE outbound call through Vobiz (POST /Account/{auth_id}/Call/); `say` (text to speak) and/or `play` (a direct https .mp3/.wav link, or the name of a file in the audio library) is the simplest way to put content on it: this server hosts the call script, and the call ends automatically after the content unless `loop` is 0. `answer_url` is only for callers hosting their own VobizXML; a call with neither answer_url nor say/play only speaks a short placeholder greeting and ends after a few seconds. Required: `to` (destination, E.164), `from` (caller ID: must be an active number on this account), and `confirm: true` after the user has explicitly approved this exact call. Success means Vobiz ACCEPTED/QUEUED the request and returned a request_uuid; it does NOT mean the call connected. Follow up with get_call_status using the returned request_uuid as call_uuid. Never call this twice for the same intent: if the outcome is unknown, check list_live_calls / list_call_records instead. Pass a unique idempotency_key per intended call: repeating a key replays the first result instead of dialling again. Server policy (enforced, not negotiable by the model): allowed destination countries, blocked prefixes, max duration, per-minute/hour caps, max concurrent calls, minimum balance.
 
 | Input | Type | Required | Notes |
 |---|---|---|---|
 | `to` | string | yes | Destination number in E.164, e.g. +919876543210. One number only.; pattern `^\+?[1-9]\d{6,14}$` |
 | `from` | string | yes | Caller ID: a Vobiz number on this account, E.164.; pattern `^\+?[1-9]\d{6,14}$` |
 | `confirm` | boolean | yes | Must be true, set only after the user explicitly confirmed this call (destination and caller ID). |
-| `answer_url` | string |  | URL that returns Vobiz XML when the call is answered. Defaults to the server's VOBIZ_DEFAULT_ANSWER_URL. |
+| `answer_url` | string |  | Your own URL that returns VobizXML when the call is answered. Not combinable with say/play. Defaults to the server's VOBIZ_DEFAULT_ANSWER_URL. |
+| `say` | string |  | Text spoken when the call is answered (max 600 characters), e.g. "Your table is ready." |
+| `language` | `da-DK` | `nl-NL` | `en-AU` | `en-GB` | `en-US` | `en-IN` | `fr-FR` | `fr-CA` | `de-DE` | `it-IT` | `pl-PL` | `pt-PT` | `pt-BR` | `ru-RU` | `es-ES` | `es-US` | `sv-SE` | `hi-IN` |  | Speech language for `say` (default en-US). |
+| `voice` | `WOMAN` | `MAN` |  | Speech voice for `say` (default WOMAN). |
+| `play` | string |  | Audio played when the call is answered: a direct https link to an .mp3 or .wav FILE (not a web page such as Pixabay, YouTube, Spotify or SoundCloud), or the name or id of a file in the audio library. |
+| `loop` | integer |  | How many times to play the audio (or speak the text when there is no audio), 0..10, default 1. 0 = repeat until the call is hung up.; min 0; max 10 |
+| `order` | `play_then_say` | `say_then_play` |  | With both say and play: which comes first (default play_then_say). |
 | `answer_method` | `GET` | `POST` |  | HTTP method for answer_url (default POST). |
-| `hangup_url` | string |  | URL notified when the call hangs up (defaults to answer_url). |
+| `hangup_url` | string |  | URL notified when the call hangs up (defaults to answer_url; with say/play, to this server's script hangup URL). |
 | `caller_name` | string |  | Caller name shown where supported (max 50 chars). |
 | `time_limit` | integer |  | Maximum call duration in seconds. Defaults to, and may not exceed, the server's VOBIZ_MAX_CALL_DURATION_SEC.; min 1; max 86400 |
 | `ring_timeout` | integer |  | Seconds to ring before giving up (default 120).; min 5; max 120 |
 | `idempotency_key` | string |  | Unique key for this intended operation (e.g. a UUID). Repeating it replays the first result instead of acting again.; pattern `^[A-Za-z0-9_.:-]{8,128}$` |
+
+### Examples
+
+*"Call +919876543210 and play my alarm"*: `play` takes the name of a file in the audio library (or a direct https .mp3/.wav link). The call plays it, then hangs up.
+
+```json
+{ "to": "+919876543210", "from": "+918012345678", "play": "Morning alarm", "confirm": true, "idempotency_key": "alarm-2026-10-20-0700" }
+```
+
+*"Call +919876543210 and say 'Your table is ready'"*:
+
+```json
+{ "to": "+919876543210", "from": "+918012345678", "say": "Your table is ready.", "language": "en-IN", "confirm": true, "idempotency_key": "table-ready-0042" }
+```
+
+Both together play first by default (`order: "say_then_play"` reverses it). `loop` repeats the audio (0..10; 0 = until hangup, and speech then comes first). Page links (Pixabay, YouTube, Spotify, SoundCloud) are refused: `play` needs a direct audio file link. The result carries `script` (`{ say, play: "library:<name>" | "url", loop }`) and `how_to`. Without `answer_url`, `say` or `play`, the call uses the placeholder answer URL, which only speaks a short greeting and ends (`script: { placeholder: true }`). `say` / `play` are served by the hosted connector at `/c/:token/answer`; elsewhere, pass your own `answer_url`.
 
 ## get_call_status
 
@@ -1300,7 +1322,7 @@ Vobiz: use this when the user wants their OWN audio file or recording played on 
 
 ## import_audio_from_url
 
-Vobiz: save the audio at a public https link the user pastes (an MP3, WAV or other audio file) into this account's audio library under a name, for use on reminder and wake-up calls. Up to 15 MB and 5 minutes per file. Then pass the name as `audio` to schedule_reminder_call. For a file on the user's device, or a recording, use create_audio_upload_link.
+Vobiz: save the audio at a public https link the user pastes (an MP3, WAV or other audio file) into this account's audio library under a name, for use on reminder and wake-up calls. It needs a direct https link to an audio FILE (.mp3, .wav, .m4a, .ogg…), not a web page such as Pixabay, YouTube, Spotify or SoundCloud; if the user only has a page link, ask for the direct file link or use create_audio_upload_link so they can upload the file. Up to 15 MB and 5 minutes per file. Then pass the name as `audio` to schedule_reminder_call. For a file on the user's device, or a recording, use create_audio_upload_link.
 
 | Input | Type | Required | Notes |
 |---|---|---|---|

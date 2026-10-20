@@ -314,7 +314,7 @@ export function registerCallTools(server: McpServer, ctx: ToolContext): void {
           .describe(`How many times to play the audio (or speak the text when there is no audio), 0..${LOOP_MAX}, default 1. 0 = repeat until the call is hung up.`),
         order: z.enum(["play_then_say", "say_then_play"]).optional().describe("With both say and play: which comes first (default play_then_say)."),
         answer_method: z.enum(["GET", "POST"]).optional().describe("HTTP method for answer_url (default POST)."),
-        hangup_url: z.string().url().optional().describe("URL notified when the call hangs up (defaults to answer_url)."),
+        hangup_url: z.string().url().optional().describe("URL notified when the call hangs up (defaults to answer_url; with say/play, to this server's script hangup URL)."),
         caller_name: z.string().max(50).optional().describe("Caller name shown where supported (max 50 chars)."),
         time_limit: z
           .number()
