@@ -7,6 +7,8 @@ import type { ReminderService } from "./reminders/types.js";
 import type { MediaService } from "./media/types.js";
 import { FlowStore } from "./flows.js";
 import { IdempotencyStore } from "./idempotency.js";
+import { ReservationSet } from "./guard/capacity.js";
+import type { SharedStoreBackend } from "./guard/shared-store.js";
 import { EventStore } from "./webhooks.js";
 import type { Logger } from "./logger.js";
 import { registerAccountTools } from "./tools/account.js";
@@ -74,30 +76,57 @@ export interface ServerOptions {
   mediaUploads?: MediaUploads;
   /** The signed-in user's choices (scope, own number, caller ID, timezone). */
   profile?: ConnectionProfile;
+  /**
+   * Cross-replica store for idempotency and call/message caps. Used when `shared` is not given (otherwise
+   * pass it to createSharedState); overrides shared.backend when both are set.
+   */
+  backend?: SharedStoreBackend;
+  /** Several accounts share this process (hosted connector): see SharedStateOptions.multiTenant. */
+  multiTenant?: boolean;
+}
+
+export interface SharedStateOptions {
+  /** Cross-replica idempotency records, rate counters and call reservations (e.g. createFirestoreSharedBackend). */
+  backend?: SharedStoreBackend;
+  /**
+   * Several accounts share this process (hosted connector). VOBIZ_IDEMPOTENCY_FILE is then ignored, with a
+   * warning: one JSON file must never hold, or replay, records of different tenants.
+   */
+  multiTenant?: boolean;
+  /** Where the multiTenant warning goes (default: none). */
+  log?: Logger;
 }
 
 /** `hosting` = this process serves XML flows and callbacks (HTTP mode); needs VOBIZ_PUBLIC_URL. */
-export function createSharedState(cfg: Config, hosting = false): SharedState {
+export function createSharedState(cfg: Config, hosting = false, opts: SharedStateOptions = {}): SharedState {
   const hosted = hosting && cfg.publicUrl ? { flows: new FlowStore(cfg.publicUrl), events: new EventStore() } : {};
+  let idempotencyFile = cfg.idempotencyFile;
+  if (opts.multiTenant && idempotencyFile) {
+    opts.log?.info("VOBIZ_IDEMPOTENCY_FILE is ignored in multi-tenant mode: records stay in memory (or in the shared backend), never in one file shared by accounts.");
+    idempotencyFile = undefined;
+  }
   return {
     ...hosted,
+    ...(opts.backend ? { backend: opts.backend } : {}),
+    callReservations: new ReservationSet(),
     callLimiter: new SlidingWindowLimiter(cfg.maxCallsPerMinute),
     hourlyCallLimiter: new SlidingWindowLimiter(cfg.policy.maxCallsPerHour, 3600_000),
     purchaseLimiter: new SlidingWindowLimiter(Math.max(cfg.maxNumberPurchasesPerDay, 1), 24 * 3600_000),
     messageLimiter: new SlidingWindowLimiter(cfg.messaging.maxMessagesPerMinute),
     hourlyMessageLimiter: new SlidingWindowLimiter(cfg.messaging.maxMessagesPerHour, 3600_000),
-    idempotency: new IdempotencyStore(24 * 3600_000, cfg.idempotencyFile),
+    idempotency: new IdempotencyStore(24 * 3600_000, idempotencyFile),
   };
 }
 
 export function createServer(cfg: Config, log: Logger, fetchImpl?: typeof fetch, opts: ServerOptions = {}): McpServer {
   const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION }, { instructions: instructions(cfg) });
-  const shared = opts.shared ?? createSharedState(cfg);
+  const shared = opts.shared ?? createSharedState(cfg, false, { backend: opts.backend, multiTenant: opts.multiTenant, log });
   const ctx: ToolContext = {
     cfg,
     log,
     client: new VobizClient(cfg, log, fetchImpl),
     ...shared,
+    ...(opts.backend ? { backend: opts.backend } : {}),
     readOnly: opts.readOnly ?? false,
     ...(opts.reminders ? { reminders: opts.reminders } : {}),
     ...(opts.media ? { media: opts.media } : {}),

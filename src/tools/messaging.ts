@@ -8,6 +8,7 @@ import { digitsOnly } from "../config.js";
 import type { ToolContext } from "../context.js";
 import { VobizError } from "../errors.js";
 import { IdempotencyStore, withIdempotency } from "../idempotency.js";
+import { acquireMessageRate, sharedOf } from "../guard/capacity.js";
 import { UNTRUSTED_DESCRIPTION, markUntrusted, withUntrustedNotice } from "../guard/untrusted.js";
 import { handler, idempotencyKey, ok, phoneNumber, toE164 } from "../util.js";
 
@@ -162,14 +163,7 @@ export function registerMessagingTools(server: McpServer, ctx: ToolContext): voi
       return ok(
         await withIdempotency(ctx.idempotency, `msg:${a.idempotency_key}`, fingerprint, async () => {
           if (ch !== "rcs" && cfg.messaging.verifySender) await assertSenderOwned(ctx, a.from);
-          if (!ctx.messageLimiter.wouldAllow(to.length) || !ctx.hourlyMessageLimiter.wouldAllow(to.length)) {
-            throw new VobizError(
-              "rate_limited",
-              `This MCP server sends at most ${cfg.messaging.maxMessagesPerMinute} messages per minute and ${cfg.messaging.maxMessagesPerHour} per hour.`,
-            );
-          }
-          ctx.messageLimiter.tryAcquireMany(to.length);
-          ctx.hourlyMessageLimiter.tryAcquireMany(to.length);
+          await acquireMessageRate(ctx, to.length);
           // One request per recipient so every message ID and status comes back.
           const messages: Rec[] = [];
           const statuses: number[] = [];
@@ -207,7 +201,7 @@ export function registerMessagingTools(server: McpServer, ctx: ToolContext): voi
                 : "Some recipients were not sent; see status, errorCode and errorMessage on each message. Do not resend to opted-out numbers.",
             http_statuses: statuses,
           };
-        }),
+        }, { shared: sharedOf(ctx) }),
       );
     }),
   );

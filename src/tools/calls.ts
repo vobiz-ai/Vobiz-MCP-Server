@@ -7,6 +7,7 @@ import { IdempotencyStore, withIdempotency } from "../idempotency.js";
 import { classifyHangup } from "../outcomes.js";
 import { assertDestinationAllowed, effectiveTimeLimit } from "../policy.js";
 import { UNTRUSTED_DESCRIPTION, markUntrusted, withUntrustedNotice } from "../guard/untrusted.js";
+import { acquireCallRate, reserveCallSlot, sharedOf, type CallSlot } from "../guard/capacity.js";
 import { assertAllowedUrl, callId, handler, idempotencyKey, ok, phoneNumber, toE164 } from "../util.js";
 
 type Rec = Record<string, unknown>;
@@ -72,8 +73,12 @@ export function outcomeFields(cdr: Rec): Rec {
   return { outcome: c.outcome, typical_sip_code: c.typical_sip_code, retry_may_succeed: c.retryable };
 }
 
-/** Refuses to start a call when this server's concurrency cap or the account balance floor is reached. */
-async function assertCapacity(ctx: ToolContext): Promise<void> {
+/**
+ * Refuses to start a call when this server's concurrency cap or the account balance floor is reached.
+ * `slot` was reserved synchronously before any network check; other in-flight attempts (in this process,
+ * or on every replica with a shared backend) count against the cap until Vobiz lists their calls.
+ */
+async function assertCapacity(ctx: ToolContext, slot: CallSlot): Promise<void> {
   const { policy } = ctx.cfg;
   const live = await ctx.client.request<Rec>("GET", ctx.client.accountPath("/Call/"), {
     query: { status: "live" },
@@ -83,11 +88,15 @@ async function assertCapacity(ctx: ToolContext): Promise<void> {
     query: { status: "queued" },
     route: "GET Call/?status=queued",
   });
-  const count = (Array.isArray(live.data?.calls) ? live.data.calls.length : 0) + (Array.isArray(queued.data?.calls) ? queued.data.calls.length : 0);
+  const ids = (d: Rec | undefined) => (Array.isArray(d?.calls) ? (d.calls as unknown[]) : []);
+  const listed = new Set([...ids(live.data), ...ids(queued.data)].map(String));
+  const listedCount = ids(live.data).length + ids(queued.data).length;
+  const inFlight = await slot.others(listed);
+  const count = listedCount + inFlight;
   if (count >= policy.maxConcurrentCalls) {
     throw new VobizError(
       "rate_limited",
-      `${count} calls are already live or queued on this account; this server allows at most ${policy.maxConcurrentCalls} at once (VOBIZ_MAX_CONCURRENT_CALLS).`,
+      `${listedCount} calls are already live or queued on this account${inFlight ? ` and ${inFlight} more are being placed` : ""}; this server allows at most ${policy.maxConcurrentCalls} at once (VOBIZ_MAX_CONCURRENT_CALLS).`,
     );
   }
   if (policy.checkBalance) {
@@ -229,26 +238,32 @@ export function registerCallTools(server: McpServer, ctx: ToolContext): void {
       const fingerprint = IdempotencyStore.fingerprint({ op: "make_call", from: fromDigits, to: toDigits, answerUrl, timeLimit });
       // Without an explicit key, identical calls inside the duplicate window share one automatic key.
       const key = args.idempotency_key ? `key:${args.idempotency_key}` : `auto:${fingerprint}`;
-      if (!args.idempotency_key) {
-        // Automatic records only block identical calls inside the duplicate window
-        // (records with an unknown outcome stay blocking for the full idempotency TTL).
-        ctx.idempotency.dropIfOlder(key, cfg.duplicateCallWindowSec * 1000);
-      }
+      // Automatic records only block identical calls inside the duplicate window
+      // (records with an unknown outcome stay blocking for the full idempotency TTL).
+      const window = args.idempotency_key ? {} : { replaceDoneOlderThanMs: cfg.duplicateCallWindowSec * 1000 };
 
       return ok(
-        await withIdempotency(ctx.idempotency, key, fingerprint, async () => {
-          if (cfg.verifyCallerId) await assertCallerIdOwned(ctx, args.from);
-          await assertCapacity(ctx);
-          if (!ctx.callLimiter.wouldAllow()) {
-            throw new VobizError("rate_limited", `This MCP server allows at most ${cfg.maxCallsPerMinute} call initiations per minute.`);
-          }
-          if (!ctx.hourlyCallLimiter.wouldAllow()) {
-            throw new VobizError("rate_limited", `This MCP server allows at most ${cfg.policy.maxCallsPerHour} call initiations per hour.`);
-          }
-          ctx.callLimiter.tryAcquire();
-          ctx.hourlyCallLimiter.tryAcquire();
-          return placeCall(ctx, { fromDigits, to: args.to, answerUrl, timeLimit, args });
-        }).then((r) =>
+        await withIdempotency(
+          ctx.idempotency,
+          key,
+          fingerprint,
+          async () => {
+            // Reserved synchronously, before any network check (no check-then-dial race).
+            const slot = reserveCallSlot(ctx);
+            try {
+              if (cfg.verifyCallerId) await assertCallerIdOwned(ctx, args.from);
+              await assertCapacity(ctx, slot);
+              await acquireCallRate(ctx);
+              const placed = await placeCall(ctx, { fromDigits, to: args.to, answerUrl, timeLimit, args });
+              await slot.settle(String(placed.request_uuid));
+              return placed;
+            } catch (err) {
+              await slot.release();
+              throw err;
+            }
+          },
+          { ...window, shared: sharedOf(ctx) },
+        ).then((r) =>
           r.replayed && !args.idempotency_key
             ? (() => {
                 throw new VobizError(

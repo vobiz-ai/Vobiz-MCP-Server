@@ -17,6 +17,7 @@ import { digitsOnly } from "../config.js";
 import type { ToolContext } from "../context.js";
 import { VobizError } from "../errors.js";
 import { IdempotencyStore, withIdempotency } from "../idempotency.js";
+import { sharedOf } from "../guard/capacity.js";
 import { PAGINATION_NOTE, assertAllowedUrl, handler, idempotencyKey, listField, ok, pageInfo, phoneNumber, redact, toE164 } from "../util.js";
 
 type Rec = Record<string, unknown>;
@@ -296,7 +297,7 @@ export function registerProvisioningTools(server: McpServer, ctx: ToolContext): 
             backend_message: res.data.message ?? null,
             http_status: res.status,
           };
-        }),
+        }, { shared: sharedOf(ctx) }),
       );
     }),
   );
