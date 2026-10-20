@@ -318,3 +318,34 @@ describe("sign-in rate limits", () => {
     expect((await fetch(`${base}/oauth/login`, { method: "POST", body: new URLSearchParams({ txn: "x", auth_id: "MA_OTHER22" }) })).status).toBe(400);
   });
 });
+
+describe("response headers and metadata", async () => {
+  const base = await start();
+
+  it("sets HSTS, nosniff, Referrer-Policy and X-Frame-Options on every response", async () => {
+    for (const r of [await fetch(`${base}/health`), await fetch(`${base}/nope`), await fetch(`${base}/mcp`, { method: "POST" }), await fetch(`${base}/.well-known/oauth-authorization-server`)]) {
+      expect(r.headers.get("strict-transport-security")).toBe("max-age=31536000; includeSubDomains");
+      expect(r.headers.get("x-content-type-options")).toBe("nosniff");
+      expect(r.headers.get("referrer-policy")).toBe("no-referrer");
+      expect(r.headers.get("x-frame-options")).toBe("DENY");
+    }
+  });
+
+  it("advertises header-only bearer tokens in the protected resource metadata", async () => {
+    const r = await fetch(`${base}/.well-known/oauth-protected-resource/mcp`);
+    expect(r.headers.get("access-control-allow-origin")).toBe("*");
+    const prm = await r.json();
+    expect(prm).toMatchObject({ resource: "https://mcp.example.test/mcp", authorization_servers: [ISSUER], bearer_methods_supported: ["header"], resource_name: "Vobiz" });
+  });
+
+  it("caps the access token lifetime at a day", async () => {
+    const capped = await start({ accessTtlSec: 7 * 86400 });
+    const { body } = await register(capped, [CLAUDE_CB]);
+    const { verifier, challenge } = pkce();
+    const html = await (await fetch(authorizeUrl(capped, body.client_id, CLAUDE_CB, { code_challenge: challenge }))).text();
+    const login = await fetch(`${capped}/oauth/login`, { method: "POST", body: new URLSearchParams({ txn: txnOf(html), auth_id: GOOD_ID, auth_token: GOOD_TOKEN, scope: "read" }), redirect: "manual" });
+    const code = new URL(login.headers.get("location")!).searchParams.get("code")!;
+    const t = await fetch(`${capped}/token`, { method: "POST", body: new URLSearchParams({ grant_type: "authorization_code", code, code_verifier: verifier, client_id: body.client_id, redirect_uri: CLAUDE_CB }) });
+    expect(((await t.json()) as { expires_in: number }).expires_in).toBe(86400);
+  });
+});

@@ -432,6 +432,16 @@ export function createHostedApp(o: HostedOptions): express.Express {
   const app = express();
   app.disable("x-powered-by");
   app.set("trust proxy", 1);
+  // Security headers on every response. Pages that need another Referrer-Policy (the consent page) override it.
+  app.use((_req, res, next) => {
+    res.set({
+      "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+      "X-Content-Type-Options": "nosniff",
+      "Referrer-Policy": "no-referrer",
+      "X-Frame-Options": "DENY",
+    });
+    next();
+  });
 
   app.get("/health", (_req, res) => res.json({ ok: true, version: SERVER_VERSION }));
   app.get("/favicon.svg", (_req, res) => res.type("image/svg+xml").set("Cache-Control", "public, max-age=86400").send(VOBIZ_FAVICON_SVG));
@@ -452,6 +462,16 @@ export function createHostedApp(o: HostedOptions): express.Express {
     authorization_response_iss_parameter_supported: true,
   };
   app.get("/.well-known/oauth-authorization-server", (_req, res) => res.json(asMeta));
+  // Protected resource metadata (RFC 9728), served here rather than by the SDK so it can say tokens go in the header only.
+  const prm = {
+    resource: mcpUrl.href,
+    authorization_servers: [asMeta.issuer],
+    scopes_supported: [SCOPE],
+    resource_name: "Vobiz",
+    resource_documentation: new URL(cfg.links.docs).href,
+    bearer_methods_supported: ["header"],
+  };
+  app.get(new URL(getOAuthProtectedResourceMetadataUrl(mcpUrl)).pathname, (_req, res) => res.set("Access-Control-Allow-Origin", "*").json(prm));
   // OpenAI Apps domain verification: the token from the OpenAI platform, served verbatim.
   app.get("/.well-known/openai-apps-challenge", (_req, res) =>
     cfg.openaiAppsChallenge ? res.type("text/plain").set("Cache-Control", "no-store").send(cfg.openaiAppsChallenge) : res.status(404).json({ error: "not_found" }),
