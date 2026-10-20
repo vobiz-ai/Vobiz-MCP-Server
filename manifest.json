@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "vobiz",
   "display_name": "Vobiz",
-  "version": "1.1.4",
+  "version": "1.2.0",
   "description": "Run Vobiz calls, conferences, IVRs, call records, numbers, SIP trunks and SMS/MMS/RCS from Claude.",
   "long_description": "The official Vobiz MCP server. Place and control calls and conferences, stream call audio to AI agents, build VobizXML IVRs, read call records, recordings and billing, manage phone numbers, SIP trunks, endpoints, credentials, IP allow-lists, voice applications and sub-accounts, and send SMS, MMS and RCS messages on your Vobiz account. Ships the Vobiz Agent Skills as tools, prompts and resources. Calling, messaging and account changes are off until you enable them.",
   "author": {

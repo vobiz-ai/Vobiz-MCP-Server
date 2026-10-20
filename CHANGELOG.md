@@ -1,7 +1,11 @@
 # Changelog
 
-## Unreleased
+## 1.2.0
 
+- **Reminder calls.** Ask your assistant "wake me up at 6 tomorrow" or "call me at 3 to remind me about the review". The hosted server schedules the call, speaks your message when you pick up, and lets you press 1 to snooze, 2 to confirm or 9 to stop. It calls again when there is no answer. New tools: `schedule_reminder_call`, `list_reminder_calls`, `get_reminder_call`, `cancel_reminder_call`.
+- **Choose the access level at sign-in**: read-only, personal assistant (reminder calls to your own number only) or full access. The sign-in page also takes the number to call you on, the Vobiz number to call from, and your timezone.
+- Durable scheduling on Google Cloud Tasks and Firestore when configured; otherwise in-process (single replica).
+- ChatGPT readiness: RFC 9207 `iss` on authorization responses, ChatGPT origins and Client ID Metadata host, and `/.well-known/openai-apps-challenge` for domain verification.
 - `@vobiz/mcp` is on npm and listed in the official MCP Registry as `io.github.vobiz-ai/vobiz-mcp`. Every local install snippet now uses `npx -y @vobiz/mcp@<version>`.
 - **Connect in one step** for every MCP client: Claude, Claude Code, Codex, ChatGPT, Gemini CLI, Cursor, VS Code, Windsurf, Cline, Goose and more. Each connects to the hosted server with OAuth, so no Auth Token goes in a config file.
 - A step-by-step guide to connecting Claude.

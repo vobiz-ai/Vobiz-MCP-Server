@@ -9,13 +9,15 @@
  *   /authorize, /token, /register, /revoke      OAuth 2.1 authorization server
  *   POST /oauth/login                           consent form: the user enters their Vobiz Auth ID + Auth Token
  *   GET|POST /answer                            default answer XML for make_call
+ *   /jobs/fire, /r/:token/*                     reminder calls (when a reminders router is mounted)
+ *   GET  /.well-known/openai-apps-challenge     OpenAI Apps domain verification (VOBIZ_OPENAI_APPS_CHALLENGE)
  *   GET  /health
  *
  * Each user signs in with their own Vobiz credentials. They are sealed (AES-256-GCM) inside the
  * access/refresh tokens, so the server keeps no credential database and every request acts only on
  * the signed-in account. Rotating the Auth Token in the Vobiz console revokes every token at once.
  */
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express, { type Request, type Response } from "express";
@@ -28,57 +30,72 @@ import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import type { OAuthClientInformationFull, OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { ConfigError, loadConfig, type Config } from "./config.js";
-import type { SharedState } from "./context.js";
+import type { ConnectionProfile, SharedState } from "./context.js";
+import type { ReminderService } from "./reminders/types.js";
+import { createReminderBackend, createReminderService, createRemindersRouter } from "./reminders/index.js";
 import { createLogger, type Logger } from "./logger.js";
 import { createServer, createSharedState } from "./server.js";
 import { SERVER_VERSION } from "./version.js";
 import { VOBIZ_LOGO_SVG } from "./brand.js";
+import { Sealer } from "./sealer.js";
+import { COMMON_TIME_ZONES, DEFAULT_TIME_ZONE, isValidTimeZone } from "./tz.js";
+export { Sealer };
 
 /** Default exclusions (override with VOBIZ_HOSTED_EXCLUDED_TOOLS): tools that need this process to host callbacks for one account, or that buy things. */
 export const HOSTED_EXCLUDED_TOOLS = ["buy_phone_number", "gather_dtmf", "get_gather_result", "list_webhook_events", "hold_call", "unhold_call"];
+
+/** The only tools an "assistant" sign-in offers: reminder calls to the user's own number plus a few lookups. */
+export const ASSISTANT_TOOLS = [
+  "schedule_reminder_call",
+  "list_reminder_calls",
+  "get_reminder_call",
+  "cancel_reminder_call",
+  "get_account_balance",
+  "list_phone_numbers",
+  "get_call_status",
+];
+
+type Scope = ConnectionProfile["scope"];
+const SCOPES: Scope[] = ["read", "assistant", "full"];
+const E164_RE = /^\+[1-9]\d{6,14}$/;
+/** Accepts "+91 98765-43210" style input; returns +digits, or undefined when it is not E.164. */
+const e164 = (v: string): string | undefined => {
+  const t = v.replace(/[\s().-]/g, "");
+  return E164_RE.test(t) ? t : undefined;
+};
 
 const CODE_TTL = 300;
 const TXN_TTL = 900;
 const SCOPE = "vobiz";
 const AUTH_ID_RE = /^(MA|SA)_[A-Za-z0-9]{4,40}$/;
 
-type Kind = "client" | "txn" | "code" | "access" | "refresh";
 interface Grant {
   authId: string;
   authToken: string;
+  /** Always scope === "read"; kept for tokens issued before scopes existed. */
   readOnly: boolean;
   clientId: string;
   resource: string;
+  scope?: Scope;
+  callMeOn?: string;
+  callFrom?: string;
+  tz?: string;
 }
 
-/** Authenticated encryption for every token this server hands out. */
-export class Sealer {
-  private readonly key: Buffer;
-  constructor(secret: string) {
-    this.key = createHash("sha256").update(`vobiz-mcp-hosted:${secret}`).digest();
-  }
-  seal(kind: Kind, payload: Record<string, unknown>, ttlSec: number): string {
-    const iv = randomBytes(12);
-    const c = createCipheriv("aes-256-gcm", this.key, iv);
-    c.setAAD(Buffer.from(kind));
-    const body = Buffer.concat([c.update(JSON.stringify({ ...payload, exp: Math.floor(Date.now() / 1000) + ttlSec })), c.final()]);
-    return `vbz${kind[0]}_` + Buffer.concat([iv, c.getAuthTag(), body]).toString("base64url");
-  }
-  open<T = Record<string, unknown>>(kind: Kind, token: string): (T & { exp: number }) | undefined {
-    const prefix = `vbz${kind[0]}_`;
-    if (typeof token !== "string" || !token.startsWith(prefix) || token.length > 8192) return undefined;
-    try {
-      const raw = Buffer.from(token.slice(prefix.length), "base64url");
-      const d = createDecipheriv("aes-256-gcm", this.key, raw.subarray(0, 12));
-      d.setAAD(Buffer.from(kind));
-      d.setAuthTag(raw.subarray(12, 28));
-      const v = JSON.parse(Buffer.concat([d.update(raw.subarray(28)), d.final()]).toString("utf8"));
-      return v.exp > Math.floor(Date.now() / 1000) ? v : undefined;
-    } catch {
-      return undefined;
-    }
-  }
+/** What the sign-in form chose; also the form values echoed back when it is shown again with an error. */
+interface Choice {
+  scope: Scope;
+  callMeOn: string;
+  callFrom: string;
+  tz: string;
 }
+const DEFAULT_CHOICE: Choice = { scope: "full", callMeOn: "", callFrom: "", tz: DEFAULT_TIME_ZONE };
+
+/** Grant fields carried from the code into every access/refresh token; older tokens without a scope map from readOnly. */
+const profileOf = (g: Pick<Grant, "readOnly" | "scope" | "callMeOn" | "callFrom" | "tz">) => {
+  const scope: Scope = g.scope && SCOPES.includes(g.scope) ? g.scope : g.readOnly ? "read" : "full";
+  return { scope, readOnly: scope === "read", callMeOn: g.callMeOn, callFrom: g.callFrom, tz: g.tz || DEFAULT_TIME_ZONE };
+};
 
 export interface HostedOptions {
   cfg: Config;
@@ -97,6 +114,10 @@ export interface HostedOptions {
   accessTtlSec?: number;
   refreshTtlSec?: number;
   fetchImpl?: typeof fetch;
+  /** Server-side reminder calls; the reminder tools are offered only when this is set. */
+  reminders?: ReminderService;
+  /** Express router serving /jobs/fire and /r/:token/* for reminder calls, mounted before the 404 handler. */
+  remindersRouter?: express.Router;
 }
 
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] as string);
@@ -118,7 +139,10 @@ function consentCsp(redirectUri: string): string {
 }
 
 /** Sign-in page in the Vobiz brand: IBM Plex Sans, Vobiz Red #E83C00 / Orange #E86A00 / Dark Grey #100703, official lockup. */
-function consentPage(o: { txn: string; clientName: string; redirectHost: string; error?: string; links: Config["links"] }): string {
+function consentPage(o: { txn: string; clientName: string; redirectHost: string; error?: string; links: Config["links"]; values?: Choice }): string {
+  const v = o.values ?? DEFAULT_CHOICE;
+  const radio = (scope: Scope, title: string, text: string) =>
+    `<label class="opt" for="scope_${scope}"><input id="scope_${scope}" name="scope" type="radio" value="${scope}"${v.scope === scope ? " checked" : ""}><span><strong>${title}</strong>${text}</span></label>`;
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex"><title>Connect your Vobiz account · Vobiz MCP Server</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -154,6 +178,19 @@ input[type=text]:focus,input[type=password]:focus{outline:none;border-color:var(
 button{margin-top:24px;width:100%;padding:12px;border:0;border-radius:var(--radius);background:var(--red);color:#fff;font:600 15px "IBM Plex Sans",sans-serif;cursor:pointer;transition:background .15s}
 button:hover{background:var(--red-hover)}
 button:focus-visible{outline:none;box-shadow:0 0 0 3px var(--ring)}
+fieldset{border:0;margin:20px 0 0;padding:0;display:grid;gap:8px}
+legend{font-weight:500;font-size:14px;padding:0;margin:0 0 8px}
+.opt{display:flex;gap:10px;align-items:flex-start;margin:0;padding:11px 13px;border:1px solid var(--line);border-radius:var(--radius);font-weight:400;font-size:14px;color:var(--muted);cursor:pointer;transition:border-color .15s}
+.opt input{accent-color:var(--red);width:16px;height:16px;margin:3px 0 0;flex:0 0 auto}
+.opt strong{display:block;color:var(--fg);font-weight:500}
+.opt:has(input:checked){border-color:var(--red)}
+.opt:has(input:focus-visible){box-shadow:0 0 0 3px var(--ring)}
+.profile{margin-top:4px}
+form:has(#scope_read:checked) .profile{display:none}
+.hint{display:block;font-weight:300;font-size:13px;color:var(--muted);margin:4px 0 0}
+input[type=tel]{width:100%;padding:11px 13px;border:1px solid var(--line);border-radius:var(--radius);background:var(--input);color:var(--fg);font:inherit;transition:border-color .15s,box-shadow .15s}
+input[type=tel]::placeholder{color:var(--muted);font-weight:300}
+input[type=tel]:focus{outline:none;border-color:var(--red);box-shadow:0 0 0 3px var(--ring)}
 .err{margin:16px 0 0;padding:10px 12px;border-radius:var(--radius);border:1px solid color-mix(in srgb,var(--err) 40%,transparent);color:var(--err);font-size:14px}
 .fine{font-size:13px;font-weight:300;color:var(--muted);margin:20px 0 0}
 a{color:var(--orange);text-underline-offset:2px}
@@ -168,12 +205,23 @@ footer a{color:var(--muted)}
 <ul class="scope">
 <li>Read your calls, call records, numbers, SIP trunks, messages and balance</li>
 <li>Place calls, send messages or change settings only after you confirm each one</li>
+<li>Schedule reminder and wake-up calls that Vobiz places at the time you ask</li>
 </ul>
 <form method="post" action="/oauth/login" autocomplete="off">
 <input type="hidden" name="txn" value="${esc(o.txn)}">
 <label for="auth_id">Auth ID</label><input id="auth_id" name="auth_id" type="text" placeholder="MA_XXXXXXXX" required pattern="(MA|SA)_[A-Za-z0-9]+" spellcheck="false" autocapitalize="off">
 <label for="auth_token">Auth Token</label><input id="auth_token" name="auth_token" type="password" required>
-<div class="check"><input id="read_only" name="read_only" type="checkbox" value="1"><label for="read_only"><strong>Read-only access.</strong> No calls, messages or account changes.</label></div>
+<fieldset><legend>Access</legend>
+${radio("full", "Full access", "Every tool. Calls, messages and account changes only after you confirm each one.")}
+${radio("assistant", "Personal assistant", "Only reminder and wake-up calls to your own number, plus your balance, numbers and call status.")}
+${radio("read", "Read-only", "No calls, messages, reminders or account changes.")}
+</fieldset>
+<div class="profile">
+<label for="call_me_on">Call me on <span class="hint">Your own number in E.164, e.g. +919876543210. Reminder calls go here. Required for personal assistant.</span></label><input id="call_me_on" name="call_me_on" type="tel" placeholder="+919876543210" value="${esc(v.callMeOn)}" pattern="\\+?[0-9]{7,15}" inputmode="tel" autocomplete="tel">
+<label for="call_from">Call from <span class="hint">Optional: a voice number on your Vobiz account. Blank = your first voice number.</span></label><input id="call_from" name="call_from" type="tel" placeholder="+918012345678" value="${esc(v.callFrom)}" pattern="\\+?[0-9]{7,15}" inputmode="tel">
+<label for="timezone">Timezone <span class="hint">Used to read and say reminder times.</span></label><input id="timezone" name="timezone" type="text" list="tz_list" value="${esc(v.tz)}" spellcheck="false" autocapitalize="off">
+<datalist id="tz_list">${COMMON_TIME_ZONES.map((z) => `<option value="${z}"></option>`).join("")}</datalist>
+</div>
 ${o.error ? `<p class="err" role="alert">${esc(o.error)}</p>` : ""}
 <button type="submit">Allow access</button>
 </form>
@@ -188,8 +236,9 @@ export function createHostedApp(o: HostedOptions): express.Express {
   const seal = new Sealer(o.secret);
   const base = o.baseUrl.replace(/\/+$/, "");
   const mcpUrl = new URL(`${base}/mcp`);
-  const cimdHosts = new Set((o.cimdHosts ?? ["claude.ai"]).map((h) => h.toLowerCase()));
-  const allowedOrigins = new Set(o.allowedOrigins ?? ["https://claude.ai", "https://claude.com"]);
+  // ChatGPT's CIMD client id is https://chatgpt.com/oauth/client.json.
+  const cimdHosts = new Set((o.cimdHosts ?? ["claude.ai", "chatgpt.com"]).map((h) => h.toLowerCase()));
+  const allowedOrigins = new Set(o.allowedOrigins ?? ["https://claude.ai", "https://claude.com", "https://chatgpt.com", "https://chat.openai.com"]);
   const fetchImpl = o.fetchImpl ?? globalThis.fetch;
   const ACCESS_TTL = o.accessTtlSec ?? 3600;
   const REFRESH_TTL = o.refreshTtlSec ?? 30 * 24 * 3600;
@@ -290,17 +339,25 @@ export function createHostedApp(o: HostedOptions): express.Express {
       if (usedCodes.has(c.jti)) throw new InvalidGrantError("Authorization code was already used");
       usedCodes.set(c.jti, c.exp);
       for (const [k, exp] of usedCodes) if (exp * 1000 < Date.now()) usedCodes.delete(k);
-      return issue({ authId: c.authId, authToken: c.authToken, readOnly: c.readOnly, clientId: client.client_id, resource: c.resource });
+      return issue({ authId: c.authId, authToken: c.authToken, clientId: client.client_id, resource: c.resource, ...profileOf(c) });
     },
     async exchangeRefreshToken(client, refreshToken) {
       const g = seal.open<Grant>("refresh", refreshToken);
       if (!g || g.clientId !== client.client_id) throw new InvalidGrantError("Invalid or expired refresh token");
-      return issue({ authId: g.authId, authToken: g.authToken, readOnly: g.readOnly, clientId: g.clientId, resource: g.resource });
+      return issue({ authId: g.authId, authToken: g.authToken, clientId: g.clientId, resource: g.resource, ...profileOf(g) });
     },
     async verifyAccessToken(token): Promise<AuthInfo> {
       const g = seal.open<Grant>("access", token);
       if (!g) throw new InvalidTokenError("Invalid or expired access token");
-      return { token, clientId: g.clientId, scopes: [SCOPE], expiresAt: g.exp, resource: new URL(g.resource), extra: { authId: g.authId, authToken: g.authToken, readOnly: g.readOnly } };
+      const p = profileOf(g);
+      return {
+        token,
+        clientId: g.clientId,
+        scopes: [SCOPE],
+        expiresAt: g.exp,
+        resource: new URL(g.resource),
+        extra: { authId: g.authId, authToken: g.authToken, readOnly: p.readOnly, scope: p.scope, callMeOn: p.callMeOn, callFrom: p.callFrom, tz: p.tz },
+      };
     },
   };
 
@@ -320,8 +377,14 @@ export function createHostedApp(o: HostedOptions): express.Express {
     ...createOAuthMetadata({ provider, issuerUrl: new URL(base), scopesSupported: [SCOPE], serviceDocumentationUrl: new URL(cfg.links.docs) }),
     client_id_metadata_document_supported: true,
     token_endpoint_auth_methods_supported: ["none", "client_secret_post"],
+    // RFC 9207: every authorization response carries iss (ChatGPT checks it).
+    authorization_response_iss_parameter_supported: true,
   };
   app.get("/.well-known/oauth-authorization-server", (_req, res) => res.json(asMeta));
+  // OpenAI Apps domain verification: the token from the OpenAI platform, served verbatim.
+  app.get("/.well-known/openai-apps-challenge", (_req, res) =>
+    cfg.openaiAppsChallenge ? res.type("text/plain").set("Cache-Control", "no-store").send(cfg.openaiAppsChallenge) : res.status(404).json({ error: "not_found" }),
+  );
   app.use(
     mcpAuthRouter({
       provider,
@@ -342,13 +405,28 @@ export function createHostedApp(o: HostedOptions): express.Express {
     if (!client) return res.status(400).type("text").send("Unknown client. Go back to your app and connect again.");
     const authId = String(req.body?.auth_id ?? "").trim();
     const authToken = String(req.body?.auth_token ?? "").trim();
+    const field = (k: string) => String(req.body?.[k] ?? "").trim().slice(0, 64);
+    const rawScope = field("scope");
+    // Older form: a read_only checkbox and no scope radio.
+    const scope: Scope = SCOPES.includes(rawScope as Scope) ? (rawScope as Scope) : req.body?.read_only === "1" ? "read" : "full";
+    const values: Choice = { scope, callMeOn: field("call_me_on"), callFrom: field("call_from"), tz: field("timezone") || DEFAULT_TIME_ZONE };
     const again = (error: string) =>
       res
         .status(200)
         .set("Content-Security-Policy", consentCsp(t.redirect))
         .type("html")
-        .send(consentPage({ txn: String(req.body.txn), clientName: client.client_name ?? "An MCP client", redirectHost: new URL(t.redirect).host, error, links: cfg.links }));
+        .send(consentPage({ txn: String(req.body.txn), clientName: client.client_name ?? "An MCP client", redirectHost: new URL(t.redirect).host, error, links: cfg.links, values }));
     if (!AUTH_ID_RE.test(authId) || authToken.length < 8 || authToken.length > 256) return again("Enter a valid Auth ID (MA_… or SA_…) and Auth Token.");
+    if (!isValidTimeZone(values.tz)) return again("Enter a timezone such as Asia/Kolkata or America/New_York.");
+    let callMeOn: string | undefined;
+    let callFrom: string | undefined;
+    if (scope !== "read") {
+      callMeOn = values.callMeOn ? e164(values.callMeOn) : undefined;
+      if (values.callMeOn && !callMeOn) return again("Enter \"Call me on\" in E.164, e.g. +919876543210.");
+      if (scope === "assistant" && !callMeOn) return again("Personal assistant needs your number under \"Call me on\".");
+      callFrom = values.callFrom ? e164(values.callFrom) : undefined;
+      if (values.callFrom && !callFrom) return again("Enter \"Call from\" in E.164, e.g. +918012345678, or leave it blank.");
+    }
     let status = 0;
     try {
       const r = await fetchImpl(`${cfg.baseUrl}/api/v1/Account/${encodeURIComponent(authId)}/numbers?per_page=1`, {
@@ -362,15 +440,29 @@ export function createHostedApp(o: HostedOptions): express.Express {
     }
     if (status === 401 || status === 403) return again("Vobiz did not accept this Auth ID and Auth Token. Check them on the console overview page.");
     if (status >= 500 || status === 0) return again("Vobiz could not check these credentials right now. Try again in a moment.");
-    log.info(`oauth: account connected (status ${status})`);
+    log.info(`oauth: account connected (status ${status}, scope ${scope})`);
     const code = seal.seal(
       "code",
-      { cid: t.cid, redirect: t.redirect, challenge: t.challenge, resource: t.resource, authId, authToken, readOnly: req.body?.read_only === "1", jti: randomBytes(12).toString("hex") },
+      {
+        cid: t.cid,
+        redirect: t.redirect,
+        challenge: t.challenge,
+        resource: t.resource,
+        authId,
+        authToken,
+        readOnly: scope === "read",
+        scope,
+        ...(callMeOn ? { callMeOn } : {}),
+        ...(callFrom ? { callFrom } : {}),
+        tz: values.tz,
+        jti: randomBytes(12).toString("hex"),
+      },
       CODE_TTL,
     );
     const to = new URL(t.redirect);
     to.searchParams.set("code", code);
     if (t.state) to.searchParams.set("state", t.state);
+    to.searchParams.set("iss", asMeta.issuer);
     res.redirect(302, to.href);
   });
 
@@ -379,11 +471,15 @@ export function createHostedApp(o: HostedOptions): express.Express {
   const bearer = requireBearerAuth({ verifier: provider, resourceMetadataUrl: getOAuthProtectedResourceMetadataUrl(mcpUrl), expectedResource: mcpUrl });
   app.all("/mcp", (req, res, next) => (originOk(req.headers.origin) ? next() : res.status(403).json({ error: "origin_not_allowed" })), bearer, express.json({ limit: "1mb" }), async (req, res) => {
     if (req.method !== "POST") return res.status(405).set("Allow", "POST").json({ jsonrpc: "2.0", error: { code: -32000, message: "Method not allowed" }, id: null });
-    const extra = req.auth?.extra as { authId: string; authToken: string; readOnly: boolean };
+    const extra = req.auth?.extra as { authId: string; authToken: string; readOnly: boolean; scope: Scope; callMeOn?: string; callFrom?: string; tz: string };
+    const profile: ConnectionProfile = { scope: extra.scope, callMeOn: extra.callMeOn, callFrom: extra.callFrom, timezone: extra.tz };
     const server = createServer(accountCfg(extra), log, o.fetchImpl, {
       readOnly: extra.readOnly,
       shared: tenantState(extra.authId),
       excludeTools,
+      ...(extra.scope === "assistant" ? { includeTools: ASSISTANT_TOOLS } : {}),
+      ...(o.reminders ? { reminders: o.reminders } : {}),
+      profile,
     });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     res.on("close", () => {
@@ -398,6 +494,9 @@ export function createHostedApp(o: HostedOptions): express.Express {
       if (!res.headersSent) res.status(500).json({ jsonrpc: "2.0", error: { code: -32603, message: "Internal error" }, id: null });
     }
   });
+
+  // Reminder-call job delivery and Vobiz callbacks (/jobs/fire, /r/:token/*), authenticated by sealed tokens.
+  if (o.remindersRouter) app.use(o.remindersRouter);
 
   app.use((_req, res) => res.status(404).json({ error: "not_found" }));
   return app;
@@ -435,11 +534,35 @@ export async function runHosted(): Promise<void> {
     }
     return v;
   };
+  // Reminder calls: scheduled on this server (Cloud Tasks + Firestore when configured, else in-process memory).
+  let reminders: ReminderService | undefined;
+  let remindersRouter: express.Router | undefined;
+  if (cfg.reminders.enabled) {
+    const r = cfg.reminders;
+    const backend = createReminderBackend(
+      {
+        VOBIZ_GCP_PROJECT: r.gcpProject,
+        VOBIZ_TASKS_LOCATION: r.tasksLocation,
+        VOBIZ_TASKS_QUEUE: r.tasksQueue,
+        VOBIZ_FIRESTORE_DATABASE: r.firestoreDatabase,
+        VOBIZ_FIRESTORE_COLLECTION: r.firestoreCollection,
+        VOBIZ_MAX_ACTIVE_REMINDERS: String(r.maxActive),
+        VOBIZ_MAX_REMINDER_CALLS_PER_DAY: String(r.maxCallsPerDay),
+      },
+      log,
+      { baseUrl },
+    );
+    const sealer = new Sealer(secret);
+    reminders = createReminderService({ store: backend.store, scheduler: backend.scheduler, sealer, baseUrl, cfg, log, limits: backend.limits });
+    remindersRouter = createRemindersRouter(reminders, { baseUrl, signatureMode: cfg.webhookSignature === "off" ? "off" : "verify_if_present", sealer });
+  }
   const app = createHostedApp({
     cfg,
     log,
     baseUrl,
     secret,
+    reminders,
+    remindersRouter,
     cimdHosts: list(process.env.VOBIZ_CIMD_HOSTS),
     allowedOrigins: list(process.env.VOBIZ_ALLOWED_ORIGINS),
     excludeTools: process.env.VOBIZ_HOSTED_EXCLUDED_TOOLS === undefined ? undefined : (list(process.env.VOBIZ_HOSTED_EXCLUDED_TOOLS) ?? []),

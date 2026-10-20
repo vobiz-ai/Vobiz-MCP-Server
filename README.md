@@ -8,6 +8,7 @@ The official [Model Context Protocol](https://modelcontextprotocol.io) server fo
 - manage phone numbers, SIP trunks, credentials, IP allow-lists, SIP endpoints, voice applications and sub-accounts
 - read billing transactions
 - send SMS, MMS and RCS messages
+- schedule reminder and wake-up calls (hosted connector)
 
 It also ships the **Vobiz Agent Skills**, so the model knows how each Vobiz product works before it acts.
 
@@ -18,13 +19,19 @@ It also ships the **Vobiz Agent Skills**, so the model knows how each Vobiz prod
 
 | | |
 |---|---|
-| **Tools** | 106 in 12 toolsets: calls, in-call control, conferences, audio streams, IVR/XML, records, numbers, SIP trunks and endpoints, applications, sub-accounts, billing, SMS/MMS/RCS, opt-outs, skills |
+| **Tools** | 106 in 12 toolsets: calls, in-call control, conferences, audio streams, IVR/XML, records, numbers, SIP trunks and endpoints, applications, sub-accounts, billing, SMS/MMS/RCS, opt-outs, skills; plus 4 reminder-call tools on the hosted connector |
 | **Prompts** | 15: one per Vobiz skill, e.g. `vobiz-voice-xml`, `vobiz-sip-trunking` |
 | **Resources** | `vobiz://skills/index` and `vobiz://skills/{name}` (with completion) |
 | **Transports** | stdio (`npx`), Streamable HTTP for one account, hosted multi-tenant Streamable HTTP with OAuth 2.1 |
 | **Safety** | Calling, messaging and account changes are off until enabled. Every write is confirmed, rate-limited and idempotent. `VOBIZ_READ_ONLY` and `VOBIZ_TOOLSETS` narrow what the model can see. |
 
 > Looking for documentation search instead of account operations? Use the hosted [Vobiz Docs MCP server](https://www.vobiz.ai/docs/resources/mcp) (`https://www.vobiz.ai/docs/mcp`). The two servers work well side by side.
+
+### "Call me at…"
+
+On the hosted connector (`https://mcp.vobiz.ai/mcp`) you can say *"wake me up at 6 tomorrow"* or *"call me at 3 to remind me about the dentist"*. The client calls `schedule_reminder_call` once and the server does the rest: it places the call at that time from your Vobiz number, speaks the message, and lets you press **1** to snooze, **2** to confirm or **9** to stop. It retries when nobody answers. Nothing depends on the chat staying open.
+
+At sign-in you choose **Full access**, **Personal assistant** (only reminder calls to your own number, plus your balance, numbers and call status) or **Read-only**, and enter your own number, an optional caller ID and your timezone. Manage reminders with `list_reminder_calls`, `get_reminder_call` and `cancel_reminder_call`. Operators: see [docs/HOSTING.md](docs/HOSTING.md#reminder-calls).
 
 ## Contents
 
@@ -48,6 +55,7 @@ It also ships the **Vobiz Agent Skills**, so the model knows how each Vobiz prod
 | "What's my Vobiz balance and how many calls are live?" | `get_account_balance`, `get_concurrency`, `list_live_calls` |
 | "Show yesterday's missed calls to +91 80 1234 5678" | `list_call_records` filtered by date, number and `hangup_cause` |
 | "Call +919876543210 from my Bangalore number and read them this reminder" | `list_phone_numbers` → you confirm → `make_call` → `speak_text` → `get_call_status` |
+| "Wake me up at 6 tomorrow and tell me to take the 7:10 train" (hosted) | you confirm → `schedule_reminder_call`; the server calls you at 06:00 in your timezone |
 | "Build an IVR: press 1 for sales, 2 for support" | `get_vobiz_skill vobiz-voice-xml` → `generate_answer_xml` |
 | "Text +14155550123 'Your order has shipped' from my US number" | `preview_message_cost` → you confirm → `send_message` → `get_message` |
 | "Who replied to our last SMS broadcast?" | `list_broadcasts`, `list_messages direction=in`, `list_conversations` |
@@ -92,7 +100,7 @@ You need a Vobiz account, plus its **Auth ID** and **Auth Token** from the overv
 | Claude (web, Desktop, mobile) | **Settings → Connectors → Add custom connector** → `https://mcp.vobiz.ai/mcp` | Click **Connect** and sign in ([5 steps](#connect-claude-in-five-steps)) |
 | Claude Code | `claude mcp add --transport http vobiz https://mcp.vobiz.ai/mcp` | Run `/mcp`, pick **vobiz**, sign in |
 | Claude Code (plugin: server + skills) | `/plugin install vobiz --marketplace vobiz-ai/Vobiz-MCP-Server` | Enter your Auth ID and Auth Token when asked |
-| Claude Desktop (local extension) | Open `vobiz-mcp-v1.1.4.mcpb` from the [latest release](https://github.com/vobiz-ai/Vobiz-MCP-Server/releases/latest) | Enter your Auth ID and Auth Token |
+| Claude Desktop (local extension) | Open `vobiz-mcp-v1.2.0.mcpb` from the [latest release](https://github.com/vobiz-ai/Vobiz-MCP-Server/releases/latest) | Enter your Auth ID and Auth Token |
 | OpenAI Codex (CLI, IDE, app) | `codex mcp add vobiz --url https://mcp.vobiz.ai/mcp` | The Vobiz sign-in opens automatically |
 | ChatGPT | **Plugins → + → Add custom MCP server** → `https://mcp.vobiz.ai/mcp` | Sign in, then use **@Vobiz** |
 | Gemini CLI | `gemini mcp add -s user --transport http vobiz https://mcp.vobiz.ai/mcp` | Run `/mcp auth vobiz` |
@@ -112,13 +120,13 @@ Local options run the server on your machine with `npx` and need Node.js 22.9 or
 | Client | Install |
 |---|---|
 | Claude (web, Desktop, mobile) | Settings → Connectors → Add custom connector → `https://mcp.vobiz.ai/mcp` |
-| Claude Desktop extension | Open `vobiz-mcp-v1.1.4.mcpb` from the [latest release](https://github.com/vobiz-ai/Vobiz-MCP-Server/releases/latest) |
+| Claude Desktop extension | Open `vobiz-mcp-v1.2.0.mcpb` from the [latest release](https://github.com/vobiz-ai/Vobiz-MCP-Server/releases/latest) |
 | Claude Code | `/plugin install vobiz --marketplace vobiz-ai/Vobiz-MCP-Server` (MCP server + skills) |
-| OpenAI Codex | `codex mcp add vobiz --env VOBIZ_AUTH_ID=MA_XXXXXXXX --env VOBIZ_AUTH_TOKEN=YOUR_AUTH_TOKEN -- npx -y @vobiz/mcp@1.1.4` |
+| OpenAI Codex | `codex mcp add vobiz --env VOBIZ_AUTH_ID=MA_XXXXXXXX --env VOBIZ_AUTH_TOKEN=YOUR_AUTH_TOKEN -- npx -y @vobiz/mcp@1.2.0` |
 | Gemini CLI | `gemini extensions install https://github.com/vobiz-ai/Vobiz-MCP-Server` |
-| Cursor | [One-click install](https://cursor.com/en/install-mcp?name=vobiz&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsIkB2b2Jpei9tY3BAMS4xLjQiXSwiZW52Ijp7IlZPQklaX0FVVEhfSUQiOiIke2VudjpWT0JJWl9BVVRIX0lEfSIsIlZPQklaX0FVVEhfVE9LRU4iOiIke2VudjpWT0JJWl9BVVRIX1RPS0VOfSJ9fQ%3D%3D) |
-| VS Code / Copilot | [One-click install](https://insiders.vscode.dev/redirect/mcp/install?name=vobiz&config=%7B%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22%40vobiz%2Fmcp%401.1.4%22%5D%2C%22env%22%3A%7B%22VOBIZ_AUTH_ID%22%3A%22%24%7Benv%3AVOBIZ_AUTH_ID%7D%22%2C%22VOBIZ_AUTH_TOKEN%22%3A%22%24%7Benv%3AVOBIZ_AUTH_TOKEN%7D%22%7D%7D) |
-| Goose | `goose configure` → Add Extension → `npx -y @vobiz/mcp@1.1.4` ([deeplink](docs/INSTALL.md#goose)) |
+| Cursor | [One-click install](https://cursor.com/en/install-mcp?name=vobiz&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsIkB2b2Jpei9tY3BAMS4yLjAiXSwiZW52Ijp7IlZPQklaX0FVVEhfSUQiOiIke2VudjpWT0JJWl9BVVRIX0lEfSIsIlZPQklaX0FVVEhfVE9LRU4iOiIke2VudjpWT0JJWl9BVVRIX1RPS0VOfSJ9fQ%3D%3D) |
+| VS Code / Copilot | [One-click install](https://insiders.vscode.dev/redirect/mcp/install?name=vobiz&config=%7B%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22%40vobiz%2Fmcp%401.2.0%22%5D%2C%22env%22%3A%7B%22VOBIZ_AUTH_ID%22%3A%22%24%7Benv%3AVOBIZ_AUTH_ID%7D%22%2C%22VOBIZ_AUTH_TOKEN%22%3A%22%24%7Benv%3AVOBIZ_AUTH_TOKEN%7D%22%7D%7D) |
+| Goose | `goose configure` → Add Extension → `npx -y @vobiz/mcp@1.2.0` ([deeplink](docs/INSTALL.md#goose)) |
 | Windsurf, Zed, Cline, JetBrains, Continue, LM Studio, Warp, ChatGPT | [docs/INSTALL.md](docs/INSTALL.md) |
 
 Any other MCP client:
@@ -130,7 +138,7 @@ Any other MCP client:
       "command": "npx",
       "args": [
         "-y",
-        "@vobiz/mcp@1.1.4"
+        "@vobiz/mcp@1.2.0"
       ],
       "env": {
         "VOBIZ_AUTH_ID": "MA_XXXXXXXX",
@@ -143,7 +151,7 @@ Any other MCP client:
 
 Calling, messaging and account changes stay off until you add `VOBIZ_ENABLE_CALLS`, `VOBIZ_ENABLE_MESSAGING` or `VOBIZ_ENABLE_PROVISIONING` set to `"true"` to `env`.
 
-To self-host the remote connector: `docker run -p 3000:3000 -e VOBIZ_HOSTED_URL=https://mcp.example.com -e VOBIZ_HOSTED_SECRET="$(openssl rand -hex 32)" ghcr.io/vobiz-ai/vobiz-mcp:v1.1.4` ([docs/HOSTING.md](docs/HOSTING.md)).
+To self-host the remote connector: `docker run -p 3000:3000 -e VOBIZ_HOSTED_URL=https://mcp.example.com -e VOBIZ_HOSTED_SECRET="$(openssl rand -hex 32)" ghcr.io/vobiz-ai/vobiz-mcp:v1.2.0` ([docs/HOSTING.md](docs/HOSTING.md)).
 <!-- install:end -->
 
 ## Tools
@@ -163,6 +171,7 @@ Every tool has a `title`, input validation, and annotations: `readOnlyHint: true
 | `sip` | `list_sip_endpoints`, `get_sip_endpoint`, `list_trunk_credentials`, `list_ip_acl_entries`, `list_origination_uris` | `create_sip_endpoint`, `update_sip_endpoint`, `delete_sip_endpoint`, `create_trunk_credential`, `update_trunk_credential`, `delete_trunk_credential`, `add_ip_acl_entry`, `update_ip_acl_entry`, `delete_ip_acl_entry`, `create_origination_uri`, `update_origination_uri`, `delete_origination_uri` |
 | `subaccounts` | `list_sub_accounts`, `get_sub_account`, `get_sub_account_kyc_status` | `create_sub_account`, `update_sub_account`, `delete_sub_account`, `create_sub_account_kyc_session` |
 | `messaging` | `list_messaging_numbers`, `preview_message_cost`, `list_messages`, `get_message`, `list_conversations`, `get_conversation_messages`, `list_broadcasts`, `get_broadcast`, `check_opt_out`, `list_opt_outs` | `send_message`, `add_opt_out`, `remove_opt_out` |
+| `reminders` (hosted only) | `list_reminder_calls`, `get_reminder_call` | `schedule_reminder_call`, `cancel_reminder_call` |
 | `skills` | `list_vobiz_skills`, `get_vobiz_skill` | |
 
 **Choosing tools.** 106 tools is a lot for some clients. Load only what you need:
@@ -276,7 +285,7 @@ All settings are environment variables. Every one is optional except credentials
 
 1. Claude calls `POST /mcp` without a token. The server answers `401` with `WWW-Authenticate: Bearer resource_metadata=".../.well-known/oauth-protected-resource/mcp"`.
 2. Claude reads the protected-resource metadata (RFC 9728, `resource` = `<VOBIZ_HOSTED_URL>/mcp`) and the authorization-server metadata (RFC 8414). The AS metadata advertises PKCE S256, dynamic client registration (RFC 7591) and Client ID Metadata Documents.
-3. Claude registers itself, or uses its CIMD URL, and opens `/authorize`. The user enters their Auth ID and Auth Token and can tick **read-only access**. The server checks the credentials with Vobiz, then redirects back with a single-use code.
+3. Claude registers itself, or uses its CIMD URL, and opens `/authorize`. The user enters their Auth ID and Auth Token and picks **Full access**, **Personal assistant** or **Read-only**, plus their own number, caller ID and timezone for reminder calls. The server checks the credentials with Vobiz, then redirects back with a single-use code.
 4. `/token` exchanges the code (PKCE checked) for a 1-hour access token and a 30-day refresh token.
 
 **Token handling:**
