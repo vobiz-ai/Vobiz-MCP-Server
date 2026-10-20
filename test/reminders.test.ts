@@ -436,7 +436,6 @@ describe("ReminderService.fire", () => {
       hangup_method: "POST",
       ring_timeout: "45",
       time_limit: 180,
-      machine_detection: "hangup",
       caller_name: "Vobiz reminder",
     });
     expect(sealer.open("ans", ans)).toMatchObject({ rid: r.id, n: 1, authToken: TOKEN });

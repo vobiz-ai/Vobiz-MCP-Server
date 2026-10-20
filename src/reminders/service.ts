@@ -347,7 +347,8 @@ export function createReminderService(opts: ReminderServiceOptions): ReminderSer
       hangup_method: "POST",
       ring_timeout: "45",
       time_limit: 180,
-      machine_detection: "hangup",
+      // No answering-machine detection: a short "hello" is easily taken for a machine, and the call would be cut
+      // before the XML runs. A pickup without a key press is classified as no_input from the hangup callback instead.
       caller_name: "Vobiz reminder",
     };
     try {

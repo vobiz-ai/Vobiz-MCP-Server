@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.2
+
+- Reminder calls no longer use answering-machine detection, so a short "hello" can no longer cut the call before the message plays.
+- `schedule_reminder_call` accepts `audio_url`: a public https MP3 or WAV played at the start of the call, before the spoken message.
+- A failed job deletion on cancel is logged with its reason.
+
 ## 1.2.1
 
 - Reminder lists no longer need a Firestore composite index, so a fresh deployment works without extra setup.
