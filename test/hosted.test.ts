@@ -6,6 +6,8 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { silentLogger } from "../src/logger.js";
 import { ASSISTANT_TOOLS, HOSTED_EXCLUDED_TOOLS, Sealer, createHostedApp } from "../src/hosted.js";
+import { SERVER_CARD_MEDIA_TYPE, SERVER_CARD_SCHEMA } from "../src/server-card.js";
+import { SERVER_VERSION } from "../src/version.js";
 import { FakeReminders } from "./fake-reminders.js";
 import { FakeMedia } from "./fake-media.js";
 import { createMediaRouter } from "../src/media/router.js";
@@ -230,6 +232,57 @@ describe("hosted connector OAuth", () => {
     expect((await fetch(`${u}/upload/vbzu_x`)).status).toBe(404);
     expect((await fetch(`${u}/media/vbzm_x`)).status).toBe(404);
     srv.close();
+  });
+});
+
+describe("hosted connector server card", () => {
+  const routes = ["/mcp/server-card", "/.well-known/mcp/server-card.json"];
+
+  it("serves the same card at both routes without auth, as JSON, cacheable for an hour", async () => {
+    const bodies: string[] = [];
+    for (const route of routes) {
+      const r = await fetch(`${base}${route}`);
+      expect(r.status).toBe(200);
+      expect(r.headers.get("content-type")).toContain("application/json");
+      expect(r.headers.get("cache-control")).toBe("public, max-age=3600");
+      expect(r.headers.get("access-control-allow-origin")).toBe("*");
+      expect(r.headers.get("etag")).toMatch(/^"[A-Za-z0-9_-]+"$/);
+      bodies.push(await r.text());
+    }
+    expect(bodies[0]).toBe(bodies[1]);
+  });
+
+  it("conforms to the server-card schema and is built from the config", async () => {
+    const card = (await (await fetch(`${base}${routes[0]}`)).json()) as Record<string, unknown>;
+    // Required fields and their constraints, as in the extension's schema.json.
+    expect(card.$schema).toBe(SERVER_CARD_SCHEMA);
+    expect(card.name).toBe("ai.vobiz/mcp");
+    expect(card.name).toMatch(/^[a-zA-Z0-9.-]+\/[a-zA-Z0-9._-]+$/);
+    expect(typeof card.description).toBe("string");
+    expect((card.description as string).length).toBeGreaterThan(0);
+    expect((card.description as string).length).toBeLessThanOrEqual(100);
+    expect(card.version).toBe(SERVER_VERSION);
+    // Optional fields: typed as the schema's Remote, Repository and Icon objects.
+    expect(card.remotes).toEqual([{ type: "streamable-http", url: "https://mcp.example.test/mcp", supportedProtocolVersions: expect.arrayContaining(["2025-06-18"]) }]);
+    expect(card.repository).toEqual({ source: "github", url: "https://github.com/vobiz-ai/Vobiz-MCP-Server" });
+    expect(card.websiteUrl).toBe("https://www.vobiz.ai/docs/resources/vobiz-mcp");
+    expect(card.icons).toEqual([{ src: "https://mcp.example.test/favicon.svg", mimeType: "image/svg+xml", sizes: ["any"] }]);
+    expect(card.title).toBe("Vobiz");
+    // Never a primitive listing: tools come from tools/list after sign-in.
+    for (const k of ["tools", "resources", "prompts", "packages"]) expect(card).not.toHaveProperty(k);
+  });
+
+  it("answers 304 to a matching If-None-Match and negotiates the extension's media type", async () => {
+    const first = await fetch(`${base}${routes[1]}`);
+    const etag = first.headers.get("etag")!;
+    const again = await fetch(`${base}${routes[1]}`, { headers: { "If-None-Match": etag } });
+    expect(again.status).toBe(304);
+    const weak = await fetch(`${base}${routes[0]}`, { headers: { "If-None-Match": `W/${etag}` } });
+    expect(weak.status).toBe(304);
+    const typed = await fetch(`${base}${routes[0]}`, { headers: { Accept: SERVER_CARD_MEDIA_TYPE } });
+    expect(typed.status).toBe(200);
+    expect(typed.headers.get("content-type")).toContain(SERVER_CARD_MEDIA_TYPE);
+    expect(((await typed.json()) as { name: string }).name).toBe("ai.vobiz/mcp");
   });
 });
 

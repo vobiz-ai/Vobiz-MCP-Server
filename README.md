@@ -310,6 +310,8 @@ All settings are environment variables. Every one is optional except credentials
 - Each request runs on the signed-in account only, with per-account rate limits and idempotency.
 - Rotating the Auth Token in the Vobiz console revokes every token for that account immediately.
 
+**Server card.** `GET https://mcp.vobiz.ai/mcp/server-card` (alias `/.well-known/mcp/server-card.json`) serves an [MCP server card](https://github.com/modelcontextprotocol/ext-server-card): the server's name, version, Streamable HTTP endpoint and supported protocol versions, for clients and scanners that discover servers before connecting. It is public, cached for an hour and lists no tools; those come from `tools/list` after sign-in.
+
 **Tool exclusions.** The hosted connector leaves out tools that buy things or need the server to host one account's callbacks. The default list is `buy_phone_number`, `gather_dtmf`, `get_gather_result`, `list_webhook_events`, `hold_call` and `unhold_call`, and you can change it with `VOBIZ_HOSTED_EXCLUDED_TOOLS`. Browser `Origin` headers are checked against `VOBIZ_ALLOWED_ORIGINS`.
 
 Deployment, DNS, scaling and directory submission are covered in [docs/HOSTING.md](docs/HOSTING.md) and [docs/PUBLISHING.md](docs/PUBLISHING.md).
