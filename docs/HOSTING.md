@@ -33,6 +33,7 @@ Without Docker: `npm ci && npm run build && VOBIZ_HOSTED_URL=… VOBIZ_HOSTED_SE
 | `POST /mcp` | MCP over Streamable HTTP (stateless; `Authorization: Bearer` required) |
 | `GET /.well-known/oauth-protected-resource/mcp` | Protected resource metadata (RFC 9728) |
 | `GET /.well-known/oauth-authorization-server` | Authorization server metadata (RFC 8414), with PKCE S256, DCR and CIMD |
+| `GET /mcp/server-card`, `GET /.well-known/mcp/server-card.json` | MCP server card (draft extension): name, version, Streamable HTTP endpoint and protocol versions; public, cached for an hour, no tool list |
 | `GET /authorize` | Sign-in and consent page |
 | `POST /oauth/login` | Consent form submission (checks the credentials with Vobiz) |
 | `POST /token`, `POST /register` | OAuth token (code exchange and refresh-token rotation) and dynamic client registration |
