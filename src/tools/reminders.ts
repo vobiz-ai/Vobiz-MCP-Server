@@ -32,7 +32,7 @@ const reminderId = z
   .describe("The reminder's id: reminder_id as returned by schedule_reminder_call or listed by list_reminder_calls.");
 
 // ── Output shapes: every field optional so validation never fails; ok is a boolean because clients validate error results too ──
-const okOut = z.boolean().describe("true on success; false (with error and message) when the tool failed.");
+const okOut = z.boolean().optional().describe("true on success; false (with error and message) when the tool failed.");
 const summaryOut = {
   reminder_id: z.string().optional().describe("Id of the reminder, for get_reminder_call and cancel_reminder_call."),
   status: z.enum(STATUSES).optional().describe("scheduled, calling, snoozed, done (pressed 2), stopped (pressed 9), cancelled or failed."),

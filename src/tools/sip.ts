@@ -149,7 +149,7 @@ const originationUriShape = z
   .passthrough();
 
 const listOutput = <T extends z.ZodTypeAny>(key: string, item: T, what: string) => ({
-  ok: z.literal(true),
+  ok: z.boolean().optional().describe("True on success. On a failure the result is isError with ok: false plus `error` (kind), `message`, `retryable` and sometimes `http_status`."),
   count: z.number().optional().describe(`${what} in this page.`),
   [key]: z.array(item).optional().describe(`${what}; empty when the account has none.`),
   pagination: offsetPagination.optional(),
@@ -321,7 +321,7 @@ export function registerSipTools(server: McpServer, ctx: ToolContext): void {
         "to find the id or browse many endpoints use list_sip_endpoints. An unknown endpoint_id raises not_found. " + SECRET_NOTE,
       inputSchema: { endpoint_id: endpointId },
       outputSchema: {
-        ok: z.literal(true),
+        ok: z.boolean().optional().describe("True on success. On a failure the result is isError with ok: false plus `error` (kind), `message`, `retryable` and sometimes `http_status`."),
         endpoint: endpointShape.nullable().optional().describe("The endpoint as Vobiz returned it."),
         note: noteField,
       },
@@ -350,8 +350,8 @@ export function registerSipTools(server: McpServer, ctx: ToolContext): void {
         confirm: confirm("creating this SIP endpoint"),
       },
       outputSchema: {
-        ok: z.literal(true),
-        created: z.literal(true).optional(),
+        ok: z.boolean().optional().describe("True on success. On a failure the result is isError with ok: false plus `error` (kind), `message`, `retryable` and sometimes `http_status`."),
+        created: z.literal(true).optional().describe("True when the record was created by this call."),
         endpoint_id: id().describe("ID of the new endpoint, or null if Vobiz did not return one."),
         endpoint: endpointShape.optional().describe("The endpoint as Vobiz returned it (username, alias, endpoint_id)."),
         sip_uri: z.string().optional().describe("SIP URI the device registers as: sip:username@registrar.vobiz.ai."),
@@ -399,8 +399,8 @@ export function registerSipTools(server: McpServer, ctx: ToolContext): void {
         confirm: confirm("changing this SIP endpoint"),
       },
       outputSchema: {
-        ok: z.literal(true),
-        updated: z.literal(true).optional(),
+        ok: z.boolean().optional().describe("True on success. On a failure the result is isError with ok: false plus `error` (kind), `message`, `retryable` and sometimes `http_status`."),
+        updated: z.literal(true).optional().describe("True when the change was applied by this call."),
         endpoint_id: z.string().optional().describe("The endpoint that was changed."),
         changed: z.array(z.string()).optional().describe("Names of the fields sent to Vobiz (application_id appears as application)."),
         note: z.string().optional().describe("Present after a password change: devices must re-register."),
@@ -436,7 +436,7 @@ export function registerSipTools(server: McpServer, ctx: ToolContext): void {
         "Permanently delete a Vobiz SIP endpoint; this cannot be undone. Devices registered with it disconnect immediately and its SIP URI stops working; the username becomes free for a new endpoint. " +
         "To block a device temporarily, change its password with update_sip_endpoint instead. An unknown endpoint_id raises not_found. Gated by VOBIZ_ENABLE_PROVISIONING and confirm: true.",
       inputSchema: { endpoint_id: endpointId, confirm: confirm("deleting this SIP endpoint") },
-      outputSchema: { ok: z.literal(true), deleted: z.literal(true).optional(), endpoint_id: z.string().optional().describe("The endpoint that was deleted."), http_status: httpStatus },
+      outputSchema: { ok: z.boolean().optional().describe("True on success. On a failure the result is isError with ok: false plus `error` (kind), `message`, `retryable` and sometimes `http_status`."), deleted: z.literal(true).optional(), endpoint_id: z.string().optional().describe("The endpoint that was deleted."), http_status: httpStatus },
       annotations: write(true),
     },
     handler(async (a) => {
@@ -482,8 +482,8 @@ export function registerSipTools(server: McpServer, ctx: ToolContext): void {
         confirm: confirm("creating this trunk credential"),
       },
       outputSchema: {
-        ok: z.literal(true),
-        created: z.literal(true).optional(),
+        ok: z.boolean().optional().describe("True on success. On a failure the result is isError with ok: false plus `error` (kind), `message`, `retryable` and sometimes `http_status`."),
+        created: z.literal(true).optional().describe("True when the record was created by this call."),
         credential_id: id().describe("UUID of the new credential: use it as credential_uuid on a trunk. Null if Vobiz did not return one."),
         credential: credentialShape.optional().describe("The credential as Vobiz returned it, password redacted; realm is what the SIP client presents."),
         note: z.string().optional().describe("How the client authenticates and that the password is never shown again."),
@@ -522,8 +522,8 @@ export function registerSipTools(server: McpServer, ctx: ToolContext): void {
         confirm: confirm("changing this trunk credential"),
       },
       outputSchema: {
-        ok: z.literal(true),
-        updated: z.literal(true).optional(),
+        ok: z.boolean().optional().describe("True on success. On a failure the result is isError with ok: false plus `error` (kind), `message`, `retryable` and sometimes `http_status`."),
+        updated: z.literal(true).optional().describe("True when the change was applied by this call."),
         credential: credentialShape.nullable().optional().describe("The credential after the change, password redacted."),
         changed: z.array(z.string()).optional().describe("Names of the fields sent to Vobiz."),
         note: noteField,
@@ -552,7 +552,7 @@ export function registerSipTools(server: McpServer, ctx: ToolContext): void {
         "Vobiz may refuse while it is in use by active calls. To pause access and keep the credential, use update_trunk_credential with enabled: false. An unknown credential_id raises not_found. " +
         "Gated by VOBIZ_ENABLE_PROVISIONING and confirm: true.",
       inputSchema: { credential_id: credentialId, confirm: confirm("deleting this trunk credential") },
-      outputSchema: { ok: z.literal(true), deleted: z.literal(true).optional(), credential_id: z.string().optional().describe("The credential that was deleted."), http_status: httpStatus },
+      outputSchema: { ok: z.boolean().optional().describe("True on success. On a failure the result is isError with ok: false plus `error` (kind), `message`, `retryable` and sometimes `http_status`."), deleted: z.literal(true).optional(), credential_id: z.string().optional().describe("The credential that was deleted."), http_status: httpStatus },
       annotations: write(true),
     },
     handler(async (a) => {
@@ -597,8 +597,8 @@ export function registerSipTools(server: McpServer, ctx: ToolContext): void {
         confirm: confirm("allow-listing this IP address for SIP traffic"),
       },
       outputSchema: {
-        ok: z.literal(true),
-        created: z.literal(true).optional(),
+        ok: z.boolean().optional().describe("True on success. On a failure the result is isError with ok: false plus `error` (kind), `message`, `retryable` and sometimes `http_status`."),
+        created: z.literal(true).optional().describe("True when the record was created by this call."),
         ip_acl_id: id().describe("UUID of the new entry: use it as ipacl_uuid on a trunk. Null if Vobiz did not return one."),
         ip_acl_entry: ipAclShape.optional().describe("The entry as Vobiz returned it."),
         http_status: httpStatus,
@@ -629,8 +629,8 @@ export function registerSipTools(server: McpServer, ctx: ToolContext): void {
         confirm: confirm("changing this IP ACL entry"),
       },
       outputSchema: {
-        ok: z.literal(true),
-        updated: z.literal(true).optional(),
+        ok: z.boolean().optional().describe("True on success. On a failure the result is isError with ok: false plus `error` (kind), `message`, `retryable` and sometimes `http_status`."),
+        updated: z.literal(true).optional().describe("True when the change was applied by this call."),
         ip_acl_entry: ipAclShape.nullable().optional().describe("The entry after the change."),
         http_status: httpStatus,
       },
@@ -653,7 +653,7 @@ export function registerSipTools(server: McpServer, ctx: ToolContext): void {
         "the change can take a little time to reach the SIP edge. Trunks that referenced the entry keep working with their other authentication. An unknown ip_acl_id raises not_found. " +
         "Gated by VOBIZ_ENABLE_PROVISIONING and confirm: true.",
       inputSchema: { ip_acl_id: ipAclId, confirm: confirm("deleting this IP ACL entry") },
-      outputSchema: { ok: z.literal(true), deleted: z.literal(true).optional(), ip_acl_id: z.string().optional().describe("The entry that was deleted."), http_status: httpStatus },
+      outputSchema: { ok: z.boolean().optional().describe("True on success. On a failure the result is isError with ok: false plus `error` (kind), `message`, `retryable` and sometimes `http_status`."), deleted: z.literal(true).optional(), ip_acl_id: z.string().optional().describe("The entry that was deleted."), http_status: httpStatus },
       annotations: write(true),
     },
     handler(async (a) => {
@@ -704,8 +704,8 @@ export function registerSipTools(server: McpServer, ctx: ToolContext): void {
         confirm: confirm("adding this outbound SIP destination"),
       },
       outputSchema: {
-        ok: z.literal(true),
-        created: z.literal(true).optional(),
+        ok: z.boolean().optional().describe("True on success. On a failure the result is isError with ok: false plus `error` (kind), `message`, `retryable` and sometimes `http_status`."),
+        created: z.literal(true).optional().describe("True when the record was created by this call."),
         uri_id: id().describe("UUID of the new URI: use it as primary_uri_uuid or fallback_uri_uuid on a trunk. Null if Vobiz did not return one."),
         origination_uri: originationUriShape.optional().describe("The URI as Vobiz returned it."),
         http_status: httpStatus,
@@ -736,8 +736,8 @@ export function registerSipTools(server: McpServer, ctx: ToolContext): void {
         confirm: confirm("changing this origination URI"),
       },
       outputSchema: {
-        ok: z.literal(true),
-        updated: z.literal(true).optional(),
+        ok: z.boolean().optional().describe("True on success. On a failure the result is isError with ok: false plus `error` (kind), `message`, `retryable` and sometimes `http_status`."),
+        updated: z.literal(true).optional().describe("True when the change was applied by this call."),
         origination_uri: originationUriShape.nullable().optional().describe("The URI after the change."),
         http_status: httpStatus,
       },
@@ -758,7 +758,7 @@ export function registerSipTools(server: McpServer, ctx: ToolContext): void {
         "Delete an origination URI from this Vobiz account; this cannot be undone. Trunks stop routing outbound calls to that destination, so add a replacement with create_origination_uri and " +
         "re-point the trunk with update_sip_trunk first if it is a trunk's only route. An unknown uri_id raises not_found. Gated by VOBIZ_ENABLE_PROVISIONING and confirm: true.",
       inputSchema: { uri_id: uriId, confirm: confirm("deleting this origination URI") },
-      outputSchema: { ok: z.literal(true), deleted: z.literal(true).optional(), uri_id: z.string().optional().describe("The URI that was deleted."), http_status: httpStatus },
+      outputSchema: { ok: z.boolean().optional().describe("True on success. On a failure the result is isError with ok: false plus `error` (kind), `message`, `retryable` and sometimes `http_status`."), deleted: z.literal(true).optional(), uri_id: z.string().optional().describe("The URI that was deleted."), http_status: httpStatus },
       annotations: write(true),
     },
     handler(async (a) => {

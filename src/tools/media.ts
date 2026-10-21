@@ -53,7 +53,7 @@ const ledgerDate = z
   .refine((s) => !Number.isNaN(Date.parse(s.length === 10 ? s + "T00:00:00Z" : s)), { message: "is not a real date" });
 
 // ── Output shapes: every field optional so validation never fails; ok is a boolean because clients validate error results too ──
-const okOut = z.boolean().describe("true on success; false (with error and message) when the tool failed.");
+const okOut = z.boolean().optional().describe("true on success; false (with error and message) when the tool failed.");
 const httpStatus = z.number().optional().describe("HTTP status Vobiz answered with.");
 const backendMessage = z.unknown().optional().describe("Message from Vobiz about the operation, or null.");
 const e164Out = z.string().optional().describe("The number, E.164.");

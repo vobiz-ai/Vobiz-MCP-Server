@@ -256,7 +256,7 @@ export function registerProvisioningTools(server: McpServer, ctx: ToolContext): 
         offset: z.number().int().min(0).optional().describe("Number of applications to skip (default 0); pass pagination.next_offset from the previous page."),
       },
       outputSchema: {
-        ok: z.literal(true),
+        ok: z.boolean().optional().describe("True on success. On a failure the result is isError with ok: false plus `error` (kind), `message`, `retryable` and sometimes `http_status`."),
         count: z.number().optional().describe("Applications in this page."),
         applications: z.array(applicationShape).optional().describe("Application objects, newest first as Vobiz orders them."),
         pagination: offsetPagination.optional(),
@@ -290,7 +290,7 @@ export function registerProvisioningTools(server: McpServer, ctx: ToolContext): 
         "An app_id that is not on this account raises not_found.",
       inputSchema: { app_id: appId.describe("Numeric Vobiz application ID (5-25 digits) from list_applications or create_application. Unknown ids raise not_found.") },
       outputSchema: {
-        ok: z.literal(true),
+        ok: z.boolean().optional().describe("True on success. On a failure the result is isError with ok: false plus `error` (kind), `message`, `retryable` and sometimes `http_status`."),
         application: applicationShape.optional().describe("The application exactly as Vobiz returned it."),
       },
       annotations: { readOnlyHint: true, openWorldHint: true },
@@ -317,8 +317,8 @@ export function registerProvisioningTools(server: McpServer, ctx: ToolContext): 
         confirm: confirm("creating this application"),
       },
       outputSchema: {
-        ok: z.literal(true),
-        created: z.literal(true).optional(),
+        ok: z.boolean().optional().describe("True on success. On a failure the result is isError with ok: false plus `error` (kind), `message`, `retryable` and sometimes `http_status`."),
+        created: z.literal(true).optional().describe("True when the record was created by this call."),
         app_id: id().describe("ID of the new application; use it as app_id or application_id elsewhere. Null if Vobiz did not return one."),
         backend_message: backendMessage,
         http_status: httpStatus,
@@ -354,8 +354,8 @@ export function registerProvisioningTools(server: McpServer, ctx: ToolContext): 
         confirm: confirm("changing this application"),
       },
       outputSchema: {
-        ok: z.literal(true),
-        updated: z.literal(true).optional(),
+        ok: z.boolean().optional().describe("True on success. On a failure the result is isError with ok: false plus `error` (kind), `message`, `retryable` and sometimes `http_status`."),
+        updated: z.literal(true).optional().describe("True when the change was applied by this call."),
         app_id: z.string().optional().describe("The application that was changed."),
         backend_message: backendMessage,
         http_status: httpStatus,
@@ -386,8 +386,8 @@ export function registerProvisioningTools(server: McpServer, ctx: ToolContext): 
         "To stop using an application without deleting it, re-point its numbers instead. An unknown app_id raises not_found. Gated by VOBIZ_ENABLE_PROVISIONING and confirm: true.",
       inputSchema: { app_id: appId, confirm: confirm("deleting this application") },
       outputSchema: {
-        ok: z.literal(true),
-        deleted: z.literal(true).optional(),
+        ok: z.boolean().optional().describe("True on success. On a failure the result is isError with ok: false plus `error` (kind), `message`, `retryable` and sometimes `http_status`."),
+        deleted: z.literal(true).optional().describe("True when the record was deleted by this call."),
         app_id: z.string().optional().describe("The application that was deleted."),
         http_status: httpStatus,
       },
@@ -419,7 +419,7 @@ export function registerProvisioningTools(server: McpServer, ctx: ToolContext): 
         per_page: z.number().int().min(1).max(100).optional().describe("Numbers per page, 1-100 (default: the server's VOBIZ_DEFAULT_PAGE_SIZE, normally 20)."),
       },
       outputSchema: {
-        ok: z.literal(true),
+        ok: z.boolean().optional().describe("True on success. On a failure the result is isError with ok: false plus `error` (kind), `message`, `retryable` and sometimes `http_status`."),
         numbers: z.array(inventoryNumberShape).optional().describe("Inventory numbers matching the filters; empty when nothing matches."),
         pagination: z
           .object({
@@ -468,8 +468,8 @@ export function registerProvisioningTools(server: McpServer, ctx: ToolContext): 
         confirm: confirm("buying this number at the quoted fees"),
       },
       outputSchema: {
-        ok: z.literal(true),
-        purchased: z.literal(true).optional(),
+        ok: z.boolean().optional().describe("True on success. On a failure the result is isError with ok: false plus `error` (kind), `message`, `retryable` and sometimes `http_status`."),
+        purchased: z.literal(true).optional().describe("True when the number was bought by this call."),
         number: z.record(z.string(), z.unknown()).nullable().optional().describe("The number record Vobiz returned after purchase (e164, status, fees), or null if it sent none."),
         charged_estimate: z
           .object({ amount: z.number().optional().describe("Setup fee plus first monthly fee, as quoted in inventory."), currency: z.string().optional().describe("Wallet currency charged.") })
@@ -564,7 +564,7 @@ export function registerProvisioningTools(server: McpServer, ctx: ToolContext): 
         confirm: confirm("changing this number's routing"),
       },
       outputSchema: {
-        ok: z.literal(true),
+        ok: z.boolean().optional().describe("True on success. On a failure the result is isError with ok: false plus `error` (kind), `message`, `retryable` and sometimes `http_status`."),
         phone_number: z.string().optional().describe("The number that was changed, in E.164 form."),
         changes: z.array(z.string()).optional().describe("Human-readable list of the changes applied, in the order they ran."),
       },
@@ -624,8 +624,8 @@ export function registerProvisioningTools(server: McpServer, ctx: ToolContext): 
         "Gated by VOBIZ_ENABLE_PROVISIONING and confirm: true; every call creates another trunk, so after a timeout check list_sip_trunks before retrying.",
       inputSchema: { ...trunkFields, name: z.string().trim().min(1).max(100).describe("Display name of the trunk, 1-100 characters."), confirm: confirm("creating this SIP trunk") },
       outputSchema: {
-        ok: z.literal(true),
-        created: z.literal(true).optional(),
+        ok: z.boolean().optional().describe("True on success. On a failure the result is isError with ok: false plus `error` (kind), `message`, `retryable` and sometimes `http_status`."),
+        created: z.literal(true).optional().describe("True when the record was created by this call."),
         trunk: trunkShape.optional().describe("The new trunk; its trunk_id is needed for update_sip_trunk, delete_sip_trunk and update_phone_number."),
         http_status: httpStatus,
       },
@@ -650,8 +650,8 @@ export function registerProvisioningTools(server: McpServer, ctx: ToolContext): 
         "Gated by VOBIZ_ENABLE_PROVISIONING and confirm: true.",
       inputSchema: { trunk_id: trunkId, ...trunkFields, confirm: confirm("changing this SIP trunk") },
       outputSchema: {
-        ok: z.literal(true),
-        updated: z.literal(true).optional(),
+        ok: z.boolean().optional().describe("True on success. On a failure the result is isError with ok: false plus `error` (kind), `message`, `retryable` and sometimes `http_status`."),
+        updated: z.literal(true).optional().describe("True when the change was applied by this call."),
         trunk: trunkShape.optional().describe("The trunk after the change."),
         http_status: httpStatus,
       },
@@ -677,8 +677,8 @@ export function registerProvisioningTools(server: McpServer, ctx: ToolContext): 
         "An unknown trunk_id raises not_found. Gated by VOBIZ_ENABLE_PROVISIONING and confirm: true.",
       inputSchema: { trunk_id: trunkId, confirm: confirm("deleting this SIP trunk") },
       outputSchema: {
-        ok: z.literal(true),
-        deleted: z.literal(true).optional(),
+        ok: z.boolean().optional().describe("True on success. On a failure the result is isError with ok: false plus `error` (kind), `message`, `retryable` and sometimes `http_status`."),
+        deleted: z.literal(true).optional().describe("True when the record was deleted by this call."),
         trunk_id: z.string().optional().describe("The trunk that was deleted."),
         http_status: httpStatus,
       },

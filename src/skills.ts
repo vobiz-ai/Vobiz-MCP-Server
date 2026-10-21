@@ -69,7 +69,7 @@ export function registerSkills(server: McpServer, skills: Skill[] = loadSkills()
     skills.map((s) => ({ name: s.name, description: s.description, uri: `vobiz://skills/${s.name}`, sections: sections(s.body).map((x) => x.heading) }));
 
   // Output shapes: every field optional so validation never fails; ok is a boolean because clients validate error results too.
-  const okOut = z.boolean().describe("true on success; false (with error and message) when the tool failed.");
+  const okOut = z.boolean().optional().describe("true on success; false (with error and message) when the tool failed.");
 
   server.registerTool(
     "list_vobiz_skills",

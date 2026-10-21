@@ -20,7 +20,7 @@ import { handler, isPrivateHost, listField, ok, pageInfo, redact } from "../util
 type Rec = Record<string, unknown>;
 
 // ── Output shapes: every field optional so validation never fails; ok is a boolean because clients validate error results too ──
-const okOut = z.boolean().describe("true on success; false (with error and message) when the tool failed.");
+const okOut = z.boolean().optional().describe("true on success; false (with error and message) when the tool failed.");
 const subAccountOut = z
   .record(z.string(), z.unknown())
   .describe("The sub-account as Vobiz returns it: name, auth_id, email, phone, enabled, kyc_mode, rate_limit, permissions and timestamps. Credentials are removed.");
