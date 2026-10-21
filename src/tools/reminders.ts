@@ -28,7 +28,39 @@ const ACTIVE: ReminderStatus[] = ["scheduled", "snoozed", "calling"];
 const reminderId = z
   .string()
   .trim()
-  .regex(/^[A-Za-z0-9_-]{4,100}$/, "must be a reminder id returned by schedule_reminder_call or list_reminder_calls");
+  .regex(/^[A-Za-z0-9_-]{4,100}$/, "must be a reminder id returned by schedule_reminder_call or list_reminder_calls")
+  .describe("The reminder's id: reminder_id as returned by schedule_reminder_call or listed by list_reminder_calls.");
+
+// ── Output shapes: every field optional so validation never fails; ok is a boolean because clients validate error results too ──
+const okOut = z.boolean().optional().describe("true on success; false (with error and message) when the tool failed.");
+const summaryOut = {
+  reminder_id: z.string().optional().describe("Id of the reminder, for get_reminder_call and cancel_reminder_call."),
+  status: z.enum(STATUSES).optional().describe("scheduled, calling, snoozed, done (pressed 2), stopped (pressed 9), cancelled or failed."),
+  status_text: z.string().optional().describe("The status in plain words."),
+  kind: z.enum(["wake_up", "reminder"]).optional().describe("Greeting style of the call."),
+  message: z.string().optional().describe("What the call says."),
+  at_utc: z.string().optional().describe("Originally requested call time, ISO 8601 UTC."),
+  at_local: z.string().optional().describe("The same time in the reminder's timezone."),
+  next_call_utc: z.string().nullable().optional().describe("When the next attempt is due (ISO 8601 UTC), or null when no call is pending."),
+  next_call_local: z.string().nullable().optional().describe("The next attempt in the reminder's timezone, or null."),
+  timezone: z.string().optional().describe("IANA timezone the local times use."),
+  to: z.string().optional().describe("Number being called, E.164."),
+  from: z.string().optional().describe("Caller ID used, E.164."),
+  attempts_made: z.number().optional().describe("Attempts placed so far."),
+  max_attempts: z.number().optional().describe("Attempts allowed in total, retries included."),
+};
+const attemptOut = z
+  .object({
+    attempt: z.number().optional().describe("1-based attempt number."),
+    scheduled_for_local: z.string().optional().describe("When this attempt was due, in the reminder's timezone."),
+    started_local: z.string().nullable().optional().describe("When the call was placed, or null if not yet."),
+    outcome: z.enum(["confirmed", "snoozed", "stopped", "no_input", "no_answer", "busy", "voicemail", "rejected", "failed"]).nullable().optional().describe("Result of the attempt, or null while pending."),
+    outcome_text: z.string().optional().describe("The outcome in plain words."),
+    digits: z.string().nullable().optional().describe("Key the user pressed, or null."),
+    talk_seconds: z.number().nullable().optional().describe("Seconds the call was connected, or null."),
+    call_uuid: z.string().nullable().optional().describe("Vobiz call UUID of this attempt (for get_call_details), or null if not placed."),
+  })
+  .passthrough();
 
 const STATUS_WORDS: Record<ReminderStatus, string> = {
   scheduled: "scheduled: the call will be placed at the next call time",
@@ -139,20 +171,21 @@ export function registerReminderTools(server: McpServer, ctx: ToolContext): void
     {
       title: "Schedule a reminder or wake-up call",
       description:
-        "Vobiz: use this when the user wants a PHONE CALL at a time — a wake-up call, a reminder call, 'call me at…'. Not for text or in-app reminders. " +
+        "Vobiz: use this when the user wants a PHONE CALL at a time — a wake-up call, a reminder call, 'call me at…'. Not for text or in-app reminders, and not for a call right now with your own script or answer URL (that is make_call). " +
         "The server places the call itself at that time, speaks the message, and lets the user press 1 to snooze, 2 to confirm, 9 to stop; it retries when there is no answer. " +
-        "Confirm the time (in the user's timezone), the message and the number with the user, then pass confirm: true. " +
-        "Call it ONCE per reminder: nothing has to stay open or be polled afterwards. `at` is ISO 8601 with an offset (2026-10-21T06:00:00+05:30), a local time without an offset (read in the timezone chosen at sign-in), or \"now\". " +
+        "Confirm the time (in the user's timezone), the message and the number with the user, then pass confirm: true; without it the tool answers confirmation_required with the call summary to show the user. " +
+        "Call it ONCE per reminder: nothing has to stay open or be polled afterwards. Returns a reminder_id for get_reminder_call and cancel_reminder_call (the undo). " +
+        "`at` is ISO 8601 with an offset (2026-10-21T06:00:00+05:30), a local time without an offset (read in the timezone chosen at sign-in), or \"now\"; a time in the past fails with invalid_input. " +
         (ctx.media
           ? "To play the user's own audio first, pass `audio` (a name from list_audio; add files with create_audio_upload_link or import_audio_from_url) or a public `audio_url`. "
           : "") +
-        `\`to\` defaults to the user's own number from sign-in; \`from\` defaults to the caller ID chosen at sign-in, else the first voice number on the account. At most ${svc.limits.maxDaysAhead} days ahead.`,
+        `\`to\` defaults to the user's own number from sign-in; \`from\` defaults to the caller ID chosen at sign-in, else the first voice number on the account. At most ${svc.limits.maxDaysAhead} days ahead. Needs VOBIZ_ENABLE_CALLS on this server.`,
       inputSchema: {
         at: z.string().trim().min(3).max(40).describe("When to call: ISO 8601 with offset, local ISO time without offset (sign-in timezone), or \"now\"."),
         message: z.string().trim().min(1).max(400).describe("What the call says after the intro, in plain words (max 400 characters)."),
         kind: z.enum(["wake_up", "reminder"]).optional().describe("wake_up opens with a good-morning greeting; reminder (default) with a reminder greeting."),
-        to: phoneNumber.optional().describe("Number to call, E.164. One number only. Defaults to the user's own number from sign-in."),
-        from: phoneNumber.optional().describe("Caller ID: a voice number on this account, E.164."),
+        to: phoneNumber.optional().describe("Number to call, E.164. One number only. Defaults to the user's own number from sign-in; a connection with assistant scope may only call that number."),
+        from: phoneNumber.optional().describe("Caller ID: a voice number on this account, E.164. Defaults to the caller ID chosen at sign-in, else an active voice number on the account (one from the destination's country when available)."),
         language: z.enum(SPEAK_LANGS).optional().describe("Speech language (default en-US)."),
         voice: z.enum(["WOMAN", "MAN"]).optional().describe("Speech voice (default WOMAN)."),
         audio_url: z
@@ -168,8 +201,33 @@ export function registerReminderTools(server: McpServer, ctx: ToolContext): void
         max_attempts: z.number().int().min(1).max(5).optional().describe("Total call attempts including retries (default 3)."),
         retry_minutes: z.number().int().min(1).max(30).optional().describe("Minutes between retries after no answer, busy or voicemail (default 5)."),
         confirm: z.boolean().describe("Must be true, set only after the user confirmed the time, message and number."),
-        idempotency_key: idempotencyKey.optional(),
+        idempotency_key: idempotencyKey.optional().describe("Unique key for this reminder (e.g. a UUID). Repeating it returns the reminder scheduled the first time instead of scheduling a second one."),
       },
+      outputSchema: z
+        .object({
+          ok: okOut,
+          reminder_id: summaryOut.reminder_id,
+          status: summaryOut.status,
+          at_utc: summaryOut.at_utc,
+          at_local: summaryOut.at_local,
+          timezone: summaryOut.timezone,
+          to: summaryOut.to,
+          from: summaryOut.from,
+          message: summaryOut.message,
+          snooze_minutes: z.number().optional().describe("Minutes before the call repeats when the user presses 1."),
+          max_attempts: summaryOut.max_attempts,
+          audio: z
+            .object({
+              id: z.string().optional().describe("Id of the library audio played first."),
+              name: z.string().optional().describe("Its saved name."),
+              duration_sec: z.number().optional().describe("Its length in seconds."),
+            })
+            .passthrough()
+            .optional()
+            .describe("Present only when a library audio was attached."),
+          note: z.string().optional().describe("Plain-language confirmation to relay to the user, including how to cancel."),
+        })
+        .passthrough(),
       annotations: { destructiveHint: true, idempotentHint: false, openWorldHint: true, readOnlyHint: false },
     },
     handler(async (args) => {
@@ -278,11 +336,24 @@ export function registerReminderTools(server: McpServer, ctx: ToolContext): void
     "list_reminder_calls",
     {
       title: "List reminder calls",
-      description: "List the reminder and wake-up calls scheduled on this Vobiz account, newest first, with their status and next call time in the user's timezone. Read-only.",
+      description:
+        "List the reminder and wake-up calls scheduled through this server on the signed-in Vobiz account, newest first, with status, next call time in the user's timezone and attempts made. " +
+        "Use status active for the ones still to be placed. It returns one summary per reminder; for the attempt-by-attempt outcome of one reminder use get_reminder_call. " +
+        "Only reminders made with schedule_reminder_call appear here, not other calls on the account. No Vobiz API request is made; there is no paging, limit caps the result.",
       inputSchema: {
-        status: z.enum([...STATUSES, "active"]).optional().describe("Filter by status; active = scheduled, snoozed or calling."),
-        limit: z.number().int().min(1).max(50).optional().describe("Max reminders to return (default 20)."),
+        status: z
+          .enum([...STATUSES, "active"])
+          .optional()
+          .describe("Filter by status: scheduled, calling, snoozed, done (user pressed 2), stopped (user pressed 9), cancelled, failed, or active (= scheduled, snoozed or calling). Omit for all."),
+        limit: z.number().int().min(1).max(50).optional().describe("Max reminders to return, newest first (default 20, max 50)."),
       },
+      outputSchema: z
+        .object({
+          ok: okOut,
+          count: z.number().optional().describe("Number of reminders returned."),
+          reminders: z.array(z.object(summaryOut).passthrough()).optional().describe("One summary per reminder, newest first."),
+        })
+        .passthrough(),
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     handler(async (args) => {
@@ -298,8 +369,22 @@ export function registerReminderTools(server: McpServer, ctx: ToolContext): void
     "get_reminder_call",
     {
       title: "Get a reminder call",
-      description: "Return ONE reminder call with every attempt so far and what happened on each (answered and confirmed, snoozed, not answered, busy, voicemail…). Read-only.",
+      description:
+        "Return ONE reminder call by reminder_id with its settings and every attempt so far: when each was placed and its outcome (confirmed, snoozed, stopped, no key pressed, no answer, busy, voicemail, rejected, failed). " +
+        "Use it to answer 'did my reminder call go through'; to find reminder_ids or see several reminders at once use list_reminder_calls. " +
+        "An id that is not on this account fails with not_found. No Vobiz API request is made.",
       inputSchema: { reminder_id: reminderId },
+      outputSchema: z
+        .object({
+          ok: okOut,
+          ...summaryOut,
+          language: z.string().optional().describe("Speech language of the call."),
+          voice: z.string().optional().describe("Speech voice (WOMAN or MAN)."),
+          snooze_minutes: z.number().optional().describe("Minutes before the call repeats when the user presses 1."),
+          retry_minutes: z.number().optional().describe("Minutes between retries after no answer, busy or voicemail."),
+          attempts: z.array(attemptOut).optional().describe("Every attempt, in order."),
+        })
+        .passthrough(),
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     handler(async ({ reminder_id }) => {
@@ -314,11 +399,22 @@ export function registerReminderTools(server: McpServer, ctx: ToolContext): void
     "cancel_reminder_call",
     {
       title: "Cancel a reminder call",
-      description: "Cancel ONE scheduled or snoozed reminder call so no further calls are placed for it. Needs confirm: true after the user agrees. Cancelling an already finished reminder changes nothing.",
+      description:
+        "Cancel ONE scheduled or snoozed reminder call so no further calls are placed for it: the undo of schedule_reminder_call. To change its time or message, cancel it and schedule a new one. " +
+        "Needs confirm: true after the user agrees; without it the tool answers confirmation_required with the reminder's time and message to show the user. " +
+        "A reminder that is already done, stopped, cancelled or failed is left as it is and returned with cancelled: false; an unknown id fails with not_found. A call already in progress is not cut off.",
       inputSchema: {
         reminder_id: reminderId,
         confirm: z.boolean().describe("Must be true, set only after the user confirmed cancelling this reminder."),
       },
+      outputSchema: z
+        .object({
+          ok: okOut,
+          ...summaryOut,
+          cancelled: z.boolean().optional().describe("true when this call cancelled the reminder; false when it was already finished or could not be cancelled."),
+          note: z.string().optional().describe("What happened, in plain words."),
+        })
+        .passthrough(),
       annotations: { destructiveHint: true, idempotentHint: true, openWorldHint: false, readOnlyHint: false },
     },
     handler(async ({ reminder_id, confirm }) => {

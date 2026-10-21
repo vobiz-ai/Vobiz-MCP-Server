@@ -18,17 +18,34 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ToolContext } from "../context.js";
 import { VobizError } from "../errors.js";
-import { PAGINATION_NOTE, handler, isPrivateHost, listField, ok, redact } from "../util.js";
+import { handler, isPrivateHost, listField, ok, redact } from "../util.js";
 
 type Rec = Record<string, unknown>;
 
 // ── Input schemas ───────────────────────────────────────────────
 
 const uuidRe = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
-const endpointId = z.string().trim().regex(/^\d{4,25}$/, "must be a Vobiz endpoint ID (digits)");
-const credentialId = z.string().trim().regex(uuidRe, "must be a credential UUID");
-const ipAclId = z.string().trim().regex(uuidRe, "must be an IP ACL entry UUID");
-const uriId = z.string().trim().regex(uuidRe, "must be an origination URI UUID");
+const endpointId = z
+  .string()
+  .trim()
+  .regex(/^\d{4,25}$/, "must be a Vobiz endpoint ID (digits)")
+  .describe("Numeric SIP endpoint ID (4-25 digits): endpoint_id from list_sip_endpoints or create_sip_endpoint. Unknown ids raise not_found.");
+const credentialId = z
+  .string()
+  .trim()
+  .regex(uuidRe, "must be a credential UUID")
+  .describe("Trunk credential UUID: the id from list_trunk_credentials or create_trunk_credential. Unknown ids raise not_found.");
+const ipAclId = z
+  .string()
+  .trim()
+  .regex(uuidRe, "must be an IP ACL entry UUID")
+  .describe("IP ACL entry UUID: the id from list_ip_acl_entries or add_ip_acl_entry. Unknown ids raise not_found.");
+const uriId = z
+  .string()
+  .trim()
+  .regex(uuidRe, "must be an origination URI UUID")
+  .describe("Origination URI UUID: the id from list_origination_uris or create_origination_uri. Unknown ids raise not_found.");
+const OFFSET_NOTE = "Pagination is stateless: pass limit and offset on every call (nothing is saved between calls) and follow pagination.next_offset.";
 const appId = z.string().trim().regex(/^\d{5,25}$/, "must be a Vobiz application ID (digits)");
 const subAccount = z.string().trim().regex(/^SA_[A-Za-z0-9]{4,40}$/, "must be a sub-account Auth ID (SA_...)");
 const sipUsername = z
@@ -47,10 +64,97 @@ const alias = z
   .string()
   .trim()
   .regex(/^[A-Za-z0-9 _'.-]{1,100}$/, "must be 1-100 letters, digits, spaces or - _ ' .");
-const limit = z.number().int().min(1).max(100).optional().describe("Max 100. Defaults to the server's VOBIZ_DEFAULT_PAGE_SIZE (20).");
-const offset = z.number().int().min(0).optional();
-const priority = z.number().int().min(1).max(1000).describe("Routing priority: lower is tried first (1 = primary, 2+ = failover).");
+const limit = z.number().int().min(1).max(100).optional().describe("Records per page, 1-100. Defaults to the server's VOBIZ_DEFAULT_PAGE_SIZE (20).");
+const offset = z.number().int().min(0).optional().describe("Number of records to skip (default 0); pass pagination.next_offset from the previous page.");
+const priority = z.number().int().min(1).max(1000).describe("Routing priority, 1-1000: lower is tried first (1 = primary, 2+ = failover). URIs sharing a priority split traffic by weight.");
 const confirm = (what: string) => z.boolean().describe(`Must be true, set only after the user explicitly approved: ${what}.`);
+
+// ── Output schemas (every field optional so a backend change never fails validation) ──
+const str = () => z.string().nullable().optional();
+const bool = () => z.boolean().nullable().optional();
+const num = () => z.number().nullable().optional();
+const id = () => z.union([z.string(), z.number()]).nullable().optional();
+const httpStatus = z.number().optional().describe("HTTP status Vobiz answered with.");
+const noteField = z.string().optional().describe("Reminder that passwords are never returned here.");
+const offsetPagination = z
+  .object({
+    limit: z.number().optional().describe("Page size applied."),
+    offset: z.number().optional().describe("Offset applied."),
+    total: z.number().nullable().optional().describe("Total matching records, or null when Vobiz did not report one."),
+    has_more: z.boolean().optional().describe("True when another page exists."),
+    next_offset: z.number().nullable().optional().describe("offset to pass for the next page, or null on the last page."),
+  })
+  .passthrough()
+  .describe("Stateless paging: pass next_offset as offset to continue.");
+
+const endpointShape = z
+  .object({
+    endpoint_id: id().describe("Numeric endpoint ID."),
+    username: str().describe("SIP username the device registers with."),
+    alias: str().describe("Friendly name."),
+    sip_uri: str().describe("SIP URI of the endpoint (sip:username@registrar.vobiz.ai)."),
+    sip_registered: z.union([z.string(), z.boolean()]).nullable().optional().describe("\"true\" while a device is registered, otherwise \"false\"."),
+    sip_registration: z.record(z.string(), z.unknown()).nullable().optional().describe("Present only while registered: contact, expires, user_agent, received."),
+    application: z.unknown().optional().describe("Attached application: an app_id string in lists, an object with app_id, app_name and answer_url in get_sip_endpoint, or null."),
+    allow_voice: bool().describe("Voice calls permitted."),
+    allow_message: bool().describe("Messaging permitted."),
+    allow_video: bool().describe("Video calls permitted."),
+    sub_account: str().describe("Owning sub-account Auth ID, or null."),
+    resource_uri: str().describe("API path of the endpoint."),
+    created_at: str().describe("Creation timestamp."),
+    updated_at: str().describe("Last-change timestamp."),
+  })
+  .passthrough()
+  .describe("Endpoint object as Vobiz returned it; any password field is replaced with [redacted].");
+
+const credentialShape = z
+  .object({
+    id: str().describe("Credential UUID; use it as credential_uuid on a trunk or credential_id here."),
+    username: str().describe("SIP username (permanent)."),
+    password: str().describe("Always [redacted]; the real password is never returned."),
+    realm: str().describe("SIP digest realm the client must present, {account_id}.sip.vobiz.ai."),
+    enabled: bool().describe("False while authentication with this credential is paused."),
+    description: str().describe("Free-text note, if any."),
+    account_id: str().describe("Owning account Auth ID."),
+    created_at: str().describe("Creation timestamp."),
+    updated_at: str().describe("Last-change timestamp."),
+  })
+  .passthrough();
+
+const ipAclShape = z
+  .object({
+    id: str().describe("IP ACL entry UUID; use it as ipacl_uuid on a trunk or ip_acl_id here."),
+    ip_address: str().describe("Allow-listed IPv4 address or CIDR block."),
+    description: str().describe("Label given as name when the entry was created."),
+    enabled: bool().describe("False while the entry is switched off."),
+    account_id: str().describe("Owning account Auth ID."),
+    created_at: str().describe("Creation timestamp."),
+    updated_at: str().describe("Last-change timestamp."),
+  })
+  .passthrough();
+
+const originationUriShape = z
+  .object({
+    id: str().describe("Origination URI UUID; use it as primary_uri_uuid or fallback_uri_uuid on a trunk or uri_id here."),
+    uri: str().describe("SIP destination, e.g. sip:sbc.example.com:5060."),
+    priority: num().describe("Failover order: lower is tried first."),
+    weight: num().describe("Load-balancing weight among URIs of the same priority (higher gets more traffic)."),
+    enabled: bool().describe("False while the destination is switched off."),
+    transport: str().describe("SIP transport used to reach it: udp, tcp or tls."),
+    description: str().describe("Label given as name when the URI was created."),
+    account_id: str().describe("Owning account Auth ID."),
+    created_at: str().describe("Creation timestamp."),
+    updated_at: str().describe("Last-change timestamp."),
+  })
+  .passthrough();
+
+const listOutput = <T extends z.ZodTypeAny>(key: string, item: T, what: string) => ({
+  ok: z.boolean().optional().describe("True on success. On a failure the result is isError with ok: false plus `error` (kind), `message`, `retryable` and sometimes `http_status`."),
+  count: z.number().optional().describe(`${what} in this page.`),
+  [key]: z.array(item).optional().describe(`${what}; empty when the account has none.`),
+  pagination: offsetPagination.optional(),
+  note: noteField,
+});
 
 // ── Guards and helpers ──────────────────────────────────────────
 
@@ -174,17 +278,18 @@ export function registerSipTools(server: McpServer, ctx: ToolContext): void {
       title: "List SIP endpoints",
       description:
         "List the SIP endpoints on this Vobiz account: soft-phones, desk phones and WebRTC clients that register at registrar.vobiz.ai. " +
-        "Shows each endpoint's username, alias, SIP URI, attached application and registration state. Filter by username, alias, application or sub-account. " +
-        PAGINATION_NOTE + " Read-only. " + SECRET_NOTE,
+        "Shows each endpoint's endpoint_id, username, alias, SIP URI, attached application and whether a device is registered. Filter by username, alias, application or sub-account; " +
+        "for one endpoint's live registration details (contact, expiry, user agent) use get_sip_endpoint. " + OFFSET_NOTE + " " + SECRET_NOTE,
       inputSchema: {
-        username_contains: z.string().trim().regex(/^[A-Za-z0-9_]{1,64}$/).optional().describe("Filter: username contains this text."),
-        alias_contains: z.string().trim().min(1).max(100).optional().describe("Filter: alias contains this text."),
-        application_id: appId.optional().describe("Filter: endpoints attached to this application."),
-        without_application: z.boolean().optional().describe("true = only endpoints with no application attached."),
-        sub_account: subAccount.optional().describe("Filter: endpoints of this sub-account."),
+        username_contains: z.string().trim().regex(/^[A-Za-z0-9_]{1,64}$/).optional().describe("Only endpoints whose username contains this text (letters, digits, _)."),
+        alias_contains: z.string().trim().min(1).max(100).optional().describe("Only endpoints whose alias contains this text."),
+        application_id: appId.optional().describe("Only endpoints attached to this application (app_id from list_applications)."),
+        without_application: z.boolean().optional().describe("true = only endpoints with no application attached; false = only endpoints that have one. Omit for both."),
+        sub_account: subAccount.optional().describe("Only endpoints owned by this sub-account (Auth ID SA_...)."),
         limit,
         offset,
       },
+      outputSchema: listOutput("endpoints", endpointShape, "Endpoints"),
       annotations: readOnly,
     },
     handler(async (a) => {
@@ -211,9 +316,15 @@ export function registerSipTools(server: McpServer, ctx: ToolContext): void {
     {
       title: "Get SIP endpoint",
       description:
-        "Return one Vobiz SIP endpoint: username, alias, SIP URI, attached application and, when a device is registered, its registration details (contact, expiry, user agent). " +
-        "Use it to check whether a soft-phone or WebRTC client is online. Read-only. " + SECRET_NOTE,
+        "Return one Vobiz SIP endpoint by endpoint_id: username, alias, SIP URI, voice/message/video permissions, the attached application (app_id, name, answer_url) and, " +
+        "while a device is registered, a sip_registration block with contact, expiry and user agent. Use it to check whether a soft-phone or WebRTC client is online; " +
+        "to find the id or browse many endpoints use list_sip_endpoints. An unknown endpoint_id raises not_found. " + SECRET_NOTE,
       inputSchema: { endpoint_id: endpointId },
+      outputSchema: {
+        ok: z.boolean().optional().describe("True on success. On a failure the result is isError with ok: false plus `error` (kind), `message`, `retryable` and sometimes `http_status`."),
+        endpoint: endpointShape.nullable().optional().describe("The endpoint as Vobiz returned it."),
+        note: noteField,
+      },
       annotations: readOnly,
     },
     handler(async ({ endpoint_id }) => {
@@ -228,14 +339,25 @@ export function registerSipTools(server: McpServer, ctx: ToolContext): void {
       title: "Create SIP endpoint",
       description:
         "Create a Vobiz SIP endpoint so a soft-phone, desk phone or WebRTC client can register at registrar.vobiz.ai with its own username and password. " +
-        "Attach an application to handle its calls (otherwise the account's default endpoint application applies, if set). The username cannot be changed later. " +
-        "Gated by VOBIZ_ENABLE_PROVISIONING and confirm: true. The password is write-only and never returned.",
+        "Attach an application to handle its calls (otherwise the account's default endpoint application applies, if set). The username cannot be changed later; use update_sip_endpoint for everything else. " +
+        "Returns the endpoint_id and the SIP URI to configure on the device. Gated by VOBIZ_ENABLE_PROVISIONING and confirm: true. The password is write-only and never returned; " +
+        "every call creates another endpoint, so a retry after a timeout should first check list_sip_endpoints.",
       inputSchema: {
-        username: sipUsername.describe("SIP username, unique on the account and permanent. Letters and digits are safest."),
+        username: sipUsername.describe("SIP username, 3-64 letters, digits or _, unique on the account and permanent. Letters and digits are safest."),
         password: secretPassword("endpoint's SIP"),
-        alias: alias.describe("Friendly name, e.g. Front desk phone."),
-        application_id: appId.optional().describe("Application that handles this endpoint's calls (sent as `application`)."),
+        alias: alias.describe("Friendly name shown for the endpoint, 1-100 characters, e.g. Front desk phone."),
+        application_id: appId.optional().describe("Application (app_id from list_applications) that handles calls to and from this endpoint; sent to Vobiz as `application`. An unknown id is rejected."),
         confirm: confirm("creating this SIP endpoint"),
+      },
+      outputSchema: {
+        ok: z.boolean().optional().describe("True on success. On a failure the result is isError with ok: false plus `error` (kind), `message`, `retryable` and sometimes `http_status`."),
+        created: z.literal(true).optional().describe("True when the record was created by this call."),
+        endpoint_id: id().describe("ID of the new endpoint, or null if Vobiz did not return one."),
+        endpoint: endpointShape.optional().describe("The endpoint as Vobiz returned it (username, alias, endpoint_id)."),
+        sip_uri: z.string().optional().describe("SIP URI the device registers as: sip:username@registrar.vobiz.ai."),
+        registrar: z.string().optional().describe("Registrar host to configure on the device."),
+        note: z.string().optional().describe("How to register the device and that the password is never shown again."),
+        http_status: httpStatus,
       },
       annotations: write(false),
     },
@@ -263,17 +385,26 @@ export function registerSipTools(server: McpServer, ctx: ToolContext): void {
     {
       title: "Update SIP endpoint",
       description:
-        "Change a Vobiz SIP endpoint's alias, password, attached application or voice/message/video permissions. Only the fields you pass change; the username is permanent. " +
-        "A new password signs out every registered device until it re-registers. Gated by VOBIZ_ENABLE_PROVISIONING and confirm: true.",
+        "Change a Vobiz SIP endpoint's alias, password, attached application or voice/message/video permissions. Only the fields you pass change; the username is permanent (create a new endpoint to rename). " +
+        "A new password signs out every registered device until it re-registers with it. Vobiz answers 202 with no body, so the result lists the fields sent rather than the new state; read it back with get_sip_endpoint. " +
+        "An unknown endpoint_id raises not_found. Gated by VOBIZ_ENABLE_PROVISIONING and confirm: true.",
       inputSchema: {
         endpoint_id: endpointId,
-        alias: alias.optional(),
+        alias: alias.optional().describe("New friendly name, 1-100 characters."),
         password: secretPassword("endpoint's new SIP").optional(),
-        application_id: appId.optional().describe("Application that should handle this endpoint's calls (sent as `application`)."),
-        allow_voice: z.boolean().optional(),
-        allow_message: z.boolean().optional(),
-        allow_video: z.boolean().optional(),
+        application_id: appId.optional().describe("Application (app_id from list_applications) that should handle this endpoint's calls from now on; sent to Vobiz as `application`. An unknown id is rejected."),
+        allow_voice: z.boolean().optional().describe("Permit voice calls on this endpoint (Vobiz default true)."),
+        allow_message: z.boolean().optional().describe("Permit messaging on this endpoint (Vobiz default true)."),
+        allow_video: z.boolean().optional().describe("Permit video calls on this endpoint (Vobiz default false)."),
         confirm: confirm("changing this SIP endpoint"),
+      },
+      outputSchema: {
+        ok: z.boolean().optional().describe("True on success. On a failure the result is isError with ok: false plus `error` (kind), `message`, `retryable` and sometimes `http_status`."),
+        updated: z.literal(true).optional().describe("True when the change was applied by this call."),
+        endpoint_id: z.string().optional().describe("The endpoint that was changed."),
+        changed: z.array(z.string()).optional().describe("Names of the fields sent to Vobiz (application_id appears as application)."),
+        note: z.string().optional().describe("Present after a password change: devices must re-register."),
+        http_status: httpStatus,
       },
       annotations: write(true),
     },
@@ -302,8 +433,10 @@ export function registerSipTools(server: McpServer, ctx: ToolContext): void {
     {
       title: "Delete SIP endpoint",
       description:
-        "Permanently delete a Vobiz SIP endpoint. Devices registered with it disconnect immediately and its SIP URI stops working. Gated by VOBIZ_ENABLE_PROVISIONING and confirm: true.",
+        "Permanently delete a Vobiz SIP endpoint; this cannot be undone. Devices registered with it disconnect immediately and its SIP URI stops working; the username becomes free for a new endpoint. " +
+        "To block a device temporarily, change its password with update_sip_endpoint instead. An unknown endpoint_id raises not_found. Gated by VOBIZ_ENABLE_PROVISIONING and confirm: true.",
       inputSchema: { endpoint_id: endpointId, confirm: confirm("deleting this SIP endpoint") },
+      outputSchema: { ok: z.boolean().optional().describe("True on success. On a failure the result is isError with ok: false plus `error` (kind), `message`, `retryable` and sometimes `http_status`."), deleted: z.literal(true).optional(), endpoint_id: z.string().optional().describe("The endpoint that was deleted."), http_status: httpStatus },
       annotations: write(true),
     },
     handler(async (a) => {
@@ -319,9 +452,11 @@ export function registerSipTools(server: McpServer, ctx: ToolContext): void {
     {
       title: "List trunk credentials",
       description:
-        "List the SIP digest credentials on this Vobiz account that trunks use to authenticate a PBX, carrier or voice agent: username, realm and enabled state. " +
-        "Use the credential id as credential_uuid on a trunk. " + PAGINATION_NOTE + " Read-only. " + SECRET_NOTE,
+        "List the SIP digest credentials on this Vobiz account that trunks use to authenticate a PBX, carrier or voice agent: id, username, realm and enabled state. " +
+        "Credentials are account-wide, not per trunk; which trunk uses one is visible as credential_uuid in list_sip_trunks. Use an id as credential_uuid on update_sip_trunk, " +
+        "or as credential_id for update_trunk_credential and delete_trunk_credential. " + OFFSET_NOTE + " " + SECRET_NOTE,
       inputSchema: { limit, offset },
+      outputSchema: listOutput("credentials", credentialShape, "Credentials"),
       annotations: readOnly,
     },
     handler(async ({ limit: l, offset: o }) => {
@@ -338,11 +473,21 @@ export function registerSipTools(server: McpServer, ctx: ToolContext): void {
       title: "Create trunk credential",
       description:
         "Create a SIP digest credential (username and password) on this Vobiz account for trunk authentication, for dynamic-IP PBXs, remote sites or voice agents. " +
-        "Attach it to a trunk afterwards with update_sip_trunk (credential_uuid). The username is permanent. Gated by VOBIZ_ENABLE_PROVISIONING and confirm: true. The password is write-only and never returned.",
+        "Attach it to a trunk afterwards with update_sip_trunk (credential_uuid); for static-IP peers use add_ip_acl_entry instead. The username is permanent; rotate the password with update_trunk_credential. " +
+        "Returns the credential id and the realm the SIP client must present. Gated by VOBIZ_ENABLE_PROVISIONING and confirm: true. The password is write-only and never returned; " +
+        "every call creates another credential, so a retry after a timeout should first check list_trunk_credentials.",
       inputSchema: {
-        username: sipUsername.describe("SIP username, unique on the account and permanent. Letters and digits are safest."),
+        username: sipUsername.describe("SIP username, 3-64 letters, digits or _, unique on the account and permanent. Letters and digits are safest."),
         password: secretPassword("trunk credential's SIP"),
         confirm: confirm("creating this trunk credential"),
+      },
+      outputSchema: {
+        ok: z.boolean().optional().describe("True on success. On a failure the result is isError with ok: false plus `error` (kind), `message`, `retryable` and sometimes `http_status`."),
+        created: z.literal(true).optional().describe("True when the record was created by this call."),
+        credential_id: id().describe("UUID of the new credential: use it as credential_uuid on a trunk. Null if Vobiz did not return one."),
+        credential: credentialShape.optional().describe("The credential as Vobiz returned it, password redacted; realm is what the SIP client presents."),
+        note: z.string().optional().describe("How the client authenticates and that the password is never shown again."),
+        http_status: httpStatus,
       },
       annotations: write(false),
     },
@@ -367,13 +512,22 @@ export function registerSipTools(server: McpServer, ctx: ToolContext): void {
       title: "Update trunk credential",
       description:
         "Rotate a trunk credential's password, enable or disable it, or change its description on Vobiz. The username is permanent; to rename, create a new credential and delete the old one. " +
-        "A new password takes effect for the next SIP authentication. Gated by VOBIZ_ENABLE_PROVISIONING and confirm: true.",
+        "A new password takes effect for the next SIP authentication; only the fields you pass change. Prefer enabled: false over delete_trunk_credential when access may be needed again. " +
+        "Returns the updated credential with the password redacted. An unknown credential_id raises not_found. Gated by VOBIZ_ENABLE_PROVISIONING and confirm: true.",
       inputSchema: {
         credential_id: credentialId,
         password: secretPassword("trunk credential's new SIP").optional(),
-        enabled: z.boolean().optional().describe("false pauses authentication with this credential without deleting it."),
-        description: z.string().trim().max(255).optional(),
+        enabled: z.boolean().optional().describe("false pauses authentication with this credential without deleting it; true re-enables it."),
+        description: z.string().trim().max(255).optional().describe("Free-text note of up to 255 characters, e.g. why or when the password was rotated."),
         confirm: confirm("changing this trunk credential"),
+      },
+      outputSchema: {
+        ok: z.boolean().optional().describe("True on success. On a failure the result is isError with ok: false plus `error` (kind), `message`, `retryable` and sometimes `http_status`."),
+        updated: z.literal(true).optional().describe("True when the change was applied by this call."),
+        credential: credentialShape.nullable().optional().describe("The credential after the change, password redacted."),
+        changed: z.array(z.string()).optional().describe("Names of the fields sent to Vobiz."),
+        note: noteField,
+        http_status: httpStatus,
       },
       annotations: write(true),
     },
@@ -394,8 +548,11 @@ export function registerSipTools(server: McpServer, ctx: ToolContext): void {
     {
       title: "Delete trunk credential",
       description:
-        "Delete a trunk credential from this Vobiz account. Any PBX or device authenticating with it is refused from then on; Vobiz may refuse while it is in use by active calls. Gated by VOBIZ_ENABLE_PROVISIONING and confirm: true.",
+        "Delete a trunk credential from this Vobiz account; this cannot be undone. Any PBX or device authenticating with it is refused from then on, and trunks that referenced it lose that credential; " +
+        "Vobiz may refuse while it is in use by active calls. To pause access and keep the credential, use update_trunk_credential with enabled: false. An unknown credential_id raises not_found. " +
+        "Gated by VOBIZ_ENABLE_PROVISIONING and confirm: true.",
       inputSchema: { credential_id: credentialId, confirm: confirm("deleting this trunk credential") },
+      outputSchema: { ok: z.boolean().optional().describe("True on success. On a failure the result is isError with ok: false plus `error` (kind), `message`, `retryable` and sometimes `http_status`."), deleted: z.literal(true).optional(), credential_id: z.string().optional().describe("The credential that was deleted."), http_status: httpStatus },
       annotations: write(true),
     },
     handler(async (a) => {
@@ -411,9 +568,11 @@ export function registerSipTools(server: McpServer, ctx: ToolContext): void {
     {
       title: "List trunk IP ACL entries",
       description:
-        "List the IP access control entries on this Vobiz account: the IPv4 addresses and CIDR ranges allowed to send SIP traffic to trunks without digest credentials. " +
-        "Use it to audit which PBXs, SBCs or carriers are trusted. " + PAGINATION_NOTE + " Read-only.",
+        "List the IP access control entries on this Vobiz account: the IPv4 addresses and CIDR ranges allowed to send SIP traffic to trunks without digest credentials, with id, label and enabled state. " +
+        "Entries are account-wide and IP authentication is checked before digest authentication on every trunk. Use it to audit which PBXs, SBCs or carriers are trusted; " +
+        "add with add_ip_acl_entry, change with update_ip_acl_entry, remove with delete_ip_acl_entry. " + OFFSET_NOTE,
       inputSchema: { limit, offset },
+      outputSchema: listOutput("ip_acl_entries", ipAclShape, "IP ACL entries"),
       annotations: readOnly,
     },
     handler(async ({ limit: l, offset: o }) => {
@@ -430,11 +589,19 @@ export function registerSipTools(server: McpServer, ctx: ToolContext): void {
       title: "Add trunk IP ACL entry",
       description:
         "Allow-list a public IPv4 address or CIDR range (e.g. 198.51.100.42 or 10.20.30.0/24) so a static-IP PBX, SBC or carrier can use Vobiz trunks without digest credentials. " +
-        "Attach it to a trunk with update_sip_trunk (ipacl_uuid). Gated by VOBIZ_ENABLE_PROVISIONING and confirm: true.",
+        "Attach it to a trunk with update_sip_trunk (ipacl_uuid); for peers on dynamic IPs use create_trunk_credential instead. The server rejects ranges wider than /8, host bits set in a CIDR, " +
+        "and non-unicast or loopback addresses; IPv6 is not accepted. Returns the entry's id. Remove it later with delete_ip_acl_entry. Gated by VOBIZ_ENABLE_PROVISIONING and confirm: true.",
       inputSchema: {
-        name: label.describe("Label, e.g. Office PBX. Returned as `description`."),
-        ip_address: z.string().trim().max(18).describe("IPv4 address or IPv4 CIDR block."),
+        name: label.describe("Label of 1-255 characters, e.g. Office PBX. Returned by Vobiz as `description`."),
+        ip_address: z.string().trim().max(18).describe("Public IPv4 address (198.51.100.42) or IPv4 CIDR network (10.20.30.0/24, prefix 8-32, no host bits). Use the peer's public address, not a NAT-internal one."),
         confirm: confirm("allow-listing this IP address for SIP traffic"),
+      },
+      outputSchema: {
+        ok: z.boolean().optional().describe("True on success. On a failure the result is isError with ok: false plus `error` (kind), `message`, `retryable` and sometimes `http_status`."),
+        created: z.literal(true).optional().describe("True when the record was created by this call."),
+        ip_acl_id: id().describe("UUID of the new entry: use it as ipacl_uuid on a trunk. Null if Vobiz did not return one."),
+        ip_acl_entry: ipAclShape.optional().describe("The entry as Vobiz returned it."),
+        http_status: httpStatus,
       },
       annotations: write(false),
     },
@@ -453,12 +620,19 @@ export function registerSipTools(server: McpServer, ctx: ToolContext): void {
       title: "Update trunk IP ACL entry",
       description:
         "Replace a Vobiz IP ACL entry's label and address. Both name and ip_address are required on every update; resend the current value of the one you keep. " +
-        "Traffic from the old address stops being trusted. Gated by VOBIZ_ENABLE_PROVISIONING and confirm: true.",
+        "Traffic from the old address stops being trusted (changes can take a little time to reach the SIP edge); the entry keeps its id, so trunks referencing it need no change. " +
+        "Read the current values with list_ip_acl_entries first. The same address rules as add_ip_acl_entry apply. An unknown ip_acl_id raises not_found. Gated by VOBIZ_ENABLE_PROVISIONING and confirm: true.",
       inputSchema: {
         ip_acl_id: ipAclId,
-        name: label.describe("Label for the entry (resend the current one to keep it)."),
-        ip_address: z.string().trim().max(18).describe("IPv4 address or IPv4 CIDR block (resend the current one to keep it)."),
+        name: label.describe("Label of 1-255 characters (resend the current one to keep it). Returned by Vobiz as `description`."),
+        ip_address: z.string().trim().max(18).describe("Public IPv4 address or IPv4 CIDR network, prefix 8-32 (resend the current one to keep it)."),
         confirm: confirm("changing this IP ACL entry"),
+      },
+      outputSchema: {
+        ok: z.boolean().optional().describe("True on success. On a failure the result is isError with ok: false plus `error` (kind), `message`, `retryable` and sometimes `http_status`."),
+        updated: z.literal(true).optional().describe("True when the change was applied by this call."),
+        ip_acl_entry: ipAclShape.nullable().optional().describe("The entry after the change."),
+        http_status: httpStatus,
       },
       annotations: write(true),
     },
@@ -475,8 +649,11 @@ export function registerSipTools(server: McpServer, ctx: ToolContext): void {
     {
       title: "Delete trunk IP ACL entry",
       description:
-        "Remove an IP ACL entry from this Vobiz account. SIP traffic from that address or range is no longer trusted and needs other authentication. Gated by VOBIZ_ENABLE_PROVISIONING and confirm: true.",
+        "Remove an IP ACL entry from this Vobiz account; this reverses add_ip_acl_entry and cannot be undone. SIP traffic from that address or range is no longer trusted and needs digest credentials; " +
+        "the change can take a little time to reach the SIP edge. Trunks that referenced the entry keep working with their other authentication. An unknown ip_acl_id raises not_found. " +
+        "Gated by VOBIZ_ENABLE_PROVISIONING and confirm: true.",
       inputSchema: { ip_acl_id: ipAclId, confirm: confirm("deleting this IP ACL entry") },
+      outputSchema: { ok: z.boolean().optional().describe("True on success. On a failure the result is isError with ok: false plus `error` (kind), `message`, `retryable` and sometimes `http_status`."), deleted: z.literal(true).optional(), ip_acl_id: z.string().optional().describe("The entry that was deleted."), http_status: httpStatus },
       annotations: write(true),
     },
     handler(async (a) => {
@@ -492,9 +669,11 @@ export function registerSipTools(server: McpServer, ctx: ToolContext): void {
     {
       title: "List trunk origination URIs",
       description:
-        "List the origination URIs on this Vobiz account: the SIP destinations trunks deliver outbound calls to, with priority (failover order), weight (load split), transport and enabled state. " +
-        PAGINATION_NOTE + " Read-only.",
+        "List the origination URIs on this Vobiz account: the SIP destinations trunks deliver outbound calls to, with id, priority (failover order, lowest first), weight (load split within a priority), " +
+        "transport and enabled state. URIs are account-wide; a trunk picks its own with primary_uri_uuid and fallback_uri_uuid (see list_sip_trunks). " +
+        "Add with create_origination_uri, re-prioritise with update_origination_uri, remove with delete_origination_uri. " + OFFSET_NOTE,
       inputSchema: { limit, offset },
+      outputSchema: listOutput("origination_uris", originationUriShape, "Origination URIs"),
       annotations: readOnly,
     },
     handler(async ({ limit: l, offset: o }) => {
@@ -511,12 +690,25 @@ export function registerSipTools(server: McpServer, ctx: ToolContext): void {
       title: "Create trunk origination URI",
       description:
         "Add a SIP destination (origination URI) such as sip:sbc.example.com:5060 that Vobiz trunks route outbound calls to. Use priority 1 for the primary and 2+ for failover; " +
-        "attach it to a trunk with update_sip_trunk (primary_uri_uuid or fallback_uri_uuid). The host must be public. Gated by VOBIZ_ENABLE_PROVISIONING and confirm: true.",
+        "attach it to a trunk with update_sip_trunk (primary_uri_uuid or fallback_uri_uuid). The host must be a public FQDN or IPv4 address; private, loopback and .local targets are rejected. " +
+        "Weight (Vobiz default 10) and transport are set in the Vobiz console. Returns the URI's id. Gated by VOBIZ_ENABLE_PROVISIONING and confirm: true; " +
+        "every call adds another URI, so a retry after a timeout should first check list_origination_uris.",
       inputSchema: {
-        name: label.describe("Label, e.g. Primary SBC. Returned as `description`."),
-        sip_uri: z.string().trim().max(255).describe("sip:host, sip:host:port, sip:user@host or sip:user@host:port. Returned as `uri`."),
+        name: label.describe("Label of 1-255 characters, e.g. Primary SBC. Returned by Vobiz as `description`."),
+        sip_uri: z
+          .string()
+          .trim()
+          .max(255)
+          .describe("SIP destination: sip:host, sip:host:port, sip:user@host or sip:user@host:port, e.g. sip:sbc.example.com:5060 (port 1-65535, host public). Returned by Vobiz as `uri`."),
         priority,
         confirm: confirm("adding this outbound SIP destination"),
+      },
+      outputSchema: {
+        ok: z.boolean().optional().describe("True on success. On a failure the result is isError with ok: false plus `error` (kind), `message`, `retryable` and sometimes `http_status`."),
+        created: z.literal(true).optional().describe("True when the record was created by this call."),
+        uri_id: id().describe("UUID of the new URI: use it as primary_uri_uuid or fallback_uri_uuid on a trunk. Null if Vobiz did not return one."),
+        origination_uri: originationUriShape.optional().describe("The URI as Vobiz returned it."),
+        http_status: httpStatus,
       },
       annotations: write(false),
     },
@@ -535,12 +727,19 @@ export function registerSipTools(server: McpServer, ctx: ToolContext): void {
       title: "Update trunk origination URI",
       description:
         "Replace a Vobiz origination URI's label and priority, for example to promote a failover destination to primary. Both name and priority are required; resend the current value you keep. " +
-        "To point at a different host, create a new origination URI and delete this one; weight and enabled are managed in the Vobiz console. Gated by VOBIZ_ENABLE_PROVISIONING and confirm: true.",
+        "To point at a different host, create a new origination URI and delete this one; weight and enabled are managed in the Vobiz console. Read current values with list_origination_uris first. " +
+        "A priority change applies to the next outbound call on every trunk using the URI. An unknown uri_id raises not_found. Gated by VOBIZ_ENABLE_PROVISIONING and confirm: true.",
       inputSchema: {
         uri_id: uriId,
-        name: label.describe("Label (resend the current one to keep it)."),
+        name: label.describe("Label of 1-255 characters (resend the current one to keep it). Returned by Vobiz as `description`."),
         priority,
         confirm: confirm("changing this origination URI"),
+      },
+      outputSchema: {
+        ok: z.boolean().optional().describe("True on success. On a failure the result is isError with ok: false plus `error` (kind), `message`, `retryable` and sometimes `http_status`."),
+        updated: z.literal(true).optional().describe("True when the change was applied by this call."),
+        origination_uri: originationUriShape.nullable().optional().describe("The URI after the change."),
+        http_status: httpStatus,
       },
       annotations: write(true),
     },
@@ -556,8 +755,10 @@ export function registerSipTools(server: McpServer, ctx: ToolContext): void {
     {
       title: "Delete trunk origination URI",
       description:
-        "Delete an origination URI from this Vobiz account. Trunks stop routing outbound calls to that destination; add a replacement first if it is a trunk's only route. Gated by VOBIZ_ENABLE_PROVISIONING and confirm: true.",
+        "Delete an origination URI from this Vobiz account; this cannot be undone. Trunks stop routing outbound calls to that destination, so add a replacement with create_origination_uri and " +
+        "re-point the trunk with update_sip_trunk first if it is a trunk's only route. An unknown uri_id raises not_found. Gated by VOBIZ_ENABLE_PROVISIONING and confirm: true.",
       inputSchema: { uri_id: uriId, confirm: confirm("deleting this origination URI") },
+      outputSchema: { ok: z.boolean().optional().describe("True on success. On a failure the result is isError with ok: false plus `error` (kind), `message`, `retryable` and sometimes `http_status`."), deleted: z.literal(true).optional(), uri_id: z.string().optional().describe("The URI that was deleted."), http_status: httpStatus },
       annotations: write(true),
     },
     handler(async (a) => {

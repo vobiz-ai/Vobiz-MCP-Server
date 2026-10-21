@@ -15,9 +15,29 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ToolContext } from "../context.js";
 import { VobizError } from "../errors.js";
-import { PAGINATION_NOTE, handler, isPrivateHost, listField, ok, pageInfo, redact } from "../util.js";
+import { handler, isPrivateHost, listField, ok, pageInfo, redact } from "../util.js";
 
 type Rec = Record<string, unknown>;
+
+// ── Output shapes: every field optional so validation never fails; ok is a boolean because clients validate error results too ──
+const okOut = z.boolean().optional().describe("true on success; false (with error and message) when the tool failed.");
+const subAccountOut = z
+  .record(z.string(), z.unknown())
+  .describe("The sub-account as Vobiz returns it: name, auth_id, email, phone, enabled, kyc_mode, rate_limit, permissions and timestamps. Credentials are removed.");
+const paginationOut = z
+  .object({
+    page: z.number().optional().describe("Page that was returned (1-based)."),
+    per_page: z.number().optional().describe("Page size used for this request."),
+    total: z.number().nullable().optional().describe("Total sub-accounts matching the filter, or null when Vobiz did not report it."),
+    returned: z.number().optional().describe("Number of items in this page."),
+    has_more: z.boolean().optional().describe("true when another page exists."),
+    next_page: z.number().nullable().optional().describe("Page to request next, or null on the last page."),
+  })
+  .passthrough()
+  .describe("Stateless paging block for the next call.");
+const httpStatus = z.number().optional().describe("HTTP status Vobiz answered with.");
+const credentialsNote = z.string().optional().describe("Reminder that credentials are never returned here and where the user finds them.");
+const backendMessage = z.string().nullable().optional().describe("Message from Vobiz about the operation, or null.");
 
 const subAuthId = z
   .string()
@@ -46,8 +66,13 @@ const BUSINESS_TYPES = [
 const editableFields = {
   name: z.string().trim().min(1).max(120).optional().describe("Human-readable name for the sub-account."),
   email: z.string().trim().email().max(254).optional().describe("Contact email. Required for kyc_mode customer_use."),
-  phone: z.string().trim().regex(/^\+?[0-9 ()-]{6,20}$/, "must be a phone number").optional(),
-  description: z.string().max(1000).optional(),
+  phone: z
+    .string()
+    .trim()
+    .regex(/^\+?[0-9 ()-]{6,20}$/, "must be a phone number")
+    .optional()
+    .describe("Contact phone number for the sub-account's owner: digits with an optional leading + and spaces, dashes or brackets, 6 to 20 characters. Not a caller ID."),
+  description: z.string().max(1000).optional().describe("Free-text note about the sub-account (what or whom it is for), up to 1000 characters."),
   rate_limit: z.number().int().min(1).max(1_000_000).optional().describe("API rate limit for the sub-account (Vobiz default 1000)."),
   permissions: z
     .object({ calls: z.boolean().optional(), cdr: z.boolean().optional() })
@@ -125,14 +150,24 @@ export function registerSubAccountTools(server: McpServer, ctx: ToolContext): vo
     {
       title: "List sub-accounts",
       description:
-        "List the sub-accounts under this Vobiz main account: name, Auth ID (SA_...), status, KYC mode, rate limit and permissions. Credentials are redacted. " +
-        PAGINATION_NOTE +
-        " Read-only.",
+        "List the sub-accounts under this Vobiz main account, one page at a time: name, Auth ID (SA_...), enabled state, KYC mode, rate limit and permissions, never credentials. " +
+        "Use it to find the sub_auth_id the other sub-account tools take; for one sub-account's full record use get_sub_account, and for its KYC progress use get_sub_account_kyc_status. " +
+        "Pagination is stateless: pass page and size on every call and follow pagination.next_page until has_more is false. " +
+        "Needs main-account (MA_) credentials: signed in as a sub-account it fails with forbidden before any request.",
       inputSchema: {
-        page: z.number().int().min(1).max(10000).optional(),
+        page: z.number().int().min(1).max(10000).optional().describe("1-based page number (default 1). Take the next value from pagination.next_page."),
         size: z.number().int().min(1).max(100).optional().describe("Results per page, max 100. Defaults to the server's VOBIZ_DEFAULT_PAGE_SIZE (20)."),
-        active_only: z.boolean().optional().describe("true returns only active sub-accounts."),
+        active_only: z.boolean().optional().describe("true returns only active (enabled) sub-accounts; omitted or false returns disabled ones too."),
       },
+      outputSchema: z
+        .object({
+          ok: okOut,
+          count: z.number().optional().describe("Number of sub-accounts in this page."),
+          sub_accounts: z.array(subAccountOut).optional().describe("The sub-accounts in this page."),
+          pagination: paginationOut.optional(),
+          credentials_note: credentialsNote,
+        })
+        .passthrough(),
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     handler(async ({ page, size, active_only }) => {
@@ -159,8 +194,17 @@ export function registerSubAccountTools(server: McpServer, ctx: ToolContext): vo
     {
       title: "Get sub-account",
       description:
-        "Return one Vobiz sub-account's details: name, contact, status, KYC mode, rate limit, permissions and timestamps. Credentials are redacted. Read-only.",
+        "Return one Vobiz sub-account's full record by Auth ID: name, contact email and phone, description, enabled state, KYC mode, rate limit, permissions and timestamps, with credentials removed. " +
+        "Use it when you already have a sub_auth_id and need its settings; to find Auth IDs use list_sub_accounts, and for the sub-account's KYC verification state use get_sub_account_kyc_status instead. " +
+        "An Auth ID that is not a sub-account of this main account fails with not_found. Needs main-account (MA_) credentials.",
       inputSchema: { sub_auth_id: subAuthId },
+      outputSchema: z
+        .object({
+          ok: okOut,
+          sub_account: subAccountOut.optional(),
+          credentials_note: credentialsNote,
+        })
+        .passthrough(),
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     handler(async ({ sub_auth_id }) => {
@@ -178,17 +222,33 @@ export function registerSubAccountTools(server: McpServer, ctx: ToolContext): vo
     {
       title: "Create sub-account",
       description:
-        "Create a Vobiz sub-account under this main account (only name is required). kyc_mode customer_use needs email, and the new sub-account places calls only after its own KYC (see create_sub_account_kyc_session). " +
-        "The new sub-account's credentials are not returned here; the user copies them from the Vobiz console. Gated by VOBIZ_ENABLE_PROVISIONING and confirm: true.",
+        "Create a new Vobiz sub-account under this main account (only name is required); to change an existing one use update_sub_account. " +
+        "kyc_mode customer_use needs email, and such a sub-account places calls only after its own KYC (start it with create_sub_account_kyc_session). " +
+        "Returns the new sub_auth_id and the redacted record; the credentials are never returned here, the user copies them from the Vobiz console. " +
+        "Gated by VOBIZ_ENABLE_PROVISIONING and confirm: true; needs main-account (MA_) credentials.",
       inputSchema: {
         ...editableFields,
         name: z.string().trim().min(1).max(120).describe("Human-readable name for the sub-account."),
         business_type: z
           .enum(BUSINESS_TYPES)
           .optional()
-          .describe("Legal constitution of the customer; decides which KYC documents are collected."),
+          .describe(
+            "Legal constitution of the customer (individual, proprietorship, private_limited, llp, partnership, public_limited, trust, society, huf or government); decides which KYC documents are collected. Matters for kyc_mode customer_use.",
+          ),
         confirm: confirm("creating this sub-account"),
       },
+      outputSchema: z
+        .object({
+          ok: okOut,
+          created: z.boolean().optional().describe("true once Vobiz created the sub-account."),
+          sub_account: subAccountOut.nullable().optional(),
+          sub_auth_id: z.string().nullable().optional().describe("Auth ID of the new sub-account (SA_...), for the other sub-account tools."),
+          kyc_calls_blocked: z.boolean().nullable().optional().describe("true when the sub-account cannot place calls until its own KYC is verified."),
+          backend_message: backendMessage,
+          credentials_note: credentialsNote,
+          http_status: httpStatus,
+        })
+        .passthrough(),
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },
     handler(async (a) => {
@@ -218,9 +278,21 @@ export function registerSubAccountTools(server: McpServer, ctx: ToolContext): vo
     {
       title: "Update sub-account",
       description:
-        "Change a Vobiz sub-account's name, contact details, rate limit, permissions, enabled flag or kyc_mode. Only the fields you pass change. " +
-        "Moving to customer_use needs an email on the sub-account and can pause its calls until its KYC is verified. Gated by VOBIZ_ENABLE_PROVISIONING and confirm: true.",
+        "Change an existing Vobiz sub-account's name, contact details, description, rate limit, permissions, enabled flag or kyc_mode. " +
+        "Only the fields you pass change; omitted fields keep their values, and a call with no fields fails with invalid_input. " +
+        "Moving to customer_use needs an email on the sub-account and can pause its calls until its KYC is verified. " +
+        "Returns the updated record with credentials removed. To make a new sub-account use create_sub_account; to remove one use delete_sub_account. " +
+        "Gated by VOBIZ_ENABLE_PROVISIONING and confirm: true; needs main-account (MA_) credentials.",
       inputSchema: { sub_auth_id: subAuthId, ...editableFields, confirm: confirm("changing this sub-account") },
+      outputSchema: z
+        .object({
+          ok: okOut,
+          updated: z.boolean().optional().describe("true once Vobiz applied the change."),
+          sub_auth_id: z.string().optional().describe("The sub-account that was changed."),
+          sub_account: subAccountOut.nullable().optional(),
+          http_status: httpStatus,
+        })
+        .passthrough(),
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
     handler(async (a) => {
@@ -243,8 +315,18 @@ export function registerSubAccountTools(server: McpServer, ctx: ToolContext): vo
       title: "Delete sub-account",
       description:
         "Permanently delete a Vobiz sub-account and revoke its credentials. This removes the sub-account and cannot be undone: anything using its Auth ID stops working. " +
-        "Gated by VOBIZ_ENABLE_PROVISIONING and confirm: true.",
+        "To take a sub-account out of use while keeping it, use update_sub_account with enabled: false instead. " +
+        "Gated by VOBIZ_ENABLE_PROVISIONING and confirm: true; needs main-account (MA_) credentials.",
       inputSchema: { sub_auth_id: subAuthId, confirm: confirm("permanently deleting this sub-account and revoking its credentials") },
+      outputSchema: z
+        .object({
+          ok: okOut,
+          deleted: z.boolean().optional().describe("true once Vobiz removed the sub-account."),
+          sub_auth_id: z.string().optional().describe("The Auth ID that was deleted."),
+          backend_message: backendMessage,
+          http_status: httpStatus,
+        })
+        .passthrough(),
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
     handler(async (a) => {
@@ -268,8 +350,19 @@ export function registerSubAccountTools(server: McpServer, ctx: ToolContext): vo
     {
       title: "Get sub-account KYC status",
       description:
-        "Return a Vobiz sub-account's aggregated KYC state: overall status, per-document status (PAN, GST, CIN, Aadhaar), business type and whether calls are paused pending KYC. Read-only.",
+        "Return a Vobiz sub-account's aggregated KYC state: overall status, per-document status (PAN, GST, CIN, Aadhaar), business type and whether calls are paused pending KYC. " +
+        "Use it to track progress after create_sub_account_kyc_session or to explain why a customer_use sub-account cannot place calls; for the sub-account's settings and contact details use get_sub_account instead. " +
+        "Makes one request and changes nothing; needs main-account (MA_) credentials.",
       inputSchema: { sub_auth_id: subAuthId },
+      outputSchema: z
+        .object({
+          ok: okOut,
+          kyc: z
+            .record(z.string(), z.unknown())
+            .optional()
+            .describe("Aggregated KYC record from Vobiz: overall status, per-document statuses, business_type and the calls-paused flag."),
+        })
+        .passthrough(),
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     handler(async ({ sub_auth_id }) => {
@@ -289,16 +382,29 @@ export function registerSubAccountTools(server: McpServer, ctx: ToolContext): vo
       description:
         "Start a Vobiz-hosted KYC session for a sub-account. flow_type email (default) has Vobiz email the customer a secure verification link (customer_email required); " +
         "flow_type redirect returns a widget_url to send the customer to (redirect_url required). Optional webhook_url receives KYC events. " +
-        "Track progress with get_sub_account_kyc_status. Gated by VOBIZ_ENABLE_PROVISIONING and confirm: true.",
+        "Returns the session record (widget_url for the redirect flow) and a next_step hint; track progress with get_sub_account_kyc_status. " +
+        "Gated by VOBIZ_ENABLE_PROVISIONING and confirm: true; needs main-account (MA_) credentials.",
       inputSchema: {
         sub_auth_id: subAuthId,
-        flow_type: z.enum(["email", "redirect"]).optional().describe("Default email."),
+        flow_type: z
+          .enum(["email", "redirect"])
+          .optional()
+          .describe("email (default): Vobiz emails the customer a verification link. redirect: you send the customer to the returned widget_url yourself."),
         customer_email: z.string().trim().email().max(254).optional().describe("Required for flow_type email: Vobiz sends the KYC link here."),
         redirect_url: z.string().url().optional().describe("Required for flow_type redirect: where the customer's browser goes after verification (public https)."),
         webhook_url: z.string().url().optional().describe("Public https endpoint that receives KYC events. Omit for no callbacks."),
         expires_in_days: z.number().int().min(1).max(90).optional().describe("Days until the link expires (Vobiz default 7)."),
         confirm: confirm("starting KYC for this sub-account (the email flow emails the customer)"),
       },
+      outputSchema: z
+        .object({
+          ok: okOut,
+          created: z.boolean().optional().describe("true once the KYC session exists."),
+          session: z.record(z.string(), z.unknown()).optional().describe("The KYC session as Vobiz returns it (session id, flow_type, expiry, and widget_url for the redirect flow); secrets removed."),
+          next_step: z.string().optional().describe("What to do now: wait for the customer's email, or send them to widget_url."),
+          http_status: httpStatus,
+        })
+        .passthrough(),
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },
     handler(async (a) => {

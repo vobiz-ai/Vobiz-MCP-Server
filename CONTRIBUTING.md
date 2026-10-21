@@ -18,7 +18,7 @@ Thanks for helping make the Vobiz MCP server better. Bug reports, fixes, new too
   - a description that says what it does and when to use it
   - `readOnlyHint: true` (reads) or `destructiveHint: true` (writes)
 
-  Spell the product **Vobiz**.
+  Spell the product **Vobiz**. Before adding or editing a tool definition, follow the `tool-descriptions` skill in [`.claude/skills/tool-descriptions/SKILL.md`](.claude/skills/tool-descriptions/SKILL.md): it has the quality checklist, the house rules and the two checks (`npm run docs:coverage`, `npm run tdqs:lint`) that CI runs.
 
 ## Development setup
 

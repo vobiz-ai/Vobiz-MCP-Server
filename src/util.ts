@@ -11,20 +11,23 @@ import { VobizError, hintFor, isRetryable } from "./errors.js";
 export const phoneNumber = z
   .string()
   .trim()
-  .regex(/^\+?[1-9]\d{6,14}$/, "must be an E.164 phone number such as +919876543210 (digits only, optional leading +)");
+  .regex(/^\+?[1-9]\d{6,14}$/, "must be an E.164 phone number such as +919876543210 (digits only, optional leading +)")
+  .describe("Phone number in E.164 form, e.g. +919876543210 (country code, digits only, leading + optional).");
 
 /** Call / request UUIDs. Restricting the charset also prevents path injection. */
 export const callId = z
   .string()
   .trim()
-  .regex(/^[A-Za-z0-9_-]{8,64}$/, "must be a Vobiz call UUID (letters, digits, - and _ only)");
+  .regex(/^[A-Za-z0-9_-]{8,64}$/, "must be a Vobiz call UUID (letters, digits, - and _ only)")
+  .describe("Call UUID: the request_uuid returned by make_call, or call_uuid from list_live_calls or list_call_records.");
 
 export const isoDate = z
   .string()
   .regex(/^\d{4}-\d{2}-\d{2}$/, "must be a date in YYYY-MM-DD format")
   .refine((s) => !Number.isNaN(Date.parse(s + "T00:00:00Z")) && new Date(s + "T00:00:00Z").toISOString().startsWith(s), {
     message: "is not a real calendar date",
-  });
+  })
+  .describe("Calendar date in YYYY-MM-DD form (UTC).");
 
 /** Client-chosen key that makes a costly operation safe to repeat. */
 export const idempotencyKey = z

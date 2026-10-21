@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- **Tool definitions rewritten for agents.** Every one of the 428 parameters now carries a description (was 64%), every tool declares a described output schema (was none), and the "Read-only" suffixes are replaced by facts the annotations cannot carry: ordering, page size, what an unknown id returns, what is capped or redacted. Descriptions name the sibling tool for the excluded case (for example `get_call_status` vs `get_call_details`, `play_audio` vs `speak_text` vs `start_audio_stream`). Output schemas keep every field optional so error results validate on the client. Measured with the new `npm run docs:coverage`; `npm run tdqs:lint` runs Glama's deterministic Tool Definition Quality Score linter in CI.
+- **Server card.** The hosted connector serves an MCP server card at `/mcp/server-card` and `/.well-known/mcp/server-card.json` for directories that read it.
+- The skills tools describe the Vobiz skills as documentation playbooks and no longer read as a promise of operational tools for every product they cover.
+- Contributor skill `.claude/skills/tool-descriptions` holds the checklist every new tool definition is written to.
+
 ## 1.4.1
 
 - Release pipeline hardening that missed the 1.4.0 merge: GitHub Actions pinned to commit SHAs with job-scoped permissions, `npm ci --ignore-scripts` in CI, the MCP Registry publisher pinned and checksummed, `:latest` only moving for the highest stable tag, and the Docker image pinning `node:24-alpine` by digest and ffmpeg by version with npm removed from the runtime stage.

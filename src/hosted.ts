@@ -6,6 +6,7 @@
  *   POST /mcp                                   Streamable HTTP, Bearer token required
  *   GET  /.well-known/oauth-protected-resource/mcp   RFC 9728 metadata
  *   GET  /.well-known/oauth-authorization-server     RFC 8414 metadata (PKCE S256, DCR, CIMD)
+ *   GET  /mcp/server-card, /.well-known/mcp/server-card.json   MCP server card (draft extension; no auth, cached an hour)
  *   /authorize, /token, /register, /revoke      OAuth 2.1 authorization server (revoking a token ends its session)
  *   POST /oauth/login                           consent form: the user enters their Vobiz Auth ID + Auth Token
  *   GET  /favicon.svg, /favicon.ico             the Vobiz logomark for the server-rendered pages
@@ -52,6 +53,7 @@ import { createFirestoreSharedBackend, type SharedStoreBackend } from "./guard/s
 import { createLogger, type Logger } from "./logger.js";
 import { createServer, createSharedState } from "./server.js";
 import { SERVER_VERSION } from "./version.js";
+import { buildServerCard, serverCardHandler } from "./server-card.js";
 import { VOBIZ_FAVICON_SVG } from "./brand.js";
 import { Sealer } from "./sealer.js";
 import { classifyClient, redirectUriProblem, verifiedCimdName, type TrustedClient } from "./oauth/clients.js";
@@ -494,6 +496,11 @@ export function createHostedApp(o: HostedOptions): express.Express {
     bearer_methods_supported: ["header"],
   };
   app.get(new URL(getOAuthProtectedResourceMetadataUrl(mcpUrl)).pathname, (_req, res) => res.set("Access-Control-Allow-Origin", "*").json(prm));
+  // MCP server card (draft extension): public discovery metadata at the reserved <mcp-url>/server-card and a
+  // .well-known alias. Built from the config, so the URLs are the deployment's own.
+  const serverCard = serverCardHandler(buildServerCard({ cfg, mcpUrl, iconUrl: new URL(`${base}/favicon.svg`) }));
+  app.get(`${mcpUrl.pathname}/server-card`, serverCard);
+  app.get("/.well-known/mcp/server-card.json", serverCard);
   // OpenAI Apps domain verification: the token from the OpenAI platform, served verbatim.
   app.get("/.well-known/openai-apps-challenge", (_req, res) =>
     cfg.openaiAppsChallenge ? res.type("text/plain").set("Cache-Control", "no-store").send(cfg.openaiAppsChallenge) : res.status(404).json({ error: "not_found" }),

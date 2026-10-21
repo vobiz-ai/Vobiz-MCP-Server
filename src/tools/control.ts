@@ -24,8 +24,19 @@ import { CONFIRM_NOTE, hostOf, requireApproval, supportsFormElicitation, type To
 
 type Rec = Record<string, unknown>;
 
-const legs = z.enum(["aleg", "bleg", "both"]).optional().describe("Which call leg: aleg (default), bleg or both.");
+const legs = z
+  .enum(["aleg", "bleg", "both"])
+  .optional()
+  .describe("Which call leg the action applies to: aleg (the call's first leg, default), bleg (the leg bridged to it by <Dial>) or both.");
 const confirm = (what: string) => z.boolean().describe(`Must be true, set only after the user explicitly asked to ${what}.` + CONFIRM_NOTE);
+const liveCallUuid = callId.describe("UUID of the LIVE call to act on: the request_uuid returned by make_call, or a UUID from list_live_calls.");
+
+// ── Result fields shared by the in-call tools ───────────────────
+const okFlag = z.boolean().optional().describe("True on success. On a failure the result is isError with ok: false plus `error` (kind), `message`, `retryable` and sometimes `http_status`.");
+const outCallUuid = z.string().optional().describe("The call UUID the action was applied to, echoed from the request.");
+const outLegs = z.enum(["aleg", "bleg", "both"]).optional().describe("The leg(s) the action was applied to (aleg when none was given).");
+const backendMessage = z.string().nullable().optional().describe("Vobiz's own confirmation text for the request, or null when it sent none.");
+const httpStatus = z.number().int().optional().describe("HTTP status Vobiz answered with: 202 when an action was accepted, 204 when one was stopped.");
 
 /** https URL to an MP3 or WAV file (the formats Vobiz Play supports). */
 export const audioUrl = z
@@ -82,24 +93,39 @@ export function registerControlTools(server: McpServer, ctx: ToolContext): void 
     {
       title: "Transfer a live call",
       description:
-        "Blind-transfer a LIVE call (POST /Call/{uuid}/): Vobiz stops the current flow on the chosen leg and fetches new call XML. " +
-        "Give either `destination` (a phone number in E.164 or a sip: URI; the server hosts a <Dial> flow for it, HTTP mode only) or `aleg_url`/`bleg_url` (your own XML URL on an approved host). " +
-        "For an attended (warm) transfer, build the flow in VobizXML (for example hold music, then <Dial>). Requires confirm: true.",
+        "Blind-transfer a LIVE call (POST /Call/{uuid}/): Vobiz stops whatever the chosen leg is doing (IVR, playback, bridge) and fetches new VobizXML from the transfer URL. " +
+        "Give either `destination` (an E.164 number or sip: URI; this server hosts a <Dial> flow for it, A leg only, HTTP mode with VOBIZ_PUBLIC_URL) or your own `aleg_url` / `bleg_url` on an approved host, never both. " +
+        "For an attended (warm) transfer build the flow with generate_answer_xml (hold music, then dial) and pass its URL. To park a leg use hold_call, to run a keypad menu on it use gather_dtmf, to end the call use end_call. " +
+        "A destination number must pass the server's destination policy and becomes a new, billed call leg; a call that is not live fails with call_not_active. Requires confirm: true.",
       inputSchema: {
-        call_uuid: callId,
+        call_uuid: liveCallUuid,
         destination: z
           .string()
           .regex(/^(\+?[1-9]\d{6,14}|sip:[A-Za-z0-9_.+-]{1,64}@[A-Za-z0-9.-]{1,253})$/, "must be an E.164 number or sip:user@host")
           .optional()
-          .describe("Number or SIP URI to connect the call to."),
-        caller_id: z.string().regex(/^\+?[1-9]\d{6,14}$/).optional().describe("Caller ID for the transferred leg (a number on this account)."),
-        legs,
-        aleg_url: z.string().url().optional().describe("XML URL for the A leg (approved host only)."),
-        aleg_method: z.enum(["GET", "POST"]).optional(),
-        bleg_url: z.string().url().optional().describe("XML URL for the B leg (approved host only)."),
-        bleg_method: z.enum(["GET", "POST"]).optional(),
+          .describe("Where to connect the A leg: an E.164 number such as +14155550100, or sip:user@host. The server hosts the <Dial> flow (HTTP mode only). Not combinable with aleg_url/bleg_url."),
+        caller_id: z
+          .string()
+          .regex(/^\+?[1-9]\d{6,14}$/)
+          .optional()
+          .describe("Caller ID the destination sees: an E.164 number on this account. Only used together with `destination`."),
+        legs: legs.describe("Leg to transfer: aleg (the call's first leg, default), bleg (the party bridged by <Dial>) or both. With `destination` only aleg is allowed."),
+        aleg_url: z.string().url().optional().describe("https URL on an approved host that returns the VobizXML the A leg runs next. Required when legs is aleg or both and no destination is given."),
+        aleg_method: z.enum(["GET", "POST"]).optional().describe("HTTP method Vobiz uses to fetch aleg_url: GET or POST (default POST)."),
+        bleg_url: z.string().url().optional().describe("https URL on an approved host that returns the VobizXML the B leg runs next. Required when legs is bleg or both."),
+        bleg_method: z.enum(["GET", "POST"]).optional().describe("HTTP method Vobiz uses to fetch bleg_url: GET or POST (default POST)."),
         confirm: confirm("transfer this call"),
       },
+      outputSchema: z
+        .object({
+          ok: okFlag,
+          call_uuid: outCallUuid,
+          transferred: z.literal(true).optional().describe("True once Vobiz accepted the transfer; the leg fetches and runs the new XML asynchronously."),
+          legs: outLegs,
+          backend_message: backendMessage,
+          http_status: httpStatus,
+        })
+        .passthrough(),
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },
     handler(async (a, extra: ToolExtra) => {
@@ -151,14 +177,25 @@ export function registerControlTools(server: McpServer, ctx: ToolContext): void 
     {
       title: "Put a live call on hold",
       description:
-        "Puts a leg on hold by transferring it to a hosted flow that plays hold music (or silence) in a loop. " +
-        "Resume with unhold_call and the XML URL that should take over. HTTP mode with VOBIZ_PUBLIC_URL only. Requires confirm: true.",
+        "Put one leg of a LIVE call on hold (emulated: the leg is transferred to a hosted flow that loops `music_url`, or plays silence for up to an hour), so whatever that leg was doing stops. " +
+        "Resume with unhold_call and the XML URL that should take over; Vobiz cannot return to the exact point before the hold. To send the leg somewhere else use transfer_call; to silence audio you started with play_audio use stop_audio instead. " +
+        "HTTP mode with VOBIZ_PUBLIC_URL only; a call that is not live fails with call_not_active. Requires confirm: true.",
       inputSchema: {
-        call_uuid: callId,
-        legs,
-        music_url: audioUrl.optional().describe("Hold music (https .mp3/.wav). Silence if omitted."),
+        call_uuid: liveCallUuid,
+        legs: legs.describe("Leg to park: aleg (the call's first leg, default), bleg (the party bridged by <Dial>) or both. Give the same value to unhold_call."),
+        music_url: audioUrl.optional().describe("https .mp3/.wav to loop while on hold. Silence if omitted."),
         confirm: confirm("put this call on hold"),
       },
+      outputSchema: z
+        .object({
+          ok: okFlag,
+          call_uuid: outCallUuid,
+          on_hold: z.literal(true).optional().describe("True once Vobiz accepted the transfer into the hold flow."),
+          legs: outLegs,
+          emulated: z.literal(true).optional().describe("Always true: Vobiz has no native hold, so this is a transfer to a hosted hold flow."),
+          http_status: httpStatus,
+        })
+        .passthrough(),
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
     handler(async (a, extra: ToolExtra) => {
@@ -183,14 +220,25 @@ export function registerControlTools(server: McpServer, ctx: ToolContext): void 
     {
       title: "Resume a held call",
       description:
-        "Takes a leg off emulated hold by transferring it to `resume_url` (XML on an approved host, e.g. a hosted flow from generate_answer_xml). " +
-        "Vobiz cannot return to the exact point the call was at before hold. Requires confirm: true.",
+        "Take a leg of a LIVE call off emulated hold by transferring it to `resume_url` (VobizXML on an approved host, for example a hosted flow from generate_answer_xml or the url from gather_dtmf). " +
+        "Vobiz cannot return to the point the call was at before hold_call, so the resume XML decides what happens next (speak, dial the other party again, a menu). To end the call instead use end_call. " +
+        "Only meaningful after hold_call; a call that is not live fails with call_not_active. Requires confirm: true.",
       inputSchema: {
-        call_uuid: callId,
-        resume_url: z.string().url().describe("XML URL that should control the call after hold (approved host)."),
-        legs,
+        call_uuid: liveCallUuid,
+        resume_url: z.string().url().describe("https URL on an approved host returning the VobizXML that controls the leg after hold."),
+        legs: legs.describe("Leg to resume: the same value given to hold_call (default aleg)."),
         confirm: confirm("take this call off hold"),
       },
+      outputSchema: z
+        .object({
+          ok: okFlag,
+          call_uuid: outCallUuid,
+          on_hold: z.literal(false).optional().describe("False once Vobiz accepted the transfer to resume_url."),
+          legs: outLegs,
+          emulated: z.literal(true).optional().describe("Always true: hold and resume are transfers between hosted flows, not a native Vobiz hold."),
+          http_status: httpStatus,
+        })
+        .passthrough(),
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
     handler(async (a, extra: ToolExtra) => {
@@ -216,15 +264,27 @@ export function registerControlTools(server: McpServer, ctx: ToolContext): void 
     {
       title: "Play audio on a live call",
       description:
-        "Play one or more audio files (https .mp3/.wav) into a LIVE call (POST /Call/{uuid}/Play/). `mix: true` (default) plays over the conversation; false replaces it. Stop with stop_audio.",
+        "Play one to five audio files (https .mp3/.wav, in order) into a LIVE call (POST /Call/{uuid}/Play/). " +
+        "Use it for pre-recorded audio; for spoken text use speak_text, and to send the call's audio to your own WebSocket server use start_audio_stream. " +
+        "`mix: true` (default) plays over the conversation so the parties keep hearing each other; false replaces the leg's audio until playback ends. " +
+        "Playback ends when the files finish, after `length` seconds, or with stop_audio (stop_speaking and stop_recording do not affect it); with `loop` it repeats until stopped. A call that is not live fails with call_not_active.",
       inputSchema: {
-        call_uuid: callId,
-        urls: z.array(audioUrl).min(1).max(5).describe("Audio files to play in order."),
+        call_uuid: liveCallUuid,
+        urls: z.array(audioUrl).min(1).max(5).describe("One to five https URLs of .mp3 or .wav files, played in this order."),
         legs,
-        loop: z.boolean().optional().describe("Repeat until stopped."),
-        mix: z.boolean().optional().describe("Mix with the call audio (default true)."),
-        length: z.number().int().min(1).max(3600).optional().describe("Stop after this many seconds."),
+        loop: z.boolean().optional().describe("Repeat the files until stop_audio or `length` ends playback (default false)."),
+        mix: z.boolean().optional().describe("true (default): play over the conversation; false: replace the leg's audio while playing."),
+        length: z.number().int().min(1).max(3600).optional().describe("Stop playback after this many seconds (1-3600). Omit to play to the end."),
       },
+      outputSchema: z
+        .object({
+          ok: okFlag,
+          call_uuid: outCallUuid,
+          playing: z.literal(true).optional().describe("True once Vobiz accepted the playback request; audio starts within moments."),
+          backend_message: backendMessage,
+          http_status: httpStatus,
+        })
+        .passthrough(),
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },
     handler(async (a) => {
@@ -241,8 +301,18 @@ export function registerControlTools(server: McpServer, ctx: ToolContext): void 
     "stop_audio",
     {
       title: "Stop audio on a live call",
-      description: "Stop audio started by play_audio on a LIVE call (DELETE /Call/{uuid}/Play/).",
-      inputSchema: { call_uuid: callId },
+      description:
+        "Stop audio started by play_audio on a LIVE call (DELETE /Call/{uuid}/Play/); the call itself continues. " +
+        "It does not stop text-to-speech (use stop_speaking), a recording (stop_recording) or an audio stream (stop_audio_stream). A call that is not live fails with call_not_active.",
+      inputSchema: { call_uuid: liveCallUuid.describe("UUID of the live call whose play_audio playback should stop.") },
+      outputSchema: z
+        .object({
+          ok: okFlag,
+          call_uuid: outCallUuid,
+          playing: z.literal(false).optional().describe("False once Vobiz accepted the stop request."),
+          http_status: httpStatus,
+        })
+        .passthrough(),
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
     handler(async ({ call_uuid }) => {
@@ -257,17 +327,29 @@ export function registerControlTools(server: McpServer, ctx: ToolContext): void 
     {
       title: "Speak text on a live call",
       description:
-        "Read text aloud into a LIVE call with Vobiz text-to-speech (POST /Call/{uuid}/Speak/). voice WOMAN or MAN; language e.g. en-US, en-IN, hi-IN; type ssml for SSML markup. Stop with stop_speaking.",
+        "Read `text` aloud into a LIVE call with Vobiz text-to-speech (POST /Call/{uuid}/Speak/). " +
+        "Use it for dynamic sentences; for a pre-recorded file use play_audio, and to connect your own AI voice agent or transcription use start_audio_stream. " +
+        "Plain text or SSML (`type: ssml`), up to 3000 characters, spoken in `language` (default en-US) with a WOMAN (default) or MAN voice; `mix` and `loop` work as in play_audio. " +
+        "Speech ends when the text finishes, or earlier with stop_speaking (stop_audio does not stop it). A call that is not live fails with call_not_active.",
       inputSchema: {
-        call_uuid: callId,
-        text: z.string().trim().min(1).max(3000).describe("Text (or SSML when type is ssml), max 3000 characters."),
-        voice: z.enum(["WOMAN", "MAN"]).optional(),
-        language: z.enum(SPEAK_LANGS).optional().describe("Default en-US."),
-        type: z.enum(["text", "ssml"]).optional(),
+        call_uuid: liveCallUuid,
+        text: z.string().trim().min(1).max(3000).describe("Text to speak, or SSML markup when type is ssml; 1-3000 characters."),
+        voice: z.enum(["WOMAN", "MAN"]).optional().describe("Voice: WOMAN (default) or MAN."),
+        language: z.enum(SPEAK_LANGS).optional().describe("Locale the text is spoken in, e.g. en-US (default), en-IN, hi-IN, de-DE; pick the one matching the text."),
+        type: z.enum(["text", "ssml"]).optional().describe("text (default): `text` is plain text; ssml: `text` is SSML markup for pauses, emphasis and prosody."),
         legs,
-        loop: z.boolean().optional(),
-        mix: z.boolean().optional(),
+        loop: z.boolean().optional().describe("Repeat the text until stop_speaking is called (default false)."),
+        mix: z.boolean().optional().describe("true: speak over the conversation so the parties still hear each other; false: replace the leg's audio while speaking."),
       },
+      outputSchema: z
+        .object({
+          ok: okFlag,
+          call_uuid: outCallUuid,
+          speaking: z.literal(true).optional().describe("True once Vobiz accepted the speech request; audio starts within moments."),
+          backend_message: backendMessage,
+          http_status: httpStatus,
+        })
+        .passthrough(),
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },
     handler(async (a) => {
@@ -282,8 +364,18 @@ export function registerControlTools(server: McpServer, ctx: ToolContext): void 
     "stop_speaking",
     {
       title: "Stop speech on a live call",
-      description: "Stop text-to-speech started by speak_text on a LIVE call (DELETE /Call/{uuid}/Speak/).",
-      inputSchema: { call_uuid: callId },
+      description:
+        "Stop text-to-speech started by speak_text on a LIVE call (DELETE /Call/{uuid}/Speak/); the call itself continues. " +
+        "It does not stop play_audio playback (use stop_audio), a recording (stop_recording) or an audio stream (stop_audio_stream). A call that is not live fails with call_not_active.",
+      inputSchema: { call_uuid: liveCallUuid.describe("UUID of the live call whose speak_text speech should stop.") },
+      outputSchema: z
+        .object({
+          ok: okFlag,
+          call_uuid: outCallUuid,
+          speaking: z.literal(false).optional().describe("False once Vobiz accepted the stop request."),
+          http_status: httpStatus,
+        })
+        .passthrough(),
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
     handler(async ({ call_uuid }) => {
@@ -298,15 +390,29 @@ export function registerControlTools(server: McpServer, ctx: ToolContext): void 
     {
       title: "Start recording a live call",
       description:
-        "Start recording a LIVE call (POST /Call/{uuid}/Record/). Recording may require consent from the other party in your jurisdiction; confirm with the user first. " +
-        "Returns the recording_id/url Vobiz reports. Stop with stop_recording; find the file afterwards with get_call_recording. Requires confirm: true.",
+        "Start recording a LIVE call (POST /Call/{uuid}/Record/) into one file, either mixed (mono, default) or one party per channel (stereo). " +
+        "Recording ends at `time_limit` seconds (default 60, max 8 hours), when the call hangs up, or with stop_recording; the file then appears in get_call_recording / list_recordings and its storage is billed. " +
+        "Playback and speech on the call (play_audio, speak_text) are unaffected; to capture only a caller's answer inside an IVR use the record action of generate_answer_xml instead. " +
+        "Recording may require consent from the other party in your jurisdiction, so confirm with the user first. Requires confirm: true.",
       inputSchema: {
-        call_uuid: callId,
-        time_limit: z.number().int().min(1).max(28800).optional().describe("Max seconds to record (Vobiz max 28800; default 60)."),
-        file_format: z.enum(["mp3", "wav"]).optional(),
-        record_channel_type: z.enum(["mono", "stereo"]).optional(),
+        call_uuid: liveCallUuid,
+        time_limit: z.number().int().min(1).max(28800).optional().describe("Maximum seconds to record, 1-28800 (default 60). The recording also ends when the call does."),
+        file_format: z.enum(["mp3", "wav"]).optional().describe("Audio format of the file: mp3 (default) or wav."),
+        record_channel_type: z.enum(["mono", "stereo"]).optional().describe("mono (default): both parties mixed into one channel; stereo: each party on its own channel."),
         confirm: confirm("record this call"),
       },
+      outputSchema: z
+        .object({
+          ok: okFlag,
+          call_uuid: outCallUuid,
+          recording: z.literal(true).optional().describe("True once Vobiz accepted the request and started recording."),
+          recording_id: z.union([z.string(), z.number()]).nullable().optional().describe("Identifier Vobiz assigned to this recording, or null when it did not report one."),
+          url: z.string().nullable().optional().describe("URL of the recording file as Vobiz reports it; pass it to stop_recording to stop just this recording. Null when not reported."),
+          backend_message: backendMessage,
+          http_status: httpStatus,
+          note: z.string().optional().describe("Reminder that the file is only retrievable (get_call_recording) after the recording stops."),
+        })
+        .passthrough(),
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },
     handler(async (a, extra: ToolExtra) => {
@@ -338,11 +444,22 @@ export function registerControlTools(server: McpServer, ctx: ToolContext): void 
     {
       title: "Stop recording a live call",
       description:
-        "Stop recording on a LIVE call (DELETE /Call/{uuid}/Record/). Pass the recording `url` returned by start_recording to stop one recording; omit it to stop all recordings on the call.",
+        "Stop a recording on a LIVE call (DELETE /Call/{uuid}/Record/): pass the `url` returned by start_recording to stop that one recording, or omit it to stop every recording on the call. " +
+        "The file is finalised and appears in get_call_recording shortly after; the call itself, playback (stop_audio) and speech (stop_speaking) are unaffected. " +
+        "A call that is not live fails with call_not_active (the hangup already closed its recordings).",
       inputSchema: {
-        call_uuid: callId,
-        url: z.string().url().optional().describe("Recording file URL from start_recording."),
+        call_uuid: liveCallUuid.describe("UUID of the live call being recorded."),
+        url: z.string().url().optional().describe("Recording file URL from start_recording, to stop only that recording. Omit to stop all recordings on the call."),
       },
+      outputSchema: z
+        .object({
+          ok: okFlag,
+          call_uuid: outCallUuid,
+          recording: z.literal(false).optional().describe("False once Vobiz accepted the stop request."),
+          stopped: z.enum(["one", "all"]).optional().describe("\"one\" when a url was given, \"all\" when every recording on the call was stopped."),
+          http_status: httpStatus,
+        })
+        .passthrough(),
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
     handler(async ({ call_uuid, url }) => {

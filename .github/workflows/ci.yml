@@ -30,6 +30,9 @@ jobs:
       - run: npm run build
       # Mocked tests only: no Vobiz credentials are available (or wanted) in CI.
       - run: npx vitest run
+      # Deterministic tool-definition quality checklist (parameter descriptions, annotations, output schemas); no model, no key.
+      - name: Lint the tool definitions
+        run: npm run tdqs:lint
       - run: npm audit --omit=dev --audit-level=high
       - name: Client integration files are up to date
         run: npm run clients:gen && git diff --exit-code
