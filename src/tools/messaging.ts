@@ -25,9 +25,37 @@ const isoTimestamp = z
   .string()
   .regex(/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?)?$/, "must be an ISO 8601 date or timestamp, e.g. 2026-11-01T09:00:00Z");
 const limit = (max: number) => z.number().int().min(1).max(max).optional();
-const offset = z.number().int().min(0).max(1_000_000).optional();
+const offset = (what: string) =>
+  z.number().int().min(0).max(1_000_000).optional().describe(`Number of ${what} to skip before the page starts (default 0). Add the page size to it for the next page.`);
 
 const ZERO_TIME = /^0001-01-01/;
+
+// ── Output schema building blocks ───────────────────────────────
+const untrustedOut = {
+  notice: z.string().optional().describe("Reminder that message bodies and names were written by third parties."),
+  untrusted_fields: z.array(z.string()).optional().describe("Names of the fields that hold third-party text."),
+};
+const messageItem = z
+  .unknown()
+  .describe("One message: id, direction (in/out), channel, from, to, text, mediaUrls, status, errorCode, errorMessage, tag, conversationId, scheduledAt, createdAt, updatedAt, with untrusted: true.");
+const offsetPage = z
+  .object({
+    limit: z.number().optional().describe("Page size that was applied."),
+    offset: z.number().optional().describe("Offset that was applied."),
+    total: z.number().nullable().optional().describe("Total matching messages, or null when Vobiz did not report it."),
+    has_more: z.boolean().optional().describe("True when another page exists."),
+    next_offset: z.number().nullable().optional().describe("Offset to pass for the next page, or null on the last page."),
+  })
+  .passthrough();
+const optOutResult = (optedOut: boolean) =>
+  z
+    .object({
+      ok: z.literal(true),
+      phone_number: z.string().optional().describe("The number, normalised to E.164."),
+      channel: z.string().optional().describe("Channel the change applies to: sms, mms or rcs."),
+      opted_out: z.literal(optedOut).optional().describe(optedOut ? "Always true: the number is now blocked." : "Always false: the number can be messaged again."),
+    })
+    .passthrough();
 
 /** Message fields a third party can write (inbound bodies, MMS subjects, RCS sender names, carrier error text). */
 export const MESSAGE_UNTRUSTED_FIELDS = ["text", "title", "from", "errorMessage", "lastMessage"];
@@ -128,6 +156,19 @@ export function registerMessagingTools(server: McpServer, ctx: ToolContext): voi
         idempotency_key: idempotencyKey,
         confirm: z.boolean().describe("Must be true, set only after the user explicitly approved this send." + CONFIRM_NOTE),
       },
+      outputSchema: z
+        .object({
+          ok: z.boolean().describe("True only when every recipient was handed to the network; false when any recipient was not sent."),
+          sent_count: z.number().optional().describe("Recipients whose message was accepted (status scheduled or sent)."),
+          not_sent_count: z.number().optional().describe("Recipients refused or failed; see their errorCode (e.g. opted_out)."),
+          messages: z
+            .array(z.unknown())
+            .optional()
+            .describe("One entry per recipient, in the order given: id, to, status (scheduled, sent, not_sent, unknown), errorCode and errorMessage when not sent."),
+          note: z.string().optional().describe("What the statuses mean and what to do next."),
+          http_statuses: z.array(z.number()).optional().describe("HTTP status Vobiz returned for each accepted recipient."),
+        })
+        .passthrough(),
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
     handler(async (a, extra: ToolExtra) => {
@@ -215,13 +256,30 @@ export function registerMessagingTools(server: McpServer, ctx: ToolContext): voi
     {
       title: "Preview message cost",
       description:
-        "Price one message before sending: segment count, unit cost, total cost and currency for a sender, recipient and text (GET /api/v1/sms/messages/cost-preview). Sends nothing. Read-only.",
+        "Price one message before sending (GET /api/v1/sms/messages/cost-preview): segment count, unit cost, total cost, currency and destination country for a sender, recipient and text. " +
+        "Sends nothing and is not billed. Use it before send_message to show the user the price; the real charge is per recipient and per segment, so multiply by the number of recipients. RCS cannot be previewed.",
       inputSchema: {
-        from: phoneNumber.describe("Your Vobiz messaging number, E.164."),
-        to: phoneNumber.describe("Recipient, E.164."),
-        text: z.string().max(1600).optional().describe("Message body; its length decides the segment count."),
-        channel: z.enum(["sms", "mms"]).optional().describe("sms (default) or mms."),
+        from: phoneNumber.describe("Your Vobiz messaging number, E.164 (see list_messaging_numbers)."),
+        to: phoneNumber.describe("Recipient, E.164; its country decides the unit price."),
+        text: z.string().max(1600).optional().describe("Message body; its length and characters decide the segment count."),
+        channel: z.enum(["sms", "mms"]).optional().describe("Channel to price: sms (default) or mms."),
       },
+      outputSchema: z
+        .object({
+          ok: z.literal(true),
+          preview: z
+            .object({
+              channel: z.string().optional().describe("Channel that was priced."),
+              segmentCount: z.number().optional().describe("Billable segments the text splits into."),
+              unitCost: z.number().optional().describe("Price of one segment."),
+              totalCost: z.number().optional().describe("unitCost multiplied by segmentCount, for this one recipient."),
+              currency: z.string().optional().describe("ISO currency of the prices."),
+              country: z.string().optional().describe("Destination country derived from the recipient number."),
+            })
+            .passthrough()
+            .optional(),
+        })
+        .passthrough(),
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     handler(async (a) => {
@@ -238,19 +296,35 @@ export function registerMessagingTools(server: McpServer, ctx: ToolContext): voi
     {
       title: "List messages",
       description:
-        "List SMS, MMS and RCS messages on this account, newest first, with filters (status, channel, direction in/out, to, from, tag, date range) and limit/offset paging. Read-only." + UNTRUSTED_DESCRIPTION,
+        "List the SMS, MMS and RCS messages on this account, sent and received, newest first (GET /api/v1/sms/messages). " +
+        "Every filter is an exact match and omitted filters are not applied: combine status, channel, direction, to, from, tag and a start/end time to find messages you did not keep the id of, for example the other recipients of a multi-recipient send (filter by tag). " +
+        "Page with limit (default 20, max 100) and offset; pagination.total and next_offset say when to stop. " +
+        "For one message with its status history use get_message; for threads grouped by contact use list_conversations." +
+        UNTRUSTED_DESCRIPTION,
       inputSchema: {
-        status: z.enum(["scheduled", "sent", "delivered", "failed", "received", "unknown"]).optional(),
-        channel: channel.optional(),
-        direction: z.enum(["in", "out"]).optional().describe("in = received, out = sent."),
-        to: phoneNumber.optional(),
-        from: z.string().trim().max(64).optional(),
-        tag: z.string().max(100).optional(),
-        start_date: isoTimestamp.optional().describe("Created at or after, ISO 8601."),
-        end_date: isoTimestamp.optional().describe("Created at or before, ISO 8601."),
+        status: z
+          .enum(["scheduled", "sent", "delivered", "failed", "received", "unknown"])
+          .optional()
+          .describe("Only messages in this state: scheduled (held until scheduledAt), sent (handed to the network), delivered (receipt confirmed), failed (see errorCode/errorMessage), received (inbound) or unknown (no receipt yet)."),
+        channel: channel.optional().describe("Only messages on the channel actually used: sms, mms or rcs. An SMS that was upgraded to MMS appears under mms."),
+        direction: z.enum(["in", "out"]).optional().describe("in = received on one of your numbers, out = sent by you. Omit for both."),
+        to: phoneNumber.optional().describe("Recipient number, E.164, exact match. For inbound messages this is your own number."),
+        from: z.string().trim().max(64).optional().describe("Sender, exact match: one of your numbers in E.164, or your RCS sender name for RCS. For inbound messages this is the contact's number."),
+        tag: z.string().max(100).optional().describe("Only messages whose tag equals this value exactly (the tag given to send_message)."),
+        start_date: isoTimestamp.optional().describe("Only messages created at or after this ISO 8601 time, e.g. 2026-10-01T00:00:00Z."),
+        end_date: isoTimestamp.optional().describe("Only messages created up to this ISO 8601 time; combine with start_date for a range."),
         limit: limit(100).describe("Page size, 1-100 (default 20)."),
-        offset,
+        offset: offset("messages"),
       },
+      outputSchema: z
+        .object({
+          ok: z.literal(true),
+          count: z.number().optional().describe("Messages on this page."),
+          messages: z.array(messageItem).optional().describe("Messages on this page, newest first."),
+          pagination: offsetPage.optional(),
+          ...untrustedOut,
+        })
+        .passthrough(),
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     handler(async (a) => {
@@ -286,8 +360,22 @@ export function registerMessagingTools(server: McpServer, ctx: ToolContext): voi
     "get_message",
     {
       title: "Get a message",
-      description: "Return one message by ID with its current status, error details and status history (sent → delivered / failed). Read-only." + UNTRUSTED_DESCRIPTION,
-      inputSchema: { message_id: messageId },
+      description:
+        "Return one message by message_id (GET /api/v1/sms/messages/{id}) with its current status, errorCode/errorMessage and statusHistory, the list of every status change oldest first. " +
+        "Use it to follow a send from sent to delivered or failed; it is the only tool that returns the history. An id that is not on this account returns the not_found error. " +
+        "To find messages without an id use list_messages." +
+        UNTRUSTED_DESCRIPTION,
+      inputSchema: { message_id: messageId.describe("Message id as returned by send_message (messages[].id), list_messages or get_conversation_messages.") },
+      outputSchema: z
+        .object({
+          ok: z.literal(true),
+          message: z
+            .unknown()
+            .optional()
+            .describe("The message: id, direction, channel, from, to, text, mediaUrls, status, errorCode, errorMessage, tag, conversationId, createdAt, plus statusHistory (status, errorCode, createdAt per change), with untrusted: true."),
+          ...untrustedOut,
+        })
+        .passthrough(),
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     handler(async ({ message_id }) => {
@@ -301,8 +389,23 @@ export function registerMessagingTools(server: McpServer, ctx: ToolContext): voi
     "list_conversations",
     {
       title: "List conversations",
-      description: "List message threads (one per pair of numbers and channel), most recently active first, with message and unread counts. Read-only." + UNTRUSTED_DESCRIPTION,
-      inputSchema: { limit: limit(100).describe("Page size, 1-100 (default 20)."), offset },
+      description:
+        "List message threads on this account, most recently active first (GET /api/v1/sms/conversations). A conversation is the thread between one of your numbers and one contact on one channel; Vobiz creates it with the first message in either direction and tracks messageCount, unreadCount and lastMessageAt. " +
+        "Page with limit (default 20, max 100) and offset; the end is reached when a page returns fewer than limit (there is no total). " +
+        "To read a thread use get_conversation_messages with its id; to search individual messages across threads use list_messages." +
+        UNTRUSTED_DESCRIPTION,
+      inputSchema: { limit: limit(100).describe("Page size, 1-100 (default 20)."), offset: offset("conversations") },
+      outputSchema: z
+        .object({
+          ok: z.literal(true),
+          count: z.number().optional().describe("Conversations on this page."),
+          conversations: z
+            .array(z.unknown())
+            .optional()
+            .describe("Threads on this page, most recently active first: id, participantA, participantB, channel, lastMessageAt, messageCount, unreadCount, lastReadAt, createdAt, with untrusted: true."),
+          ...untrustedOut,
+        })
+        .passthrough(),
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     handler(async (a) => {
@@ -316,8 +419,25 @@ export function registerMessagingTools(server: McpServer, ctx: ToolContext): voi
     "get_conversation_messages",
     {
       title: "Get conversation messages",
-      description: "Return the messages of one conversation (from list_conversations or a message's conversationId), oldest first. Read-only." + UNTRUSTED_DESCRIPTION,
-      inputSchema: { conversation_id: messageId.describe("Conversation ID."), limit: limit(100).describe("Page size, 1-100 (default 50)."), offset },
+      description:
+        "Return the messages of one conversation in both directions, newest first (GET /api/v1/sms/conversations/{id}/messages); reverse the page to show it as a chat. " +
+        "Entries carry status, errorCode and text but no statusHistory: use get_message for one message's history. Page with limit (default 50, max 100) and offset; an unknown conversation_id returns the not_found error. " +
+        "Find ids with list_conversations or from the conversationId on any message." +
+        UNTRUSTED_DESCRIPTION,
+      inputSchema: {
+        conversation_id: messageId.describe("Conversation id from list_conversations, or the conversationId field on any message."),
+        limit: limit(100).describe("Page size, 1-100 (default 50)."),
+        offset: offset("messages"),
+      },
+      outputSchema: z
+        .object({
+          ok: z.literal(true),
+          conversation_id: z.string().optional().describe("Echo of the conversation that was read."),
+          count: z.number().optional().describe("Messages on this page."),
+          messages: z.array(messageItem).optional().describe("Messages on this page, newest first, without statusHistory."),
+          ...untrustedOut,
+        })
+        .passthrough(),
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     handler(async (a) => {
@@ -334,8 +454,23 @@ export function registerMessagingTools(server: McpServer, ctx: ToolContext): voi
     "list_messaging_numbers",
     {
       title: "List messaging numbers",
-      description: "List the numbers on this account that can send and receive SMS/MMS, with capabilities and their latest message. Use one as send_message `from`. Read-only." + UNTRUSTED_DESCRIPTION,
+      description:
+        "List the numbers on this account that are routed for SMS/MMS, sorted by country code then number (GET /api/v1/sms/numbers): e164, channels, capabilities, US 10DLC or toll-free registration state, a `sendable` summary (international, usDomestic) and the last message each sent. " +
+        "Not paginated: every messaging number is returned. Pick one as send_message `from` and check sendable.usDomestic before messaging US recipients. " +
+        "For every phone number on the account, including voice-only ones, use list_phone_numbers." +
+        UNTRUSTED_DESCRIPTION,
       inputSchema: {},
+      outputSchema: z
+        .object({
+          ok: z.literal(true),
+          count: z.number().optional().describe("Number of messaging numbers on the account."),
+          numbers: z
+            .array(z.unknown())
+            .optional()
+            .describe("Each number: e164, countryCode, channels, type, capabilities, tollFree, registration (kind, status, campaign), sendable (international, usDomestic), lastMessage (status, to, createdAt, marked untrusted)."),
+          ...untrustedOut,
+        })
+        .passthrough(),
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     handler(async () => {
@@ -353,8 +488,22 @@ export function registerMessagingTools(server: McpServer, ctx: ToolContext): voi
     "list_broadcasts",
     {
       title: "List broadcasts",
-      description: "List bulk-message broadcasts on this account with status (draft, scheduled, running, paused, completed, cancelled) and delivery stats. Read-only.",
-      inputSchema: { limit: limit(500).describe("Page size, 1-500 (default 50)."), offset },
+      description:
+        "List the bulk-message broadcasts on this account, newest first (GET /api/v1/sms/broadcasts), each with its status (draft, scheduled, running, paused, completed, cancelled or failed) and freshly counted stats (total, pending, sent, delivered, failed, optedOut, skipped). " +
+        "Page with limit (default 50, max 500) and offset; `total` is the account-wide count, so page until offset reaches it. " +
+        "For one broadcast's template, schedule and send rate use get_broadcast. This server only reads broadcasts; they are created and launched in the Vobiz console.",
+      inputSchema: { limit: limit(500).describe("Page size, 1-500 (default 50)."), offset: offset("broadcasts") },
+      outputSchema: z
+        .object({
+          ok: z.literal(true),
+          count: z.number().optional().describe("Broadcasts on this page."),
+          total: z.unknown().optional().describe("Account-wide number of broadcasts, or null when Vobiz did not report it."),
+          broadcasts: z
+            .array(z.unknown())
+            .optional()
+            .describe("Broadcasts on this page, newest first: id, name, from, channel, template, status, pauseReason, scheduledAt, ratePerSecond, tag, stats, createdAt, startedAt, completedAt."),
+        })
+        .passthrough(),
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     handler(async (a) => {
@@ -368,8 +517,19 @@ export function registerMessagingTools(server: McpServer, ctx: ToolContext): voi
     "get_broadcast",
     {
       title: "Get a broadcast",
-      description: "Return one broadcast with its template, schedule, send rate and stats (total, sent, delivered, failed). Read-only.",
-      inputSchema: { broadcast_id: messageId.describe("Broadcast ID.") },
+      description:
+        "Return one broadcast by broadcast_id (GET /api/v1/sms/broadcasts/{id}): name, sender, template with {{variable}} placeholders, status and pauseReason, scheduledAt, ratePerSecond, tag, DLT ids and freshly counted stats (total, pending, sent, delivered, failed, optedOut, skipped). " +
+        "Poll it while a broadcast is running to follow progress. An id that is not on this account returns the not_found error; find ids with list_broadcasts.",
+      inputSchema: { broadcast_id: messageId.describe("Broadcast id, as listed by list_broadcasts or shown in the Vobiz console.") },
+      outputSchema: z
+        .object({
+          ok: z.literal(true),
+          broadcast: z
+            .unknown()
+            .optional()
+            .describe("The broadcast: id, name, from, channel, template, status, pauseReason, scheduledAt, ratePerSecond, tag, dltEntityId, dltHeaderId, dltTemplateId, columns, stats, createdAt, startedAt, completedAt."),
+        })
+        .passthrough(),
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     handler(async ({ broadcast_id }) => {
@@ -385,8 +545,19 @@ export function registerMessagingTools(server: McpServer, ctx: ToolContext): voi
     "check_opt_out",
     {
       title: "Check opt-out",
-      description: "Check whether a phone number has opted out of messages on a channel. Vobiz refuses sends to opted-out numbers. Read-only.",
-      inputSchema: { phone_number: phoneNumber, channel: optChannel },
+      description:
+        "Check whether ONE phone number is on this account's opt-out list for a channel (GET /api/v1/sms/opt-outs/{phone}) and return opted_out true or false. " +
+        "Call it before send_message to skip a blocked contact instead of handling the opted_out refusal. A number Vobiz has never seen is simply not opted out, so the answer is always definite. " +
+        "To list every blocked number use list_opt_outs; to change the list use add_opt_out or remove_opt_out.",
+      inputSchema: { phone_number: phoneNumber.describe("The number to check, E.164 (leading + optional)."), channel: optChannel },
+      outputSchema: z
+        .object({
+          ok: z.literal(true),
+          phone_number: z.string().optional().describe("The number, normalised to E.164."),
+          channel: z.string().optional().describe("Channel that was checked: sms, mms or rcs."),
+          opted_out: z.boolean().optional().describe("True when send_message would refuse this number on this channel."),
+        })
+        .passthrough(),
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     handler(async (a) => {
@@ -399,8 +570,21 @@ export function registerMessagingTools(server: McpServer, ctx: ToolContext): voi
     "list_opt_outs",
     {
       title: "List opt-outs",
-      description: "List numbers that opted out (by STOP keyword or added manually), with channel, reason and source. Read-only.",
-      inputSchema: { limit: limit(100).describe("Page size, 1-100 (default 20)."), offset },
+      description:
+        "List the numbers that opted out of messages from this account, newest first (GET /api/v1/sms/opt-outs): phoneNumber, channel, reason, source (inbound = a STOP keyword reply, manual = added through the API or console) and syncedToProvider. " +
+        "Page with limit (default 20, max 100) and offset; the end is reached when a page returns fewer than limit (there is no total). " +
+        "To test one number use check_opt_out; to block or unblock use add_opt_out or remove_opt_out.",
+      inputSchema: { limit: limit(100).describe("Page size, 1-100 (default 20)."), offset: offset("entries") },
+      outputSchema: z
+        .object({
+          ok: z.literal(true),
+          count: z.number().optional().describe("Entries on this page."),
+          opt_outs: z
+            .array(z.unknown())
+            .optional()
+            .describe("Entries on this page, newest first: id, phoneNumber, channel, reason, source (inbound or manual), syncedToProvider, createdAt."),
+        })
+        .passthrough(),
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     handler(async (a) => {
@@ -415,13 +599,16 @@ export function registerMessagingTools(server: McpServer, ctx: ToolContext): voi
     {
       title: "Add an opt-out",
       description:
-        "Block a phone number from receiving messages on a channel (for example after a customer asks to stop). Requires confirm: true and VOBIZ_ENABLE_MESSAGING=true. Safe to repeat.",
+        "Block a phone number from receiving messages from this account on a channel (POST /api/v1/sms/opt-outs), for example after a customer asks to stop; send_message then refuses it with opted_out. " +
+        "Requires VOBIZ_ENABLE_MESSAGING=true on the server and confirm: true after the user approved blocking this number. Adding a number that is already blocked succeeds without change. " +
+        "The reverse is remove_opt_out; to look before changing, use check_opt_out.",
       inputSchema: {
-        phone_number: phoneNumber,
+        phone_number: phoneNumber.describe("The number to block, E.164 (leading + optional)."),
         channel: optChannel,
-        reason: z.string().max(200).optional().describe("Note stored on the record, e.g. 'customer request'."),
+        reason: z.string().max(200).optional().describe("Note stored on the record, e.g. 'customer request' (default 'manual')."),
         confirm: z.boolean().describe("Must be true after the user approved blocking this number."),
       },
+      outputSchema: optOutResult(true),
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
     handler(async (a) => {
@@ -437,13 +624,15 @@ export function registerMessagingTools(server: McpServer, ctx: ToolContext): voi
     {
       title: "Remove an opt-out",
       description:
-        "Allow messages to a number again. Only do this when the person has explicitly opted back in (for example by texting START); messaging someone who opted out breaks consent rules. " +
-        "Requires confirm: true and VOBIZ_ENABLE_MESSAGING=true.",
+        "Allow messages to a number again by deleting it from this account's opt-out list on a channel (DELETE /api/v1/sms/opt-outs/{phone}); the reverse of add_opt_out. " +
+        "Only do this when the person has explicitly opted back in (for example by texting START): messaging someone who opted out breaks consent rules. " +
+        "Requires VOBIZ_ENABLE_MESSAGING=true on the server and confirm: true. Check the current state first with check_opt_out.",
       inputSchema: {
-        phone_number: phoneNumber,
+        phone_number: phoneNumber.describe("The number to unblock, E.164 (leading + optional)."),
         channel: optChannel,
         confirm: z.boolean().describe("Must be true after the user confirmed this person opted back in."),
       },
+      outputSchema: optOutResult(false),
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
     handler(async (a) => {
