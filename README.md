@@ -17,6 +17,7 @@ It also ships the **Vobiz Agent Skills**, so the model knows how each Vobiz prod
 [![npm](https://img.shields.io/npm/v/@vobiz/mcp)](https://www.npmjs.com/package/@vobiz/mcp)
 [![MCP Registry](https://img.shields.io/badge/MCP_Registry-io.github.vobiz--ai%2Fvobiz--mcp-E83C00)](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.vobiz-ai/vobiz-mcp)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
+[![Glama](https://glama.ai/mcp/servers/vobiz-ai/Vobiz-MCP-Server/badge)](https://glama.ai/mcp/servers/vobiz-ai/Vobiz-MCP-Server)
 
 | | |
 |---|---|
