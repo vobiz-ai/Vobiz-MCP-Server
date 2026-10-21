@@ -281,7 +281,7 @@ const PLACEHOLDER_HOW_TO =
 const supportsElicitation = (server: McpServer) => supportsFormElicitation(server.server.getClientCapabilities());
 
 // ── Result fields shared by the call tools ──────────────────────
-const okTrue = z.literal(true).describe("Always true on success; failures come back as an isError result with `error` and `message` instead.");
+const okFlag = z.boolean().optional().describe("True on success. On a failure the result is isError with ok: false plus `error` (kind), `message`, `retryable` and sometimes `http_status`.");
 const outCallUuid = z.string().optional().describe("The call UUID the request was about, echoed back.");
 const httpStatus = z.number().int().optional().describe("HTTP status Vobiz answered with.");
 const untrustedNotice = {
@@ -356,7 +356,7 @@ export function registerCallTools(server: McpServer, ctx: ToolContext): void {
       },
       outputSchema: z
         .object({
-          ok: okTrue,
+          ok: okFlag,
           accepted: z.boolean().optional().describe("True when Vobiz accepted or queued the call request."),
           connected: z.boolean().optional().describe("Always false here: acceptance says nothing about the call being answered. Follow it with get_call_status."),
           request_uuid: z.string().optional().describe("Vobiz's identifier for the call; pass it as call_uuid to get_call_status, end_call and the in-call tools."),
@@ -469,7 +469,7 @@ export function registerCallTools(server: McpServer, ctx: ToolContext): void {
       inputSchema: { call_uuid: callId.describe("Call UUID to look up: the request_uuid returned by make_call, or a UUID from list_live_calls or list_call_records.") },
       outputSchema: z
         .object({
-          ok: okTrue,
+          ok: okFlag,
           call_uuid: outCallUuid,
           state: z.enum(["queued", "live", "completed"]).optional().describe("queued: accepted, not yet dialed; live: ringing or in progress; completed: ended and found in call records."),
           call_status: z.unknown().optional().describe("Vobiz's finer status string for a live or queued call (e.g. ringing, in-progress, queued), null when Vobiz omitted it; absent once completed."),
@@ -538,7 +538,7 @@ export function registerCallTools(server: McpServer, ctx: ToolContext): void {
       },
       outputSchema: z
         .object({
-          ok: okTrue,
+          ok: okFlag,
           call_uuid: outCallUuid,
           terminated: z.literal(true).optional().describe("True once Vobiz accepted the hangup."),
           previous_state: z.enum(["live", "queued"]).optional().describe("Whether the call was in progress or still waiting to be dialed when it was ended."),
@@ -599,7 +599,7 @@ export function registerCallTools(server: McpServer, ctx: ToolContext): void {
       },
       outputSchema: z
         .object({
-          ok: okTrue,
+          ok: okFlag,
           live_calls: z.array(z.string()).optional().describe("UUIDs of calls ringing or in progress right now."),
           live_count: z.number().int().optional().describe("Number of entries in live_calls."),
           queued_calls: z.array(z.string()).optional().describe("Only with include_queued: UUIDs of calls accepted but not yet dialed."),
@@ -650,7 +650,7 @@ export function registerCallTools(server: McpServer, ctx: ToolContext): void {
       },
       outputSchema: z
         .object({
-          ok: okTrue,
+          ok: okFlag,
           call_uuid: outCallUuid,
           sent: z.literal(true).optional().describe("True once Vobiz accepted the digits for sending."),
           backend_message: z.string().nullable().optional().describe("Vobiz's own confirmation text, or null when it sent none."),

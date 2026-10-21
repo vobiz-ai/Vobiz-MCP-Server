@@ -64,7 +64,7 @@ const mb = (bytes: number) => Math.max(1, Math.round(bytes / 1048576));
 const limitsText = (svc: MediaService) => `Up to ${mb(svc.limits.maxInputBytes)} MB and ${Math.round(svc.limits.maxDurationSec / 6) / 10} minutes per file.`;
 
 // ── Result fields shared by the audio tools ─────────────────────
-const okTrue = z.literal(true).describe("Always true on success; failures come back as an isError result with `error` and `message` instead.");
+const okFlag = z.boolean().optional().describe("True on success. On a failure the result is isError with ok: false plus `error` (kind), `message`, `retryable` and sometimes `http_status`.");
 const audioOut = z
   .object({
     id: z.string().optional().describe("Library id of the file, unique per account; accepted wherever a name is."),
@@ -102,7 +102,7 @@ export function registerAudioTools(server: McpServer, ctx: ToolContext): void {
         },
         outputSchema: z
           .object({
-            ok: okTrue,
+            ok: okFlag,
             upload_url: z.string().optional().describe("One-time https upload link: open it in a browser to pick, drop or record a file, or PUT the file to it directly."),
             expires_in_minutes: z.number().int().optional().describe("Minutes the link stays valid (15)."),
             how_to: z.array(z.string()).optional().describe("Step-by-step instructions, including the exact curl command for a direct PUT upload."),
@@ -145,7 +145,7 @@ export function registerAudioTools(server: McpServer, ctx: ToolContext): void {
       },
       outputSchema: z
         .object({
-          ok: okTrue,
+          ok: okFlag,
           audio: audioOut.optional().describe("The saved file, with the name to use on calls and its length."),
           note: z.string().optional().describe("Human-readable confirmation naming the file and how to play it on a call."),
         })
@@ -179,7 +179,7 @@ export function registerAudioTools(server: McpServer, ctx: ToolContext): void {
       inputSchema: {},
       outputSchema: z
         .object({
-          ok: okTrue,
+          ok: okFlag,
           count: z.number().int().optional().describe("Number of files in the library."),
           audio: z.array(audioOut).optional().describe("The files, newest first."),
           limits: z
@@ -221,7 +221,7 @@ export function registerAudioTools(server: McpServer, ctx: ToolContext): void {
       },
       outputSchema: z
         .object({
-          ok: okTrue,
+          ok: okFlag,
           deleted: z.literal(true).optional().describe("True once the file was removed."),
           audio: audioOut.optional().describe("The file that was deleted."),
           reminders_using_it: z.number().int().optional().describe("How many scheduled, snoozed or in-progress reminder calls referenced it; they will play their message without the audio."),

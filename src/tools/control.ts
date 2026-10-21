@@ -32,7 +32,7 @@ const confirm = (what: string) => z.boolean().describe(`Must be true, set only a
 const liveCallUuid = callId.describe("UUID of the LIVE call to act on: the request_uuid returned by make_call, or a UUID from list_live_calls.");
 
 // ── Result fields shared by the in-call tools ───────────────────
-const okTrue = z.literal(true).describe("Always true on success; failures come back as an isError result with `error` and `message` instead.");
+const okFlag = z.boolean().optional().describe("True on success. On a failure the result is isError with ok: false plus `error` (kind), `message`, `retryable` and sometimes `http_status`.");
 const outCallUuid = z.string().optional().describe("The call UUID the action was applied to, echoed from the request.");
 const outLegs = z.enum(["aleg", "bleg", "both"]).optional().describe("The leg(s) the action was applied to (aleg when none was given).");
 const backendMessage = z.string().nullable().optional().describe("Vobiz's own confirmation text for the request, or null when it sent none.");
@@ -118,7 +118,7 @@ export function registerControlTools(server: McpServer, ctx: ToolContext): void 
       },
       outputSchema: z
         .object({
-          ok: okTrue,
+          ok: okFlag,
           call_uuid: outCallUuid,
           transferred: z.literal(true).optional().describe("True once Vobiz accepted the transfer; the leg fetches and runs the new XML asynchronously."),
           legs: outLegs,
@@ -188,7 +188,7 @@ export function registerControlTools(server: McpServer, ctx: ToolContext): void 
       },
       outputSchema: z
         .object({
-          ok: okTrue,
+          ok: okFlag,
           call_uuid: outCallUuid,
           on_hold: z.literal(true).optional().describe("True once Vobiz accepted the transfer into the hold flow."),
           legs: outLegs,
@@ -231,7 +231,7 @@ export function registerControlTools(server: McpServer, ctx: ToolContext): void 
       },
       outputSchema: z
         .object({
-          ok: okTrue,
+          ok: okFlag,
           call_uuid: outCallUuid,
           on_hold: z.literal(false).optional().describe("False once Vobiz accepted the transfer to resume_url."),
           legs: outLegs,
@@ -278,7 +278,7 @@ export function registerControlTools(server: McpServer, ctx: ToolContext): void 
       },
       outputSchema: z
         .object({
-          ok: okTrue,
+          ok: okFlag,
           call_uuid: outCallUuid,
           playing: z.literal(true).optional().describe("True once Vobiz accepted the playback request; audio starts within moments."),
           backend_message: backendMessage,
@@ -307,7 +307,7 @@ export function registerControlTools(server: McpServer, ctx: ToolContext): void 
       inputSchema: { call_uuid: liveCallUuid.describe("UUID of the live call whose play_audio playback should stop.") },
       outputSchema: z
         .object({
-          ok: okTrue,
+          ok: okFlag,
           call_uuid: outCallUuid,
           playing: z.literal(false).optional().describe("False once Vobiz accepted the stop request."),
           http_status: httpStatus,
@@ -343,7 +343,7 @@ export function registerControlTools(server: McpServer, ctx: ToolContext): void 
       },
       outputSchema: z
         .object({
-          ok: okTrue,
+          ok: okFlag,
           call_uuid: outCallUuid,
           speaking: z.literal(true).optional().describe("True once Vobiz accepted the speech request; audio starts within moments."),
           backend_message: backendMessage,
@@ -370,7 +370,7 @@ export function registerControlTools(server: McpServer, ctx: ToolContext): void 
       inputSchema: { call_uuid: liveCallUuid.describe("UUID of the live call whose speak_text speech should stop.") },
       outputSchema: z
         .object({
-          ok: okTrue,
+          ok: okFlag,
           call_uuid: outCallUuid,
           speaking: z.literal(false).optional().describe("False once Vobiz accepted the stop request."),
           http_status: httpStatus,
@@ -403,7 +403,7 @@ export function registerControlTools(server: McpServer, ctx: ToolContext): void 
       },
       outputSchema: z
         .object({
-          ok: okTrue,
+          ok: okFlag,
           call_uuid: outCallUuid,
           recording: z.literal(true).optional().describe("True once Vobiz accepted the request and started recording."),
           recording_id: z.union([z.string(), z.number()]).nullable().optional().describe("Identifier Vobiz assigned to this recording, or null when it did not report one."),
@@ -453,7 +453,7 @@ export function registerControlTools(server: McpServer, ctx: ToolContext): void 
       },
       outputSchema: z
         .object({
-          ok: okTrue,
+          ok: okFlag,
           call_uuid: outCallUuid,
           recording: z.literal(false).optional().describe("False once Vobiz accepted the stop request."),
           stopped: z.enum(["one", "all"]).optional().describe("\"one\" when a url was given, \"all\" when every recording on the call was stopped."),
