@@ -105,6 +105,17 @@ function tidyMember(m: Rec): Rec {
   };
 }
 
+// ── Output schema building blocks ───────────────────────────────
+const NOT_RUNNING_NOTE = " A room that is not running, or a member who already left, returns the not_found error.";
+const roomName = z.string().optional().describe("Room the action was applied to.");
+const httpStatus = z.number().optional().describe("HTTP status Vobiz answered with (202 = accepted, 204 = done).");
+const memberIds = z
+  .union([z.string(), z.array(z.unknown())])
+  .optional()
+  .describe('Members the action was applied to: the literal "all", or the list of member IDs as Vobiz echoed them (or as requested).');
+const backendMessage = z.unknown().optional().describe("Vobiz's own status message, or null.");
+const memberAction = { ok: z.boolean().optional().describe("True on success; false when the result is an error (then error, message and retryable are set)."), conference_name: roomName, member_id: memberIds, backend_message: backendMessage, http_status: httpStatus };
+
 export function registerConferenceTools(server: McpServer, ctx: ToolContext): void {
   // ── list_conferences / get_conference ────────────────────────
   server.registerTool(
@@ -112,10 +123,18 @@ export function registerConferenceTools(server: McpServer, ctx: ToolContext): vo
     {
       title: "List live conferences",
       description:
-        "List the names of conference rooms currently running on this Vobiz account (GET /Conference/). " +
-        "Use it to find a room before inspecting it with get_conference or controlling its members. " +
-        "Keep a record of the rooms you start so you can check or end each one by name with get_conference and end_conference.",
+        "List the names of the conference rooms running right now on this Vobiz account (GET /Conference/). " +
+        "Rooms that have ended are not listed, there is no paging, and an empty list is a normal result. " +
+        "Use it to find a room name for get_conference or the member tools; for the history of a finished room use list_call_records.",
       inputSchema: {},
+      outputSchema: z
+        .object({
+          ok: z.boolean().optional().describe("True on success; false when the result is an error (then error, message and retryable are set)."),
+          conferences: z.array(z.string()).optional().describe("Names of the rooms running now, exactly as used in <Conference>."),
+          count: z.number().optional().describe("Number of live rooms."),
+          note: z.string().optional().describe("Present when no room is running."),
+        })
+        .passthrough(),
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     handler(async () => {
@@ -140,8 +159,27 @@ export function registerConferenceTools(server: McpServer, ctx: ToolContext): vo
       title: "Get a live conference",
       description:
         "Get one running Vobiz conference room by name (GET /Conference/{name}/): run time, member count and each member's member_id, call_uuid, caller, mute and deaf state. " +
-        "Use it to find the member_id values that the mute, deafen, kick, hang-up and play tools need." + UNTRUSTED_DESCRIPTION,
+        "Use it to find the member_id values that the mute, deafen, kick, hang-up and play tools need. " +
+        "A room that is not running returns the not_found error (names are case-sensitive); when Vobiz cannot give live details, details_available is false and no members are listed, so retry shortly." +
+        UNTRUSTED_DESCRIPTION,
       inputSchema: { conference_name: conferenceName },
+      outputSchema: z
+        .object({
+          ok: z.boolean().optional().describe("True on success; false when the result is an error (then error, message and retryable are set)."),
+          conference_name: z.string().optional().describe("Room name as Vobiz reports it."),
+          details_available: z.boolean().optional().describe("False when Vobiz could not return live details; then members is absent."),
+          run_time_seconds: z.number().nullable().optional().describe("Seconds the room has been running, or null when unknown."),
+          member_count: z.number().nullable().optional().describe("Members in the room now."),
+          members: z
+            .array(z.unknown())
+            .optional()
+            .describe("Each member: member_id, call_uuid, from, to, caller_name, direction, muted, deaf, join_time_seconds, with untrusted: true."),
+          backend_message: backendMessage,
+          note: z.string().optional().describe("Present when details_available is false."),
+          notice: z.string().optional().describe("Reminder that caller names were written by third parties."),
+          untrusted_fields: z.array(z.string()).optional().describe("Member fields that hold third-party text."),
+        })
+        .passthrough(),
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     handler(async ({ conference_name }) => {
@@ -181,8 +219,12 @@ export function registerConferenceTools(server: McpServer, ctx: ToolContext): vo
       title: "End a live conference",
       description:
         "Hang up one running Vobiz conference room (DELETE /Conference/{name}/): every member is disconnected at once and the room ends. " +
-        "Use it to close a meeting on time or clean up an abandoned room; to remove only some people, use kick_conference_member or hangup_conference_member. Requires confirm: true.",
+        "Use it to close a meeting on time or clean up an abandoned room; to remove only some people, use kick_conference_member or hangup_conference_member. Requires confirm: true. " +
+        "A room that is not running returns the not_found error.",
       inputSchema: { conference_name: conferenceName, confirm: confirm("end this conference for everyone in it") },
+      outputSchema: z
+        .object({ ok: z.boolean().optional().describe("True on success; false when the result is an error (then error, message and retryable are set)."), conference_name: roomName, ended: z.literal(true).optional().describe("Always true: the room is gone."), http_status: httpStatus })
+        .passthrough(),
       annotations: write(true),
     },
     handler(async ({ conference_name, confirm }) => {
@@ -200,6 +242,9 @@ export function registerConferenceTools(server: McpServer, ctx: ToolContext): vo
         "Hang up EVERY running conference room on this Vobiz account at once (DELETE /Conference/): all members of all rooms are disconnected. " +
         "Use it only for account-wide cleanup or maintenance; to close one room, use end_conference. Requires confirm: true after the user explicitly agrees to end all conferences.",
       inputSchema: { confirm: confirm("end every live conference on the account") },
+      outputSchema: z
+        .object({ ok: z.boolean().optional().describe("True on success; false when the result is an error (then error, message and retryable are set)."), ended_all: z.literal(true).optional().describe("Always true: every room was hung up."), http_status: httpStatus })
+        .passthrough(),
       annotations: write(true),
     },
     handler(async ({ confirm }) => {
@@ -222,8 +267,15 @@ export function registerConferenceTools(server: McpServer, ctx: ToolContext): vo
       name,
       {
         title,
-        description,
+        description: description + NOT_RUNNING_NOTE,
         inputSchema: { conference_name: conferenceName, member_id: memberId },
+        outputSchema: z
+          .object({
+            ...memberAction,
+            muted: z.boolean().optional().describe("New mute state of the members (mute and unmute tools only)."),
+            deaf: z.boolean().optional().describe("New deaf state of the members (deafen and undeafen tools only)."),
+          })
+          .passthrough(),
         annotations: write(true),
       },
       handler(async ({ conference_name, member_id }) => {
@@ -257,8 +309,8 @@ export function registerConferenceTools(server: McpServer, ctx: ToolContext): vo
   memberState(
     "unmute_conference_member",
     "Unmute a conference member",
-    "Unmute members of a live Vobiz conference (DELETE /Conference/{name}/Member/{id}/Mute/) so the room can hear them again. " +
-      "Pass one member_id, a comma-separated list, or all. Unmuting a member who is not muted still succeeds.",
+    "Unmute members of a live Vobiz conference (DELETE /Conference/{name}/Member/{id}/Mute/) so the room can hear them again; the reverse of mute_conference_member. " +
+      "Unmuting a member who is not muted still succeeds.",
     "DELETE",
     "Mute",
     { muted: false },
@@ -275,8 +327,8 @@ export function registerConferenceTools(server: McpServer, ctx: ToolContext): vo
   memberState(
     "undeafen_conference_member",
     "Undeafen a conference member",
-    "Let deafened members of a live Vobiz conference hear the room again (DELETE /Conference/{name}/Member/{id}/Deaf/). " +
-      "Pass one member_id, a comma-separated list, or all. Undeafening a member who is not deafened still succeeds.",
+    "Let deafened members of a live Vobiz conference hear the room again (DELETE /Conference/{name}/Member/{id}/Deaf/); the reverse of deafen_conference_member. " +
+      "Undeafening a member who is not deafened still succeeds.",
     "DELETE",
     "Deaf",
     { deaf: false },
@@ -289,8 +341,16 @@ export function registerConferenceTools(server: McpServer, ctx: ToolContext): vo
       title: "Kick a conference member",
       description:
         "Remove members from a live Vobiz conference while keeping their call up (POST /Conference/{name}/Member/{id}/Kick/): their call continues with the next VobizXML element after <Conference>, " +
-        "so you can play them a message or route them elsewhere. To end their call instead, use hangup_conference_member. Pass one member_id, a comma-separated list, or all. Requires confirm: true.",
+        "so you can play them a message or route them elsewhere. To end their call instead, use hangup_conference_member. Requires confirm: true." +
+        NOT_RUNNING_NOTE,
       inputSchema: { conference_name: conferenceName, member_id: memberId, confirm: confirm("remove this member from the conference") },
+      outputSchema: z
+        .object({
+          ...memberAction,
+          kicked: z.literal(true).optional().describe("Always true: the members left the room."),
+          note: z.string().optional().describe("What happens to the members' calls next."),
+        })
+        .passthrough(),
       annotations: write(false),
     },
     handler(async ({ conference_name, member_id, confirm }) => {
@@ -320,8 +380,19 @@ export function registerConferenceTools(server: McpServer, ctx: ToolContext): vo
       title: "Hang up a conference member",
       description:
         "End the calls of members in a live Vobiz conference (DELETE /Conference/{name}/Member/{id}/): they leave the room and their call hangs up. " +
-        "Use it to drop a participant completely; to keep their call going after they leave, use kick_conference_member. Pass one member_id, a comma-separated list, or all. Requires confirm: true.",
+        "Use it to drop a participant completely; to keep their call going after they leave, use kick_conference_member. Requires confirm: true." +
+        NOT_RUNNING_NOTE,
       inputSchema: { conference_name: conferenceName, member_id: memberId, confirm: confirm("hang up this member's call") },
+      outputSchema: z
+        .object({
+          ok: z.boolean().optional().describe("True on success; false when the result is an error (then error, message and retryable are set)."),
+          conference_name: roomName,
+          member_id: memberIds,
+          hung_up: z.literal(true).optional().describe("Always true: the hang-up was accepted."),
+          http_status: httpStatus,
+          note: z.string().optional().describe("How to confirm the members actually left."),
+        })
+        .passthrough(),
       annotations: write(true),
     },
     handler(async ({ conference_name, member_id, confirm }) => {
@@ -351,8 +422,12 @@ export function registerConferenceTools(server: McpServer, ctx: ToolContext): vo
       title: "Play audio to a conference member",
       description:
         "Play an audio file (https .mp3/.wav) privately to members of a live Vobiz conference (POST /Conference/{name}/Member/{id}/Play/); other members do not hear it. " +
-        "Use it for whispered prompts or announcements, or pass member_id all to reach the whole room. Stop with stop_audio_to_conference_member.",
-      inputSchema: { conference_name: conferenceName, member_id: memberId, url: audioUrl.describe("Audio file to play (https .mp3 or .wav).") },
+        "Use it for whispered prompts or announcements, or pass member_id all to reach the whole room. Vobiz accepts the request (202) and starts playback asynchronously; stop it early with stop_audio_to_conference_member." +
+        NOT_RUNNING_NOTE,
+      inputSchema: { conference_name: conferenceName, member_id: memberId, url: audioUrl.describe("Public https URL of the .mp3 or .wav file to play; its host must be approved by the server.") },
+      outputSchema: z
+        .object({ ...memberAction, playing: z.literal(true).optional().describe("Always true: playback was accepted.") })
+        .passthrough(),
       annotations: write(false),
     },
     handler(async ({ conference_name, member_id, url }) => {
@@ -380,8 +455,17 @@ export function registerConferenceTools(server: McpServer, ctx: ToolContext): vo
       title: "Stop audio to a conference member",
       description:
         "Stop audio started by play_audio_to_conference_member for members of a live Vobiz conference (DELETE /Conference/{name}/Member/{id}/Play/). " +
-        "Pass one member_id, a comma-separated list, or all. It succeeds even when nothing is playing.",
+        "It succeeds even when nothing is playing." + NOT_RUNNING_NOTE,
       inputSchema: { conference_name: conferenceName, member_id: memberId },
+      outputSchema: z
+        .object({
+          ok: z.boolean().optional().describe("True on success; false when the result is an error (then error, message and retryable are set)."),
+          conference_name: roomName,
+          member_id: memberIds,
+          playing: z.literal(false).optional().describe("Always false: playback is stopped."),
+          http_status: httpStatus,
+        })
+        .passthrough(),
       annotations: write(true),
     },
     handler(async ({ conference_name, member_id }) => {
@@ -404,12 +488,24 @@ export function registerConferenceTools(server: McpServer, ctx: ToolContext): vo
       description:
         "Start recording the mixed audio of a live Vobiz conference room (POST /Conference/{name}/Record/) in mp3 (default) or wav. " +
         "Recording may require consent from every participant in your jurisdiction, so confirm with the user first (consider announcing it). " +
-        "Vobiz queues the recording; the reply carries no recording ID or file URL. Stop with stop_conference_recording. Requires confirm: true.",
+        "Vobiz queues the recording; the reply carries no recording ID or file URL, and the file appears in list_recordings after the room ends. Stop with stop_conference_recording. Requires confirm: true. " +
+        "A room that is not running returns the not_found error.",
       inputSchema: {
         conference_name: conferenceName,
-        file_format: z.enum(["mp3", "wav"]).optional().describe("Recording format (default mp3)."),
+        file_format: z.enum(["mp3", "wav"]).optional().describe("Audio format of the file: mp3 (default, smaller) or wav (uncompressed)."),
         confirm: confirm("record this conference"),
       },
+      outputSchema: z
+        .object({
+          ok: z.boolean().optional().describe("True on success; false when the result is an error (then error, message and retryable are set)."),
+          conference_name: roomName,
+          recording: z.literal(true).optional().describe("Always true: recording was queued."),
+          file_format: z.string().optional().describe("Format that will be produced: mp3 or wav."),
+          backend_message: backendMessage,
+          http_status: httpStatus,
+          note: z.string().optional().describe("Where to find the file later."),
+        })
+        .passthrough(),
       annotations: write(false),
     },
     handler(async ({ conference_name, file_format, confirm }) => {
@@ -434,8 +530,12 @@ export function registerConferenceTools(server: McpServer, ctx: ToolContext): vo
     {
       title: "Stop recording a conference",
       description:
-        "Stop the recording of a live Vobiz conference room (DELETE /Conference/{name}/Record/). Use it when the part you needed is captured; the conference itself keeps running.",
+        "Stop the recording started by start_conference_recording on a live Vobiz conference room (DELETE /Conference/{name}/Record/). " +
+        "Use it when the part you needed is captured; the conference itself keeps running and the file appears later in list_recordings. A room that is not running returns the not_found error.",
       inputSchema: { conference_name: conferenceName },
+      outputSchema: z
+        .object({ ok: z.boolean().optional().describe("True on success; false when the result is an error (then error, message and retryable are set)."), conference_name: roomName, recording: z.literal(false).optional().describe("Always false: recording is stopped."), http_status: httpStatus })
+        .passthrough(),
       annotations: write(true),
     },
     handler(async ({ conference_name }) => {
