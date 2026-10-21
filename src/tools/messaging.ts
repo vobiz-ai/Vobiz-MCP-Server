@@ -50,7 +50,7 @@ const offsetPage = z
 const optOutResult = (optedOut: boolean) =>
   z
     .object({
-      ok: z.literal(true),
+      ok: z.boolean().optional().describe("True on success; false when the result is an error (then error, message and retryable are set)."),
       phone_number: z.string().optional().describe("The number, normalised to E.164."),
       channel: z.string().optional().describe("Channel the change applies to: sms, mms or rcs."),
       opted_out: z.literal(optedOut).optional().describe(optedOut ? "Always true: the number is now blocked." : "Always false: the number can be messaged again."),
@@ -158,7 +158,7 @@ export function registerMessagingTools(server: McpServer, ctx: ToolContext): voi
       },
       outputSchema: z
         .object({
-          ok: z.boolean().describe("True only when every recipient was handed to the network; false when any recipient was not sent."),
+          ok: z.boolean().optional().describe("True only when every recipient was handed to the network; false when any recipient was not sent, or when the result is an error."),
           sent_count: z.number().optional().describe("Recipients whose message was accepted (status scheduled or sent)."),
           not_sent_count: z.number().optional().describe("Recipients refused or failed; see their errorCode (e.g. opted_out)."),
           messages: z
@@ -266,7 +266,7 @@ export function registerMessagingTools(server: McpServer, ctx: ToolContext): voi
       },
       outputSchema: z
         .object({
-          ok: z.literal(true),
+          ok: z.boolean().optional().describe("True on success; false when the result is an error (then error, message and retryable are set)."),
           preview: z
             .object({
               channel: z.string().optional().describe("Channel that was priced."),
@@ -318,7 +318,7 @@ export function registerMessagingTools(server: McpServer, ctx: ToolContext): voi
       },
       outputSchema: z
         .object({
-          ok: z.literal(true),
+          ok: z.boolean().optional().describe("True on success; false when the result is an error (then error, message and retryable are set)."),
           count: z.number().optional().describe("Messages on this page."),
           messages: z.array(messageItem).optional().describe("Messages on this page, newest first."),
           pagination: offsetPage.optional(),
@@ -368,7 +368,7 @@ export function registerMessagingTools(server: McpServer, ctx: ToolContext): voi
       inputSchema: { message_id: messageId.describe("Message id as returned by send_message (messages[].id), list_messages or get_conversation_messages.") },
       outputSchema: z
         .object({
-          ok: z.literal(true),
+          ok: z.boolean().optional().describe("True on success; false when the result is an error (then error, message and retryable are set)."),
           message: z
             .unknown()
             .optional()
@@ -397,7 +397,7 @@ export function registerMessagingTools(server: McpServer, ctx: ToolContext): voi
       inputSchema: { limit: limit(100).describe("Page size, 1-100 (default 20)."), offset: offset("conversations") },
       outputSchema: z
         .object({
-          ok: z.literal(true),
+          ok: z.boolean().optional().describe("True on success; false when the result is an error (then error, message and retryable are set)."),
           count: z.number().optional().describe("Conversations on this page."),
           conversations: z
             .array(z.unknown())
@@ -431,7 +431,7 @@ export function registerMessagingTools(server: McpServer, ctx: ToolContext): voi
       },
       outputSchema: z
         .object({
-          ok: z.literal(true),
+          ok: z.boolean().optional().describe("True on success; false when the result is an error (then error, message and retryable are set)."),
           conversation_id: z.string().optional().describe("Echo of the conversation that was read."),
           count: z.number().optional().describe("Messages on this page."),
           messages: z.array(messageItem).optional().describe("Messages on this page, newest first, without statusHistory."),
@@ -462,7 +462,7 @@ export function registerMessagingTools(server: McpServer, ctx: ToolContext): voi
       inputSchema: {},
       outputSchema: z
         .object({
-          ok: z.literal(true),
+          ok: z.boolean().optional().describe("True on success; false when the result is an error (then error, message and retryable are set)."),
           count: z.number().optional().describe("Number of messaging numbers on the account."),
           numbers: z
             .array(z.unknown())
@@ -495,7 +495,7 @@ export function registerMessagingTools(server: McpServer, ctx: ToolContext): voi
       inputSchema: { limit: limit(500).describe("Page size, 1-500 (default 50)."), offset: offset("broadcasts") },
       outputSchema: z
         .object({
-          ok: z.literal(true),
+          ok: z.boolean().optional().describe("True on success; false when the result is an error (then error, message and retryable are set)."),
           count: z.number().optional().describe("Broadcasts on this page."),
           total: z.unknown().optional().describe("Account-wide number of broadcasts, or null when Vobiz did not report it."),
           broadcasts: z
@@ -523,7 +523,7 @@ export function registerMessagingTools(server: McpServer, ctx: ToolContext): voi
       inputSchema: { broadcast_id: messageId.describe("Broadcast id, as listed by list_broadcasts or shown in the Vobiz console.") },
       outputSchema: z
         .object({
-          ok: z.literal(true),
+          ok: z.boolean().optional().describe("True on success; false when the result is an error (then error, message and retryable are set)."),
           broadcast: z
             .unknown()
             .optional()
@@ -552,7 +552,7 @@ export function registerMessagingTools(server: McpServer, ctx: ToolContext): voi
       inputSchema: { phone_number: phoneNumber.describe("The number to check, E.164 (leading + optional)."), channel: optChannel },
       outputSchema: z
         .object({
-          ok: z.literal(true),
+          ok: z.boolean().optional().describe("True on success; false when the result is an error (then error, message and retryable are set)."),
           phone_number: z.string().optional().describe("The number, normalised to E.164."),
           channel: z.string().optional().describe("Channel that was checked: sms, mms or rcs."),
           opted_out: z.boolean().optional().describe("True when send_message would refuse this number on this channel."),
@@ -577,7 +577,7 @@ export function registerMessagingTools(server: McpServer, ctx: ToolContext): voi
       inputSchema: { limit: limit(100).describe("Page size, 1-100 (default 20)."), offset: offset("entries") },
       outputSchema: z
         .object({
-          ok: z.literal(true),
+          ok: z.boolean().optional().describe("True on success; false when the result is an error (then error, message and retryable are set)."),
           count: z.number().optional().describe("Entries on this page."),
           opt_outs: z
             .array(z.unknown())

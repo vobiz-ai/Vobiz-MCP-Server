@@ -45,7 +45,7 @@ export function registerAccountTools(server: McpServer, ctx: ToolContext): void 
       },
       outputSchema: z
         .object({
-          ok: z.literal(true),
+          ok: z.boolean().optional().describe("True on success; false when the result is an error (then error, message and retryable are set)."),
           numbers: z.array(numberItem).optional().describe("Numbers on this page."),
           pagination: z
             .object({
@@ -95,7 +95,7 @@ export function registerAccountTools(server: McpServer, ctx: ToolContext): void 
       inputSchema: { phone_number: phoneNumber.describe("The number to look up, E.164 with or without the leading +, e.g. +919876543210. Must match exactly.") },
       outputSchema: z
         .object({
-          ok: z.literal(true),
+          ok: z.boolean().optional().describe("True on success; false when the result is an error (then error, message and retryable are set)."),
           number: numberItem.optional(),
         })
         .passthrough(),
@@ -129,7 +129,7 @@ export function registerAccountTools(server: McpServer, ctx: ToolContext): void 
       },
       outputSchema: z
         .object({
-          ok: z.literal(true),
+          ok: z.boolean().optional().describe("True on success; false when the result is an error (then error, message and retryable are set)."),
           health: z.unknown().optional().describe("Vobiz's health report: spam flag, usage status and the per-day or per-hour statistics (calls, answered, failed, answer rate, minutes)."),
         })
         .passthrough(),
@@ -160,7 +160,7 @@ export function registerAccountTools(server: McpServer, ctx: ToolContext): void 
       inputSchema: {},
       outputSchema: z
         .object({
-          ok: z.literal(true),
+          ok: z.boolean().optional().describe("True on success; false when the result is an error (then error, message and retryable are set)."),
           account: z.record(z.string(), z.unknown()).optional().describe("The profile: auth_id, name, account type, status, CPS and concurrency limits, enabled features; secret fields hold \"[redacted]\"."),
         })
         .passthrough(),
@@ -209,7 +209,7 @@ export function registerAccountTools(server: McpServer, ctx: ToolContext): void 
       },
       outputSchema: z
         .object({
-          ok: z.literal(true),
+          ok: z.boolean().optional().describe("True on success; false when the result is an error (then error, message and retryable are set)."),
           count: z.number().optional().describe("Number of wallets returned; present only when currency was omitted."),
           balances: z.array(balanceItem).optional().describe("Every wallet on the account; present only when currency was omitted."),
           balance: z.unknown().optional().describe("The requested wallet, or the first wallet when currency was omitted (null when the account has none)."),
@@ -240,7 +240,7 @@ export function registerAccountTools(server: McpServer, ctx: ToolContext): void 
       inputSchema: {},
       outputSchema: z
         .object({
-          ok: z.literal(true),
+          ok: z.boolean().optional().describe("True on success; false when the result is an error (then error, message and retryable are set)."),
           concurrency: z
             .object({
               account_id: z.string().optional().describe("Account the figures belong to."),
@@ -278,7 +278,7 @@ export function registerAccountTools(server: McpServer, ctx: ToolContext): void 
       },
       outputSchema: z
         .object({
-          ok: z.literal(true),
+          ok: z.boolean().optional().describe("True on success; false when the result is an error (then error, message and retryable are set)."),
           count: z.number().optional().describe("Number of trunks on this page."),
           trunks: z.array(trunkItem).optional().describe("Trunks on this page."),
           pagination: z
@@ -333,7 +333,7 @@ export function registerAccountTools(server: McpServer, ctx: ToolContext): void 
       },
       outputSchema: z
         .object({
-          ok: z.literal(true),
+          ok: z.boolean().optional().describe("True on success; false when the result is an error (then error, message and retryable are set)."),
           trunk: trunkItem.optional(),
         })
         .passthrough(),

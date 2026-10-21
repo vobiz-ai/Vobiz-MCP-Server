@@ -44,7 +44,7 @@ export function registerRecordTools(server: McpServer, ctx: ToolContext): void {
       inputSchema: { call_uuid: callId.describe("UUID of the completed call: request_uuid from make_call, or call_uuid from list_call_records or a hangup callback.") },
       outputSchema: z
         .object({
-          ok: z.literal(true),
+          ok: z.boolean().optional().describe("True on success; false when the result is an error (then error, message and retryable are set)."),
           call_uuid: z.string().optional().describe("The call UUID that was looked up."),
           outcome: z
             .string()
@@ -120,7 +120,7 @@ export function registerRecordTools(server: McpServer, ctx: ToolContext): void {
       },
       outputSchema: z
         .object({
-          ok: z.literal(true),
+          ok: z.boolean().optional().describe("True on success; false when the result is an error (then error, message and retryable are set)."),
           count: z.number().optional().describe("Number of records on this page."),
           records: z
             .array(z.unknown())
@@ -137,7 +137,7 @@ export function registerRecordTools(server: McpServer, ctx: ToolContext): void {
             })
             .passthrough()
             .optional(),
-          summary: z.unknown().describe("Aggregate block over the whole filtered set (total calls, answered, answer rate, duration, cost), or null when include_summary is false."),
+          summary: z.unknown().optional().describe("Aggregate block over the whole filtered set (total calls, answered, answer rate, duration, cost), or null when include_summary is false."),
           ...untrustedOut,
         })
         .passthrough(),
@@ -225,7 +225,7 @@ export function registerRecordTools(server: McpServer, ctx: ToolContext): void {
       },
       outputSchema: z
         .object({
-          ok: z.literal(true),
+          ok: z.boolean().optional().describe("True on success; false when the result is an error (then error, message and retryable are set)."),
           call_uuid: z.string().optional().describe("Echo of the call_uuid that was searched, when that form was used."),
           recording_id: z.string().optional().describe("Echo of the recording_id that was fetched, when that form was used."),
           count: z.number().optional().describe("Number of recordings returned (0 when the call was not recorded)."),
@@ -291,7 +291,7 @@ export function registerRecordTools(server: McpServer, ctx: ToolContext): void {
       },
       outputSchema: z
         .object({
-          ok: z.literal(true),
+          ok: z.boolean().optional().describe("True on success; false when the result is an error (then error, message and retryable are set)."),
           count: z.number().optional().describe("Number of recordings on this page."),
           recordings: z.array(recordingItem).optional().describe("Recordings on this page, newest first."),
           pagination: offsetPage.optional(),
