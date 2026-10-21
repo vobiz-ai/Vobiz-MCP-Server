@@ -8,7 +8,7 @@ Done: the public repository is `vobiz-ai/Vobiz-MCP-Server`, with its description
 
 ## 2. npm (`@vobiz/mcp`)
 
-- [ ] **(owner)** Create the `vobiz` organization on npmjs.com (the `@vobiz` scope is unclaimed) and an automation token. Save the token as the `NPM_TOKEN` repository secret.
+- [ ] **(owner)** On npmjs.com open the package → Settings → **Trusted publisher** and add GitHub Actions with organization `vobiz-ai`, repository `Vobiz-MCP-Server`, workflow `release.yml`, environment `npm`. Keep two-factor authentication required for the package; trusted publishing is an OIDC identity, not a token, so no `NPM_TOKEN` secret is needed and the old stage-only token can be revoked. Optionally add required reviewers to the `npm` GitHub environment (Settings → Environments) to gate every publish on one approval.
 - [ ] Tag a release: bump `version` in `package.json`, `server.json` (both `version` and `packages[0].version`) and `manifest.json`, then `git tag v1.0.0 && git push --tags`. `release.yml` checks that the versions match, runs the tests and publishes with provenance.
 
 ## 3. Official MCP Registry (`io.github.vobiz-ai/vobiz-mcp`)
