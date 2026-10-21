@@ -188,6 +188,9 @@ describe("hosted flows and signed callbacks", () => {
     expect(await (await fetch(base + path, { method: "POST", headers: signed(path) })).text()).toContain("<Number>+919812345678</Number>");
     expect((await call("transfer_call", { call_uuid: UUID, destination: "+14155550123", confirm: true })).structuredContent.error).toBe("not_allowed");
     expect((await call("hold_call", { call_uuid: UUID, confirm: true })).structuredContent.on_hold).toBe(true);
+    const resumed = await call("unhold_call", { call_uuid: UUID, resume_url: `${PUBLIC}/resume.xml`, confirm: true });
+    expect(resumed.structuredContent).toMatchObject({ ok: true, on_hold: false, legs: "aleg", emulated: true, http_status: 202 });
+    expect((m.calls.at(-1)?.body as { aleg_url: string }).aleg_url).toBe(`${PUBLIC}/resume.xml`);
     await client.close();
   });
 });
