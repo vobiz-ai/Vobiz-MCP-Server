@@ -4,12 +4,30 @@ import type { ToolContext } from "../context.js";
 import { CALL_UNTRUSTED_FIELDS, outcomeFields } from "./calls.js";
 import { UNTRUSTED_DESCRIPTION, markUntrusted, withUntrustedNotice } from "../guard/untrusted.js";
 import { VobizError } from "../errors.js";
-import { PAGINATION_NOTE, callId, handler, isoDate, listField, ok, pageInfo, phoneNumber } from "../util.js";
+import { callId, handler, isoDate, listField, ok, pageInfo, phoneNumber } from "../util.js";
 
 type Rec = Record<string, unknown>;
 
 /** cdr-api has no range limit and returns 500 when a scan exceeds its DB timeout, so we cap it here. */
 export const MAX_CDR_RANGE_DAYS = 92;
+
+// ── Output schema building blocks ───────────────────────────────
+const untrustedOut = {
+  notice: z.string().optional().describe("Reminder that caller names and similar fields were written by third parties."),
+  untrusted_fields: z.array(z.string()).optional().describe("Names of the record fields that hold third-party text."),
+};
+const recordingItem = z
+  .unknown()
+  .describe("One recording as Vobiz returns it: recording_id, call_uuid, recording_url, from/to numbers, duration, file format and timestamps.");
+const offsetPage = z
+  .object({
+    limit: z.number().optional().describe("Page size that was applied."),
+    offset: z.number().optional().describe("Offset that was applied."),
+    total: z.number().nullable().optional().describe("Total matching recordings, or null when Vobiz did not report it."),
+    has_more: z.boolean().optional().describe("True when another page exists."),
+    next_offset: z.number().nullable().optional().describe("Offset to pass for the next page, or null on the last page."),
+  })
+  .passthrough();
 
 export function registerRecordTools(server: McpServer, ctx: ToolContext): void {
   // ── get_call_details ─────────────────────────────────────────
@@ -18,9 +36,29 @@ export function registerRecordTools(server: McpServer, ctx: ToolContext): void {
     {
       title: "Get call details",
       description:
-        "Return the full call detail record (CDR) of a COMPLETED call: direction, numbers, start/answer/end time, duration, billed seconds, hangup cause, cost, quality (MOS, jitter). " +
-        "For a call still in progress use get_call_status. Read-only." + UNTRUSTED_DESCRIPTION,
-      inputSchema: { call_uuid: callId.describe("UUID of the call.") },
+        "Return the full call detail record (CDR) of one COMPLETED call by call_uuid: direction, numbers, start/answer/end times, duration and billed seconds, hangup cause, cost and currency, quality (MOS, jitter, packet loss), " +
+        "plus a derived `outcome` (answered, busy, no_answer, ...) and `retry_may_succeed`. " +
+        "For a call that is still ringing or connected use get_call_status; to find calls by number, date or hangup cause use list_call_records. " +
+        "A call_uuid that is unknown or still active returns the not_found error, and a call that just ended can take a short while to appear." +
+        UNTRUSTED_DESCRIPTION,
+      inputSchema: { call_uuid: callId.describe("UUID of the completed call: request_uuid from make_call, or call_uuid from list_call_records or a hangup callback.") },
+      outputSchema: z
+        .object({
+          ok: z.boolean().optional().describe("True on success; false when the result is an error (then error, message and retryable are set)."),
+          call_uuid: z.string().optional().describe("The call UUID that was looked up."),
+          outcome: z
+            .string()
+            .optional()
+            .describe("Derived from hangup_cause and billsec: answered, busy, no_answer, rejected, invalid_number, unreachable, network_failure, cancelled, not_allowed, failed or unknown."),
+          typical_sip_code: z.number().nullable().optional().describe("SIP response code usually behind this hangup cause (e.g. 486 for USER_BUSY), or null when none applies."),
+          retry_may_succeed: z.boolean().optional().describe("True when the cause is transient (busy, no answer, network failure) so a later attempt may connect."),
+          record: z
+            .record(z.string(), z.unknown())
+            .optional()
+            .describe("The CDR as Vobiz returns it: call_direction, caller_id_number, destination_number, start_time, answer_time, end_time, duration, billsec, hangup_cause, hangup_cause_code, cost, currency, mos, jitter, packet_loss and more, with untrusted: true added."),
+          ...untrustedOut,
+        })
+        .passthrough(),
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     handler(async ({ call_uuid }) => {
@@ -52,28 +90,57 @@ export function registerRecordTools(server: McpServer, ctx: ToolContext): void {
     {
       title: "List call records",
       description:
-        "List completed call records (CDRs) for this account, newest first, with pagination and a summary (total, answered, answer rate, duration, cost). " +
-        `Optional filters: start_date/end_date (YYYY-MM-DD, max ${MAX_CDR_RANGE_DAYS} days apart), call_direction, from_number, to_number, hangup_cause, min/max duration. ` +
-        "Filter by hangup_cause (e.g. NORMAL_CLEARING for answered, NO_ANSWER, USER_BUSY) to find answered, missed or busy calls. " +
-        PAGINATION_NOTE +
-        " Read-only." +
+        "List completed call records (CDRs) on this account, newest first, 20 per page by default (max 100), with a `summary` block (total calls, answered, answer rate, duration, cost) computed over the whole filtered set. " +
+        `Filter by date range (start_date and end_date together, at most ${MAX_CDR_RANGE_DAYS} days apart), call_direction, from_number, to_number, hangup_cause and min/max duration; omitted filters are not applied. ` +
+        "For one call's full CDR use get_call_details; for calls ringing or connected right now use list_live_calls. " +
+        "Paging is stateless: pass page and per_page on every call and stop when pagination.has_more is false." +
         UNTRUSTED_DESCRIPTION,
       inputSchema: {
-        start_date: isoDate.optional().describe("Start of range, YYYY-MM-DD."),
-        end_date: isoDate.optional().describe("End of range, YYYY-MM-DD (inclusive)."),
-        call_direction: z.enum(["inbound", "outbound"]).optional(),
-        from_number: phoneNumber.optional().describe("Caller number (partial match on the backend)."),
-        to_number: phoneNumber.optional().describe("Destination number (partial match on the backend)."),
+        start_date: isoDate.optional().describe("First day of the range, YYYY-MM-DD (UTC). Must be given together with end_date."),
+        end_date: isoDate.optional().describe(`Last day of the range, YYYY-MM-DD, inclusive. Must be given together with start_date and be at most ${MAX_CDR_RANGE_DAYS} days after it.`),
+        call_direction: z
+          .enum(["inbound", "outbound"])
+          .optional()
+          .describe("Only calls in this direction: inbound (received on one of your numbers or trunks) or outbound (placed from this account). Omit for both."),
+        from_number: phoneNumber.optional().describe("Caller number to match (digits, leading + optional); the backend matches on part of the number."),
+        to_number: phoneNumber.optional().describe("Destination number to match (digits, leading + optional); the backend matches on part of the number."),
         hangup_cause: z
           .string()
           .regex(/^[A-Z_]{3,64}$/, "must be an uppercase hangup cause such as NORMAL_CLEARING")
-          .optional(),
-        min_duration: z.number().int().min(0).optional().describe("Minimum duration in seconds."),
-        max_duration: z.number().int().min(0).optional().describe("Maximum duration in seconds."),
-        page: z.number().int().min(1).max(10000).optional().describe("Page number (default 1)."),
-        per_page: z.number().int().min(1).max(100).optional().describe("Records per page, max 100. Defaults to the server's VOBIZ_DEFAULT_PAGE_SIZE (20)."),
-        include_summary: z.boolean().optional().describe("Include the aggregate summary block (default true)."),
+          .optional()
+          .describe(
+            "Only calls that ended with this telephony hangup cause, uppercase. Common values: NORMAL_CLEARING (a party hung up normally; answered calls), USER_BUSY (callee busy or declined), NO_ANSWER (rang out), " +
+              "ORIGINATOR_CANCEL (caller gave up before answer), CALL_REJECTED, UNALLOCATED_NUMBER or INVALID_NUMBER (bad destination), SERVICE_UNAVAILABLE, NORMAL_TEMPORARY_FAILURE or SWITCH_CONGESTION (carrier or network trouble), MEDIA_TIMEOUT (no audio packets), UNKNOWN.",
+          ),
+        min_duration: z.number().int().min(0).optional().describe("Only calls whose total duration (ring + talk) is at least this many seconds."),
+        max_duration: z.number().int().min(0).optional().describe("Only calls whose total duration is at most this many seconds; must not be below min_duration."),
+        page: z.number().int().min(1).max(10000).optional().describe("1-based page number (default 1). Use pagination.next_page from the previous result."),
+        per_page: z.number().int().min(1).max(100).optional().describe("Records per page, 1-100. Defaults to the server's VOBIZ_DEFAULT_PAGE_SIZE (20)."),
+        include_summary: z.boolean().optional().describe("Set false to leave out the aggregate summary block (default true)."),
       },
+      outputSchema: z
+        .object({
+          ok: z.boolean().optional().describe("True on success; false when the result is an error (then error, message and retryable are set)."),
+          count: z.number().optional().describe("Number of records on this page."),
+          records: z
+            .array(z.unknown())
+            .optional()
+            .describe("CDRs on this page, newest first, each with call_direction, caller_id_number, destination_number, start_time, duration, billsec, hangup_cause, cost and currency, plus untrusted: true."),
+          pagination: z
+            .object({
+              page: z.number().optional().describe("Page that was returned."),
+              per_page: z.number().optional().describe("Page size that was applied."),
+              total: z.number().nullable().optional().describe("Total matching records, or null when Vobiz did not report it."),
+              returned: z.number().optional().describe("Records on this page."),
+              has_more: z.boolean().optional().describe("True when another page exists."),
+              next_page: z.number().nullable().optional().describe("Page number to pass next, or null on the last page."),
+            })
+            .passthrough()
+            .optional(),
+          summary: z.unknown().optional().describe("Aggregate block over the whole filtered set (total calls, answered, answer rate, duration, cost), or null when include_summary is false."),
+          ...untrustedOut,
+        })
+        .passthrough(),
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     handler(async (args) => {
@@ -145,16 +212,27 @@ export function registerRecordTools(server: McpServer, ctx: ToolContext): void {
     {
       title: "Get call recording",
       description:
-        "Find the recording(s) of a call on this account and return their metadata and recording_url. Provide exactly one of call_uuid or recording_id. " +
-        "Not every call is recorded: an empty result means no recording exists. Recording URLs give access to call audio, so share them only with the account owner. Read-only.",
+        "Find the recording(s) of one call on this account and return their metadata and recording_url (GET /Recording/). Pass exactly one of call_uuid (every recording of that call, up to 20) or recording_id (that one recording). " +
+        "Not every call is recorded: an unrecorded or unknown call_uuid returns ok with count 0, while an unknown recording_id returns the not_found error. " +
+        "To browse recordings across calls or by date use list_recordings. Recording URLs give access to call audio, so share them only with the account owner.",
       inputSchema: {
-        call_uuid: callId.optional().describe("UUID of the call whose recordings to find."),
+        call_uuid: callId.optional().describe("UUID of the call whose recordings to find. Leave out when passing recording_id."),
         recording_id: z
           .string()
           .regex(/^[A-Za-z0-9_-]{4,64}$/, "must be a Vobiz recording ID")
           .optional()
-          .describe("A specific recording ID."),
+          .describe("ID of one recording, as returned by list_recordings or a recording callback. Leave out when passing call_uuid."),
       },
+      outputSchema: z
+        .object({
+          ok: z.boolean().optional().describe("True on success; false when the result is an error (then error, message and retryable are set)."),
+          call_uuid: z.string().optional().describe("Echo of the call_uuid that was searched, when that form was used."),
+          recording_id: z.string().optional().describe("Echo of the recording_id that was fetched, when that form was used."),
+          count: z.number().optional().describe("Number of recordings returned (0 when the call was not recorded)."),
+          recordings: z.array(recordingItem).optional().describe("The recordings found, each with its recording_url."),
+          note: z.string().optional().describe("Present when no recording exists for the call."),
+        })
+        .passthrough(),
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     handler(async ({ call_uuid, recording_id }) => {
@@ -202,16 +280,23 @@ export function registerRecordTools(server: McpServer, ctx: ToolContext): void {
     {
       title: "List recordings",
       description:
-        "List call recordings on this account (including its sub-accounts), newest first, with recording_url, call_uuid, numbers and duration. " +
-        "Optional from_date/to_date (YYYY-MM-DD). Vobiz returns at most 20 per page. " +
-        PAGINATION_NOTE +
-        " Recording URLs give access to call audio, so share them only with the account owner. Read-only.",
+        "List call recordings on this account and its sub-accounts, newest first, with recording_url, call_uuid, numbers and duration (GET /Recording/). " +
+        "Optional from_date/to_date narrow by recording date; omitted, every recording is eligible. Vobiz returns at most 20 per page: pass limit and offset on every call (nothing is kept between calls) and follow pagination.next_offset until has_more is false. " +
+        "For the recordings of one known call use get_call_recording. Recording URLs give access to call audio, so share them only with the account owner.",
       inputSchema: {
-        from_date: isoDate.optional().describe("Earliest recording date, YYYY-MM-DD."),
-        to_date: isoDate.optional().describe("Latest recording date, YYYY-MM-DD."),
-        limit: z.number().int().min(1).max(20).optional().describe("Max 20 (Vobiz limit). Default 20."),
-        offset: z.number().int().min(0).max(1_000_000).optional(),
+        from_date: isoDate.optional().describe("Earliest recording date to include, YYYY-MM-DD."),
+        to_date: isoDate.optional().describe("Latest recording date to include, YYYY-MM-DD; must not be before from_date."),
+        limit: z.number().int().min(1).max(20).optional().describe("Page size, 1-20 (Vobiz caps a page at 20). Default 20."),
+        offset: z.number().int().min(0).max(1_000_000).optional().describe("Number of recordings to skip before the page starts (default 0). Pass pagination.next_offset from the previous page."),
       },
+      outputSchema: z
+        .object({
+          ok: z.boolean().optional().describe("True on success; false when the result is an error (then error, message and retryable are set)."),
+          count: z.number().optional().describe("Number of recordings on this page."),
+          recordings: z.array(recordingItem).optional().describe("Recordings on this page, newest first."),
+          pagination: offsetPage.optional(),
+        })
+        .passthrough(),
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     handler(async ({ from_date, to_date, limit, offset }) => {
