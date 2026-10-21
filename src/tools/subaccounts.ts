@@ -19,7 +19,8 @@ import { handler, isPrivateHost, listField, ok, pageInfo, redact } from "../util
 
 type Rec = Record<string, unknown>;
 
-// ── Output shapes (every field optional so validation never fails on a successful result) ──
+// ── Output shapes: every field optional so validation never fails; ok is a boolean because clients validate error results too ──
+const okOut = z.boolean().describe("true on success; false (with error and message) when the tool failed.");
 const subAccountOut = z
   .record(z.string(), z.unknown())
   .describe("The sub-account as Vobiz returns it: name, auth_id, email, phone, enabled, kyc_mode, rate_limit, permissions and timestamps. Credentials are removed.");
@@ -160,7 +161,7 @@ export function registerSubAccountTools(server: McpServer, ctx: ToolContext): vo
       },
       outputSchema: z
         .object({
-          ok: z.literal(true),
+          ok: okOut,
           count: z.number().optional().describe("Number of sub-accounts in this page."),
           sub_accounts: z.array(subAccountOut).optional().describe("The sub-accounts in this page."),
           pagination: paginationOut.optional(),
@@ -199,7 +200,7 @@ export function registerSubAccountTools(server: McpServer, ctx: ToolContext): vo
       inputSchema: { sub_auth_id: subAuthId },
       outputSchema: z
         .object({
-          ok: z.literal(true),
+          ok: okOut,
           sub_account: subAccountOut.optional(),
           credentials_note: credentialsNote,
         })
@@ -238,7 +239,7 @@ export function registerSubAccountTools(server: McpServer, ctx: ToolContext): vo
       },
       outputSchema: z
         .object({
-          ok: z.literal(true),
+          ok: okOut,
           created: z.boolean().optional().describe("true once Vobiz created the sub-account."),
           sub_account: subAccountOut.nullable().optional(),
           sub_auth_id: z.string().nullable().optional().describe("Auth ID of the new sub-account (SA_...), for the other sub-account tools."),
@@ -285,7 +286,7 @@ export function registerSubAccountTools(server: McpServer, ctx: ToolContext): vo
       inputSchema: { sub_auth_id: subAuthId, ...editableFields, confirm: confirm("changing this sub-account") },
       outputSchema: z
         .object({
-          ok: z.literal(true),
+          ok: okOut,
           updated: z.boolean().optional().describe("true once Vobiz applied the change."),
           sub_auth_id: z.string().optional().describe("The sub-account that was changed."),
           sub_account: subAccountOut.nullable().optional(),
@@ -319,7 +320,7 @@ export function registerSubAccountTools(server: McpServer, ctx: ToolContext): vo
       inputSchema: { sub_auth_id: subAuthId, confirm: confirm("permanently deleting this sub-account and revoking its credentials") },
       outputSchema: z
         .object({
-          ok: z.literal(true),
+          ok: okOut,
           deleted: z.boolean().optional().describe("true once Vobiz removed the sub-account."),
           sub_auth_id: z.string().optional().describe("The Auth ID that was deleted."),
           backend_message: backendMessage,
@@ -355,7 +356,7 @@ export function registerSubAccountTools(server: McpServer, ctx: ToolContext): vo
       inputSchema: { sub_auth_id: subAuthId },
       outputSchema: z
         .object({
-          ok: z.literal(true),
+          ok: okOut,
           kyc: z
             .record(z.string(), z.unknown())
             .optional()
@@ -397,7 +398,7 @@ export function registerSubAccountTools(server: McpServer, ctx: ToolContext): vo
       },
       outputSchema: z
         .object({
-          ok: z.literal(true),
+          ok: okOut,
           created: z.boolean().optional().describe("true once the KYC session exists."),
           session: z.record(z.string(), z.unknown()).optional().describe("The KYC session as Vobiz returns it (session id, flow_type, expiry, and widget_url for the redirect flow); secrets removed."),
           next_step: z.string().optional().describe("What to do now: wait for the customer's email, or send them to widget_url."),
