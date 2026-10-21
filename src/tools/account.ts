@@ -3,11 +3,22 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { digitsOnly } from "../config.js";
 import type { ToolContext } from "../context.js";
 import { VobizError } from "../errors.js";
-import { PAGINATION_NOTE, handler, listField, ok, pageInfo, phoneNumber, redact, toE164 } from "../util.js";
+import { handler, listField, ok, pageInfo, phoneNumber, redact, toE164 } from "../util.js";
 
 type Rec = Record<string, unknown>;
 
 const e164Path = (n: string) => encodeURIComponent(toE164(n));
+
+// ── Output schema building blocks ───────────────────────────────
+const numberItem = z
+  .unknown()
+  .describe("One phone number as Vobiz returns it: e164, status, capabilities (voice, sms...), linked application, sub-account, monthly and setup fees, billing dates.");
+const balanceItem = z
+  .unknown()
+  .describe("One wallet: currency, balance, available_balance, reserved_funds, promotional_balance, credit_limit, credit_limit_type, is_postpaid, low_balance_threshold, status.");
+const trunkItem = z
+  .unknown()
+  .describe("One SIP trunk: id, name, domain, status, direction, CPS and concurrent-call limits, transport, recording settings; username and password are \"[redacted]\".");
 
 export function registerAccountTools(server: McpServer, ctx: ToolContext): void {
   // ── Phone numbers ────────────────────────────────────────────
@@ -16,19 +27,41 @@ export function registerAccountTools(server: McpServer, ctx: ToolContext): void 
     {
       title: "List phone numbers",
       description:
-        "List the phone numbers on this Vobiz account (and its sub-accounts) with status, capabilities, linked application and fees. Supports status filter and search. " + PAGINATION_NOTE + " Read-only.",
+        "List the phone numbers on this Vobiz account and its sub-accounts with status, capabilities, linked application and fees (GET /numbers). " +
+        "Optional status filter and number search; omitted filters are not applied. Paging is stateless: pass page and per_page on every call and stop when pagination.has_more is false. " +
+        "For one number's details use get_phone_number_details; for only the numbers that can send SMS/MMS use list_messaging_numbers.",
       inputSchema: {
         status: z
           .enum(["active", "pending_purchase", "pending_release", "released", "blocked", "quarantined"])
-          .optional(),
+          .optional()
+          .describe("Only numbers in this state: active (in service), pending_purchase, pending_release, released (no longer on the account), blocked or quarantined. Omit for every state."),
         search: z
           .string()
           .regex(/^\+?\d{2,15}$/, "must be digits, optionally with a leading +")
           .optional()
-          .describe("Filter by (part of) a phone number."),
-        page: z.number().int().min(1).max(10000).optional(),
-        per_page: z.number().int().min(1).max(100).optional().describe("Max 100. Defaults to the server's VOBIZ_DEFAULT_PAGE_SIZE (20)."),
+          .describe("Digits to match anywhere in the number (leading + optional), e.g. 91987 or +14155550123."),
+        page: z.number().int().min(1).max(10000).optional().describe("1-based page number (default 1). Use pagination.next_page from the previous result."),
+        per_page: z.number().int().min(1).max(100).optional().describe("Numbers per page, 1-100. Defaults to the server's VOBIZ_DEFAULT_PAGE_SIZE (20)."),
       },
+      outputSchema: z
+        .object({
+          ok: z.literal(true),
+          numbers: z.array(numberItem).optional().describe("Numbers on this page."),
+          pagination: z
+            .object({
+              page: z.number().optional().describe("Page that was returned."),
+              per_page: z.number().optional().describe("Page size that was applied."),
+              total: z.number().nullable().optional().describe("Total matching numbers, or null when Vobiz did not report it."),
+              returned: z.number().optional().describe("Numbers on this page."),
+              has_more: z.boolean().optional().describe("True when another page exists."),
+              next_page: z.number().nullable().optional().describe("Page number to pass next, or null on the last page."),
+            })
+            .passthrough()
+            .optional(),
+          is_trial: z.boolean().optional().describe("Present and true when the account is still a trial account."),
+          trial_message: z.unknown().optional().describe("Vobiz's note about trial limits, when is_trial is true."),
+        })
+        .passthrough(),
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     handler(async (args) => {
@@ -56,8 +89,16 @@ export function registerAccountTools(server: McpServer, ctx: ToolContext): void 
     {
       title: "Get phone number details",
       description:
-        "Return the details (status, capabilities, application, sub-account, fees, billing dates) of ONE phone number on this account. Read-only.",
-      inputSchema: { phone_number: phoneNumber.describe("The number in E.164, e.g. +919876543210.") },
+        "Return ONE phone number on this account by its E.164 value: status, capabilities, linked application, sub-account, fees and billing dates. " +
+        "The number must belong to this account or one of its sub-accounts; any other number returns the not_found error. " +
+        "To browse or search numbers use list_phone_numbers; for spam flags and call statistics use get_number_health.",
+      inputSchema: { phone_number: phoneNumber.describe("The number to look up, E.164 with or without the leading +, e.g. +919876543210. Must match exactly.") },
+      outputSchema: z
+        .object({
+          ok: z.literal(true),
+          number: numberItem.optional(),
+        })
+        .passthrough(),
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     handler(async ({ phone_number }) => {
@@ -78,12 +119,20 @@ export function registerAccountTools(server: McpServer, ctx: ToolContext): void 
     {
       title: "Get phone number health",
       description:
-        "Return usage and health of one phone number on this account: spam flag, usage status and daily/hourly call statistics (answer rate, failed calls, minutes). Read-only.",
+        "Return usage and health of one phone number on this account (GET /numbers/{e164}/health): spam flag, usage status and call statistics (answer rate, failed calls, minutes) bucketed per day or per hour. " +
+        "Use it to judge whether a caller ID is being flagged or over-used; for the number's configuration and fees use get_phone_number_details. " +
+        "`days` sets the history window for daily granularity only and is ignored for hourly.",
       inputSchema: {
-        phone_number: phoneNumber.describe("The number in E.164."),
-        granularity: z.enum(["daily", "hourly"]).optional().describe("Default daily."),
-        days: z.number().int().min(1).max(90).optional().describe("Days of history for daily granularity (default 30, max 90)."),
+        phone_number: phoneNumber.describe("The number to inspect, E.164 (leading + optional); must be on this account."),
+        granularity: z.enum(["daily", "hourly"]).optional().describe("Bucket size for the statistics: daily (default) or hourly."),
+        days: z.number().int().min(1).max(90).optional().describe("Days of history for daily granularity, 1-90 (default 30). Ignored when granularity is hourly."),
       },
+      outputSchema: z
+        .object({
+          ok: z.literal(true),
+          health: z.unknown().optional().describe("Vobiz's health report: spam flag, usage status and the per-day or per-hour statistics (calls, answered, failed, answer rate, minutes)."),
+        })
+        .passthrough(),
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     handler(async ({ phone_number, granularity, days }) => {
@@ -105,8 +154,16 @@ export function registerAccountTools(server: McpServer, ctx: ToolContext): void 
     {
       title: "Get account details",
       description:
-        "Return this Vobiz account's profile: name, account type, status, CPS and concurrent-call limits, enabled features. Credentials are redacted. Read-only.",
+        "Return this Vobiz account's profile (GET /Account/{id}): name, account type, status, CPS and concurrent-call limits and enabled features. Auth tokens and other secrets are replaced by \"[redacted]\". " +
+        "Only main-account (MA_) credentials can read it: with sub-account (SA_) credentials the forbidden error is returned, while get_account_balance, get_concurrency and list_phone_numbers still work. " +
+        "For money use get_account_balance; for live call capacity use get_concurrency.",
       inputSchema: {},
+      outputSchema: z
+        .object({
+          ok: z.literal(true),
+          account: z.record(z.string(), z.unknown()).optional().describe("The profile: auth_id, name, account type, status, CPS and concurrency limits, enabled features; secret fields hold \"[redacted]\"."),
+        })
+        .passthrough(),
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     handler(async () => {
@@ -140,14 +197,24 @@ export function registerAccountTools(server: McpServer, ctx: ToolContext): void 
     {
       title: "Get account balance",
       description:
-        "Return the account balance: balance, available balance, reserved funds, credit limit and postpaid flag. Without `currency` it returns every wallet on the account (accounts can be billed in INR, USD or other currencies). Read-only.",
+        "Return this account's wallet balance (GET /balance): balance, available_balance, reserved_funds, credit_limit, is_postpaid and status, per currency. " +
+        "Without `currency` every wallet is returned in `balances` (accounts can be billed in INR, USD or other currencies) and the first one is repeated as `balance`; with `currency` only that wallet is returned as `balance`. " +
+        "For the charges and top-ups behind the balance use list_transactions.",
       inputSchema: {
         currency: z
           .string()
           .regex(/^[A-Za-z]{3}$/, "must be a 3-letter currency code")
           .optional()
-          .describe("ISO currency code, e.g. INR or USD. Omit to list every wallet."),
+          .describe("ISO 4217 code of one wallet, e.g. INR or USD (case-insensitive). Omit to return every wallet."),
       },
+      outputSchema: z
+        .object({
+          ok: z.literal(true),
+          count: z.number().optional().describe("Number of wallets returned; present only when currency was omitted."),
+          balances: z.array(balanceItem).optional().describe("Every wallet on the account; present only when currency was omitted."),
+          balance: z.unknown().optional().describe("The requested wallet, or the first wallet when currency was omitted (null when the account has none)."),
+        })
+        .passthrough(),
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     handler(async ({ currency }) => {
@@ -167,8 +234,24 @@ export function registerAccountTools(server: McpServer, ctx: ToolContext): void 
     "get_concurrency",
     {
       title: "Get call concurrency",
-      description: "Return how many calls are running right now versus the account's maximum concurrent calls. Read-only.",
+      description:
+        "Return this account's live call capacity (GET /concurrency): concurrent_calls running right now, the max_concurrent the account may run and utilization_pct. " +
+        "It is a count, not a list: to see which calls are live use list_live_calls. Use it before a batch of make_call requests to avoid hitting the concurrency limit.",
       inputSchema: {},
+      outputSchema: z
+        .object({
+          ok: z.literal(true),
+          concurrency: z
+            .object({
+              account_id: z.string().optional().describe("Account the figures belong to."),
+              concurrent_calls: z.number().optional().describe("Calls in progress at this moment."),
+              max_concurrent: z.number().optional().describe("Maximum simultaneous calls the account may run."),
+              utilization_pct: z.number().optional().describe("concurrent_calls as a percentage of max_concurrent."),
+            })
+            .passthrough()
+            .optional(),
+        })
+        .passthrough(),
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     handler(async () => {
@@ -185,12 +268,31 @@ export function registerAccountTools(server: McpServer, ctx: ToolContext): void 
     {
       title: "List SIP trunks",
       description:
-        "List SIP trunks on this account: name, domain, status, direction, CPS and concurrent-call limits. SIP credentials are redacted. " + PAGINATION_NOTE + " Read-only.",
+        "List the SIP trunks on this account (GET /trunks): name, domain, status, direction, CPS and concurrent-call limits. SIP username and password are replaced by \"[redacted]\". " +
+        "Paging is stateless: pass limit and offset on every call and follow pagination.next_offset until has_more is false. " +
+        "For one trunk's full configuration use get_sip_trunk.",
       inputSchema: {
-        direction: z.enum(["inbound", "outbound", "both"]).optional(),
-        limit: z.number().int().min(1).max(100).optional().describe("Max 100. Defaults to the server's VOBIZ_DEFAULT_PAGE_SIZE (20)."),
-        offset: z.number().int().min(0).optional(),
+        direction: z.enum(["inbound", "outbound", "both"]).optional().describe("Only trunks of this direction: inbound, outbound, or both. Omit to list every trunk."),
+        limit: z.number().int().min(1).max(100).optional().describe("Trunks per page, 1-100. Defaults to the server's VOBIZ_DEFAULT_PAGE_SIZE (20)."),
+        offset: z.number().int().min(0).optional().describe("Number of trunks to skip before the page starts (default 0). Pass pagination.next_offset from the previous page."),
       },
+      outputSchema: z
+        .object({
+          ok: z.literal(true),
+          count: z.number().optional().describe("Number of trunks on this page."),
+          trunks: z.array(trunkItem).optional().describe("Trunks on this page."),
+          pagination: z
+            .object({
+              limit: z.number().optional().describe("Page size that was applied."),
+              offset: z.number().optional().describe("Offset that was applied."),
+              total: z.number().nullable().optional().describe("Total trunks on the account, or null when Vobiz did not report it."),
+              has_more: z.boolean().optional().describe("True when another page exists."),
+              next_offset: z.number().nullable().optional().describe("Offset to pass for the next page, or null on the last page."),
+            })
+            .passthrough()
+            .optional(),
+        })
+        .passthrough(),
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     handler(async ({ direction, limit, offset }) => {
@@ -221,12 +323,20 @@ export function registerAccountTools(server: McpServer, ctx: ToolContext): void 
     {
       title: "Get SIP trunk",
       description:
-        "Return one SIP trunk's configuration (domain, status, direction, limits, transport, recording). SIP credentials are redacted. Read-only.",
+        "Return one SIP trunk's full configuration by trunk_id (GET /trunks/{id}): domain, status, direction, CPS and concurrent-call limits, transport and recording settings. SIP username and password are replaced by \"[redacted]\". " +
+        "A trunk_id that is not on this account returns the not_found error. To find trunk IDs use list_sip_trunks.",
       inputSchema: {
         trunk_id: z
           .string()
-          .regex(/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/, "must be a trunk UUID"),
+          .regex(/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/, "must be a trunk UUID")
+          .describe("Trunk UUID, as returned by list_sip_trunks or create_sip_trunk."),
       },
+      outputSchema: z
+        .object({
+          ok: z.literal(true),
+          trunk: trunkItem.optional(),
+        })
+        .passthrough(),
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     handler(async ({ trunk_id }) => {
