@@ -12,7 +12,8 @@ coverage/
 *.pem
 *.key
 .mcp.json
-.claude/
+.claude/*
+!.claude/skills/
 idempotency*.json
 
 # logs and temp files
