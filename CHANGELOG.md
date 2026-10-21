@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- The Docker image picks its mode from the environment: with `VOBIZ_HOSTED_URL` it runs the hosted connector as before; without it, it speaks MCP over stdio, so directory build systems such as Glama can read the tool list from the image.
+
 ## 1.4.2
 
 - **Tool definitions rewritten for agents.** Every one of the 428 parameters now carries a description (was 64%), every tool declares a described output schema (was none), and the "Read-only" suffixes are replaced by facts the annotations cannot carry: ordering, page size, what an unknown id returns, what is capped or redacted. Descriptions name the sibling tool for the excluded case (for example `get_call_status` vs `get_call_details`, `play_audio` vs `speak_text` vs `start_audio_stream`). Output schemas keep every field optional so error results validate on the client. Measured with the new `npm run docs:coverage`; `npm run tdqs:lint` runs Glama's deterministic Tool Definition Quality Score linter in CI.

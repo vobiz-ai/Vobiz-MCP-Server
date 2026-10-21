@@ -1,5 +1,7 @@
-# Hosted Vobiz MCP connector (multi-tenant, OAuth). Build: docker build -t vobiz-mcp .
-# Run: docker run -p 3000:3000 -e VOBIZ_HOSTED_URL=https://mcp.example.com -e VOBIZ_HOSTED_SECRET=... vobiz-mcp
+# Vobiz MCP server image. Build: docker build -t vobiz-mcp .
+# Hosted connector (multi-tenant, OAuth): docker run -p 3000:3000 -e VOBIZ_HOSTED_URL=https://mcp.example.com -e VOBIZ_HOSTED_SECRET=... vobiz-mcp
+# Without VOBIZ_HOSTED_URL the image speaks MCP over stdio (docker run -i -e VOBIZ_AUTH_ID=... -e VOBIZ_AUTH_TOKEN=... vobiz-mcp),
+# which is what directory build systems such as Glama run to read the tool list.
 # Base image pinned by digest (multi-arch index of node:24-alpine, Node 24.22.0 / Alpine 3.24.2), so a rebuild
 # is reproducible and a re-pushed tag cannot change what we ship. Dependabot (docker ecosystem) bumps the digest.
 # Refresh by hand: docker buildx imagetools inspect node:24-alpine  (the top-level "Digest:").
@@ -31,4 +33,4 @@ COPY skills ./skills
 USER node
 EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s CMD wget -qO- http://127.0.0.1:3000/health || exit 1
-CMD ["node", "dist/hosted.js"]
+CMD ["node", "dist/docker-entry.js"]
