@@ -1,9 +1,11 @@
 name: Release
 
 # Publishes a tagged version (git tag v1.2.3 && git push --tags):
-#   npm (@vobiz/mcp, with provenance) → .mcpb desktop bundle on the GitHub release → Docker image on GHCR.
-# Then run the "MCP Registry" workflow once the staged npm release is approved.
-# Needs the NPM_TOKEN secret. Each job gets only the token permissions it needs.
+#   npm (@vobiz/mcp, trusted publishing with provenance) → MCP Registry → .mcpb desktop bundle on the GitHub
+#   release → Docker image on GHCR. Nothing is staged and no npm token exists: npm trusts this repository's
+#   OIDC identity (npmjs.com → @vobiz/mcp → Settings → Trusted publisher: GitHub Actions, vobiz-ai /
+#   Vobiz-MCP-Server, workflow release.yml, environment npm). The `npm` GitHub environment can carry required
+#   reviewers if a human gate is wanted. Each job gets only the token permissions it needs.
 #
 # Docker `:latest` is NOT retagged on every tag push. It moves only when the tag is a stable release
 # (vX.Y.Z, no prerelease suffix) AND it is the highest stable semver tag in the repository, so pushing a
@@ -50,39 +52,40 @@ jobs:
   npm:
     needs: verify
     runs-on: ubuntu-latest
+    environment:
+      name: npm
+      url: https://www.npmjs.com/package/@vobiz/mcp
     permissions:
       contents: read
-      id-token: write # npm provenance
-    env:
-      # npm publishing runs only once the NPM_TOKEN secret exists; the GitHub release and Docker image always run.
-      HAS_NPM_TOKEN: ${{ secrets.NPM_TOKEN != '' }}
+      id-token: write # npm trusted publishing (OIDC) and provenance
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: env.HAS_NPM_TOKEN == 'true'
         with:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        if: env.HAS_NPM_TOKEN == 'true'
         with:
           node-version: 24
           package-manager-cache: false # no shared cache in publishing workflows (cache poisoning)
-          registry-url: https://registry.npmjs.org
-      - if: env.HAS_NPM_TOKEN == 'true'
-        run: npm ci --ignore-scripts && npm run build
-      # The NPM_TOKEN is a stage-only token: the release is staged on npm and goes live once a maintainer
-      # approves it with 2FA (npmjs.com, or `npm stage approve <id>`). Then run the "MCP Registry" workflow.
-      - name: Stage the npm release (approve with 2FA to publish)
-        if: env.HAS_NPM_TOKEN == 'true'
+      - run: npm ci --ignore-scripts && npm run build
+      - name: Publish to npm (trusted publishing, provenance)
         run: |
-          npx -y npm@12.2.1 stage publish . --provenance --access public | tee stage.txt
-          {
-            echo "### npm release staged: @vobiz/mcp@${GITHUB_REF_NAME#v}"
-            echo
-            echo "Approve it with 2FA on npmjs.com (Packages → @vobiz/mcp → Staged) or run \`npm stage list @vobiz/mcp\` then \`npm stage approve <id>\`."
-            echo "After approval, run the **MCP Registry** workflow."
-          } >> "$GITHUB_STEP_SUMMARY"
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # Trusted publishing needs npm 11.5.1 or newer; Node 24 ships a newer npm.
+          npm --version
+          npm publish --provenance --access public
+          V="${GITHUB_REF_NAME#v}"
+          for i in $(seq 1 30); do
+            npm view "@vobiz/mcp@$V" version >/dev/null 2>&1 && break
+            [ "$i" = 30 ] && { echo "@vobiz/mcp@$V did not appear on the registry"; exit 1; }
+            sleep 10
+          done
+          echo "### Published @vobiz/mcp@$V to npm (provenance attached)" >> "$GITHUB_STEP_SUMMARY"
+
+  registry:
+    needs: npm
+    permissions:
+      contents: read
+      id-token: write # mcp-publisher login github-oidc
+    uses: ./.github/workflows/registry.yml
 
   github-release:
     needs: verify

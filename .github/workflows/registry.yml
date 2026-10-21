@@ -1,8 +1,9 @@
 name: MCP Registry
 
 # Publishes server.json to the official MCP Registry (io.github.vobiz-ai/vobiz-mcp).
-# Run it after the npm release for the same version has been approved and is live.
+# Called by release.yml right after the npm publish; can also be run by hand for a version that is already on npm.
 on:
+  workflow_call:
   workflow_dispatch:
 
 permissions: {}
@@ -22,10 +23,14 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false # no shared cache in publishing workflows (cache poisoning)
-      - name: The npm package for this version must be live
+      - name: The npm package for this version must be live (the registry validates it)
         run: |
           V=$(node -p "require('./server.json').packages[0].version")
-          npm view "@vobiz/mcp@$V" version || { echo "@vobiz/mcp@$V is not on npm yet: approve the staged release first."; exit 1; }
+          for i in $(seq 1 30); do
+            npm view "@vobiz/mcp@$V" version >/dev/null 2>&1 && exit 0
+            sleep 10
+          done
+          echo "@vobiz/mcp@$V is not on npm: the npm publish must succeed first."; exit 1
       # mcp-publisher is pinned and checksum-verified, never fetched from releases/latest.
       # The sha256 is the mcp-publisher_linux_amd64.tar.gz line of registry_<version>_checksums.txt on the release
       # (also shown as the asset digest). To bump: gh release download vX.Y.Z -R modelcontextprotocol/registry \
