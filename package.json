@@ -65,6 +65,8 @@
     "dashboard": "npm run build && node --env-file-if-exists=.env dist/dashboard/server.js",
     "start:http": "node --env-file-if-exists=.env dist/http.js",
     "docs:tools": "npm run build && node scripts/gen-tool-docs.mjs",
+    "docs:coverage": "npm run build && node scripts/tool-definition-coverage.mjs",
+    "tdqs:lint": "npm run build && npx -y mcp-tdqs lint --command \"node dist/index.js\"",
     "lint": "tsc -p tsconfig.json --noEmit --noUnusedLocals --noUnusedParameters",
     "check": "npm run lint && npm run test:all",
     "start:hosted": "node --env-file-if-exists=.env dist/hosted.js",
