@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Two new Vobiz Agent Skills bundled**, bringing the set to 17: `vobiz-reports` (dated Markdown reports on connectivity, hangup causes, number performance, spend, balance, campaigns and messaging, with one shared connected / not-connected / error definition) and `vobiz-campaign-planner` (sizes, schedules and builds an outbound campaign from those reports through the Campaign Manager API, behind confirmation gates). The `vobiz-api` router and the forward-deployed-engineer hand-off table route to both. Available as prompts, `vobiz://skills/*` resources and through `get_vobiz_skill`.
+
 ## 1.4.2
 
 - **Tool definitions rewritten for agents.** Every one of the 428 parameters now carries a description (was 64%), every tool declares a described output schema (was none), and the "Read-only" suffixes are replaced by facts the annotations cannot carry: ordering, page size, what an unknown id returns, what is capped or redacted. Descriptions name the sibling tool for the excluded case (for example `get_call_status` vs `get_call_details`, `play_audio` vs `speak_text` vs `start_audio_stream`). Output schemas keep every field optional so error results validate on the client. Measured with the new `npm run docs:coverage`; `npm run tdqs:lint` runs Glama's deterministic Tool Definition Quality Score linter in CI.

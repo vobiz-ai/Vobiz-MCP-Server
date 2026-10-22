@@ -35,7 +35,7 @@ Sort the first message into one or more of these families before asking anything
 | **C. Human agents on calls** | contact centre, softphone, browser calling, CRM click-to-call, desk phones | Endpoints (WebRTC/SIP), Applications, CRM integrations |
 | **D. Existing telephony estate** | PBX, SBC, Asterisk/FreeSWITCH/3CX/Avaya/Cisco, "we already have a carrier", "keep our numbers" | SIP trunking, BYOC |
 | **E. Bulk outbound** | campaigns, dialler, "call 50,000 leads", lead gen, collections | Campaigns (Console + Campaign Manager API), 140/160 numbers, NDNC |
-| **F. Multi-customer platform** | SaaS, reseller, white-label, "our customers each need numbers", tenants | Sub-accounts vs partner accounts |
+| **F. Multi-customer platform** | SaaS, reseller, "our customers each need numbers", tenants | Sub-accounts vs partner accounts |
 | **G. WhatsApp** | WhatsApp, templates, broadcast, chatbot, BSP migration | WhatsApp Business API |
 | **H. Migration** | Plivo, Twilio, Exotel, "moving from" | `vobiz-plivo-migration` skill, BYOC, SIP vs WebSockets |
 | **I. Data and quality** | analytics, billing reconciliation, call quality, MOS, recordings, transcripts | CDRs, recordings, trunk webhooks, hangup causes |
@@ -260,6 +260,8 @@ Once the path is chosen, load exactly the skills the build needs:
 | Applications and endpoints, WebRTC | `vobiz-applications-endpoints` |
 | Connect a named AI platform | `vobiz-ai-voice-agents` |
 | Call history, quality, billing data | `vobiz-cdr` |
+| Reports on connectivity, numbers, spend, campaigns | `vobiz-reports` |
+| Size, schedule and run an outbound campaign | `vobiz-campaign-planner` |
 | Tenants inside one account, KYC per tenant | `vobiz-sub-accounts` |
 | Reseller accounts, balance transfer, capacity transfer | `vobiz-partner-api` |
 | WhatsApp messaging | `vobiz-whatsapp` |
