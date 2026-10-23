@@ -117,7 +117,7 @@ You need a Vobiz account, plus its **Auth ID** and **Auth Token** from the overv
 | Claude (web, Desktop, mobile) | **Settings → Connectors → Add custom connector** → `https://mcp.vobiz.ai/mcp` | Click **Connect** and sign in ([5 steps](#connect-claude-in-five-steps)) |
 | Claude Code | `claude mcp add --transport http vobiz https://mcp.vobiz.ai/mcp` | Run `/mcp`, pick **vobiz**, sign in |
 | Claude Code (plugin: server + skills) | `/plugin install vobiz --marketplace vobiz-ai/Vobiz-MCP-Server` | Enter your Auth ID and Auth Token when asked |
-| Claude Desktop (local extension) | Open `vobiz-mcp-v1.4.2.mcpb` from the [latest release](https://github.com/vobiz-ai/Vobiz-MCP-Server/releases/latest) | Enter your Auth ID and Auth Token |
+| Claude Desktop (local extension) | Open `vobiz-mcp-v1.4.3.mcpb` from the [latest release](https://github.com/vobiz-ai/Vobiz-MCP-Server/releases/latest) | Enter your Auth ID and Auth Token |
 | OpenAI Codex (CLI, IDE, app) | `codex mcp add vobiz --url https://mcp.vobiz.ai/mcp` | The Vobiz sign-in opens in your browser; to sign in again later, run `codex mcp login vobiz` |
 | ChatGPT | **Plugins → + → Add custom MCP server** → `https://mcp.vobiz.ai/mcp` | Sign in, then use **@Vobiz** |
 | Gemini CLI | `gemini mcp add -s user --transport http vobiz https://mcp.vobiz.ai/mcp` | Run `/mcp auth vobiz` |
@@ -137,13 +137,13 @@ Local options run the server on your machine with `npx` and need Node.js 22.9 or
 | Client | Install |
 |---|---|
 | Claude (web, Desktop, mobile) | Settings → Connectors → Add custom connector → `https://mcp.vobiz.ai/mcp` |
-| Claude Desktop extension | Open `vobiz-mcp-v1.4.2.mcpb` from the [latest release](https://github.com/vobiz-ai/Vobiz-MCP-Server/releases/latest) |
+| Claude Desktop extension | Open `vobiz-mcp-v1.4.3.mcpb` from the [latest release](https://github.com/vobiz-ai/Vobiz-MCP-Server/releases/latest) |
 | Claude Code | `/plugin install vobiz --marketplace vobiz-ai/Vobiz-MCP-Server` (MCP server + skills) |
-| OpenAI Codex | `codex mcp add vobiz --env VOBIZ_AUTH_ID=MA_XXXXXXXX --env VOBIZ_AUTH_TOKEN=YOUR_AUTH_TOKEN -- npx -y @vobiz/mcp@1.4.2` |
+| OpenAI Codex | `codex mcp add vobiz --env VOBIZ_AUTH_ID=MA_XXXXXXXX --env VOBIZ_AUTH_TOKEN=YOUR_AUTH_TOKEN -- npx -y @vobiz/mcp@1.4.3` |
 | Gemini CLI | `gemini extensions install https://github.com/vobiz-ai/Vobiz-MCP-Server` |
-| Cursor | [One-click install](https://cursor.com/en/install-mcp?name=vobiz&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsIkB2b2Jpei9tY3BAMS40LjIiXSwiZW52Ijp7IlZPQklaX0FVVEhfSUQiOiIke2VudjpWT0JJWl9BVVRIX0lEfSIsIlZPQklaX0FVVEhfVE9LRU4iOiIke2VudjpWT0JJWl9BVVRIX1RPS0VOfSJ9fQ%3D%3D) |
-| VS Code / Copilot | [One-click install](https://insiders.vscode.dev/redirect/mcp/install?name=vobiz&config=%7B%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22%40vobiz%2Fmcp%401.4.2%22%5D%2C%22env%22%3A%7B%22VOBIZ_AUTH_ID%22%3A%22%24%7Benv%3AVOBIZ_AUTH_ID%7D%22%2C%22VOBIZ_AUTH_TOKEN%22%3A%22%24%7Benv%3AVOBIZ_AUTH_TOKEN%7D%22%7D%7D) |
-| Goose | `goose configure` → Add Extension → `npx -y @vobiz/mcp@1.4.2` ([deeplink](docs/INSTALL.md#goose)) |
+| Cursor | [One-click install](https://cursor.com/en/install-mcp?name=vobiz&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsIkB2b2Jpei9tY3BAMS40LjMiXSwiZW52Ijp7IlZPQklaX0FVVEhfSUQiOiIke2VudjpWT0JJWl9BVVRIX0lEfSIsIlZPQklaX0FVVEhfVE9LRU4iOiIke2VudjpWT0JJWl9BVVRIX1RPS0VOfSJ9fQ%3D%3D) |
+| VS Code / Copilot | [One-click install](https://insiders.vscode.dev/redirect/mcp/install?name=vobiz&config=%7B%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22%40vobiz%2Fmcp%401.4.3%22%5D%2C%22env%22%3A%7B%22VOBIZ_AUTH_ID%22%3A%22%24%7Benv%3AVOBIZ_AUTH_ID%7D%22%2C%22VOBIZ_AUTH_TOKEN%22%3A%22%24%7Benv%3AVOBIZ_AUTH_TOKEN%7D%22%7D%7D) |
+| Goose | `goose configure` → Add Extension → `npx -y @vobiz/mcp@1.4.3` ([deeplink](docs/INSTALL.md#goose)) |
 | Windsurf, Zed, Cline, JetBrains, Continue, LM Studio, Warp, ChatGPT | [docs/INSTALL.md](docs/INSTALL.md) |
 
 Any other MCP client:
@@ -155,7 +155,7 @@ Any other MCP client:
       "command": "npx",
       "args": [
         "-y",
-        "@vobiz/mcp@1.4.2"
+        "@vobiz/mcp@1.4.3"
       ],
       "env": {
         "VOBIZ_AUTH_ID": "MA_XXXXXXXX",
@@ -168,7 +168,7 @@ Any other MCP client:
 
 Calling, messaging and account changes stay off until you add `VOBIZ_ENABLE_CALLS`, `VOBIZ_ENABLE_MESSAGING` or `VOBIZ_ENABLE_PROVISIONING` set to `"true"` to `env`.
 
-To self-host the remote connector: `docker run -p 3000:3000 -e VOBIZ_HOSTED_URL=https://mcp.example.com -e VOBIZ_HOSTED_SECRET="$(openssl rand -hex 32)" ghcr.io/vobiz-ai/vobiz-mcp:v1.4.2` ([docs/HOSTING.md](docs/HOSTING.md)).
+To self-host the remote connector: `docker run -p 3000:3000 -e VOBIZ_HOSTED_URL=https://mcp.example.com -e VOBIZ_HOSTED_SECRET="$(openssl rand -hex 32)" ghcr.io/vobiz-ai/vobiz-mcp:v1.4.3` ([docs/HOSTING.md](docs/HOSTING.md)).
 <!-- install:end -->
 
 ## Tools
