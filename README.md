@@ -63,6 +63,7 @@ Then say *"use the audio Morning alarm"* and the assistant passes that name as `
 - [Privacy policy](#privacy-policy)
 - [Development](#development)
 - [Troubleshooting](#troubleshooting)
+- [Related](#related)
 
 ## What you can ask
 
@@ -393,6 +394,11 @@ npm run skills:sync         # refresh bundled skills from the docs repository
 | `unsupported` on gather or hold | Run single-account HTTP mode with `VOBIZ_PUBLIC_URL`. |
 | Callbacks rejected with 401 | `VOBIZ_PUBLIC_URL` must match the URL Vobiz calls exactly. Try `VOBIZ_WEBHOOK_SIGNATURE=verify_if_present`. |
 | Hosted sign-in says the link expired | The sign-in page is valid for 15 minutes. Start the connection again from your client. |
+
+## Related
+
+- **Vobiz CLI** ([GitHub](https://github.com/vobiz-ai/Vobiz-CLI), [docs](https://www.vobiz.ai/docs/resources/cli)): run `vobiz mcp install <client>` to add this server to Claude Code, Cursor, Codex, VS Code, Gemini CLI, Windsurf, Zed or Claude Desktop. It uses the hosted connector with OAuth sign-in by default.
+- **Vobiz Agent Skills** ([GitHub](https://github.com/vobiz-ai/Agent-Skills), [docs](https://www.vobiz.ai/docs/resources/skills)): the same skills bundled here, packaged for any agent that loads skills.
 
 ## Built by Team Vobiz
 
