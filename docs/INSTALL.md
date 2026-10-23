@@ -57,7 +57,7 @@ The hosted connector needs no install: you add a URL and sign in with your Vobiz
 1. **Copy your credentials.** In the [Vobiz console](https://console.vobiz.ai) overview page, copy your **Auth ID** (`MA_…`, or `SA_…` for a sub-account) and **Auth Token**.
 2. **Open Connectors.** In claude.ai or Claude Desktop, go to **Settings → Connectors → Add custom connector**. On Team and Enterprise plans an Owner adds it under **Admin settings → Connectors**, then each member connects their own account.
 3. **Add the server.** Name it `Vobiz` and enter `https://mcp.vobiz.ai/mcp`. Leave the advanced OAuth fields empty and click **Add**.
-4. **Connect and sign in.** Click **Connect**. On the Vobiz sign-in page, paste your Auth ID and Auth Token, optionally tick **Read-only access**, and click **Allow access**. You return to Claude, connected.
+4. **Connect and sign in.** Click **Connect**. On the Vobiz sign-in page, paste your Auth ID and Auth Token, and choose **Full access**, **Personal assistant** or **Read-only**. Optionally fill in **Call me on**, **Call from** and **Timezone** for reminder calls (**Call me on** is required for Personal assistant). Click **Allow access**. You return to Claude, connected.
 5. **Use it.** In a new chat, enable **Vobiz** in the tools menu and ask: _"What's my Vobiz balance, and how many calls are live right now?"_
 
 To change between read-only and full access, disconnect and connect again. To revoke every app at once, rotate your Auth Token in the console.
