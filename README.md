@@ -21,7 +21,7 @@ It also ships the **Vobiz Agent Skills**, so the model knows how each Vobiz prod
 
 | | |
 |---|---|
-| **Tools** | 114 in 13 toolsets: calls, in-call control, conferences, audio streams, IVR/XML, records, numbers, SIP trunks and endpoints, applications, sub-accounts, billing, SMS/MMS/RCS, opt-outs, skills, and reminder calls with your own audio (hosted connector) |
+| **Tools** | 114 in 13 toolsets: calls, in-call control, conferences, media (audio streams, recordings, number releases, billing), records, IVR/XML, account and numbers, provisioning (applications, number purchases, SIP trunks), SIP endpoints and credentials, sub-accounts, messaging (SMS/MMS/RCS, opt-outs), skills, and reminder calls with your own audio (hosted connector) |
 | **Prompts** | 17: one per Vobiz skill, e.g. `vobiz-voice-xml`, `vobiz-sip-trunking` |
 | **Resources** | `vobiz://skills/index` and `vobiz://skills/{name}` (with completion) |
 | **Transports** | stdio (`npx`), Streamable HTTP for one account, hosted multi-tenant Streamable HTTP with OAuth 2.1 |
@@ -117,7 +117,7 @@ You need a Vobiz account, plus its **Auth ID** and **Auth Token** from the overv
 | Claude Code | `claude mcp add --transport http vobiz https://mcp.vobiz.ai/mcp` | Run `/mcp`, pick **vobiz**, sign in |
 | Claude Code (plugin: server + skills) | `/plugin install vobiz --marketplace vobiz-ai/Vobiz-MCP-Server` | Enter your Auth ID and Auth Token when asked |
 | Claude Desktop (local extension) | Open `vobiz-mcp-v1.4.2.mcpb` from the [latest release](https://github.com/vobiz-ai/Vobiz-MCP-Server/releases/latest) | Enter your Auth ID and Auth Token |
-| OpenAI Codex (CLI, IDE, app) | `codex mcp add vobiz --url https://mcp.vobiz.ai/mcp` | The Vobiz sign-in opens automatically |
+| OpenAI Codex (CLI, IDE, app) | `codex mcp add vobiz --url https://mcp.vobiz.ai/mcp` | The Vobiz sign-in opens in your browser; to sign in again later, run `codex mcp login vobiz` |
 | ChatGPT | **Plugins → + → Add custom MCP server** → `https://mcp.vobiz.ai/mcp` | Sign in, then use **@Vobiz** |
 | Gemini CLI | `gemini mcp add -s user --transport http vobiz https://mcp.vobiz.ai/mcp` | Run `/mcp auth vobiz` |
 | Cursor | [Add to Cursor](https://cursor.com/en/install-mcp?name=vobiz&config=eyJ1cmwiOiJodHRwczovL21jcC52b2Jpei5haS9tY3AifQ%3D%3D) | Click **Connect** in Cursor's MCP settings |
@@ -356,7 +356,7 @@ git clone https://github.com/vobiz-ai/Vobiz-MCP-Server.git
 cd Vobiz-MCP-Server
 npm ci
 cp .env.example .env        # placeholders only; fill in your own credentials
-npm run check               # type-check, build, 253 mocked tests
+npm run check               # type-check, build, mocked tests
 npm run test:live           # live read-only smoke test with .env credentials (calls/messages/purchases forced off)
 npm run test:live:hosted    # live OAuth flow + hosted tools against the real API (no messages sent)
 npm run inspector           # MCP Inspector against dist/index.js

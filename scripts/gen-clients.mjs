@@ -182,7 +182,7 @@ const oneStep = () => `| Client | One step | Then |
 | Claude Code | \`claude mcp add --transport http vobiz ${hosted}\` | Run \`/mcp\`, pick **vobiz**, sign in |
 | Claude Code (plugin: server + skills) | \`/plugin install vobiz --marketplace ${slug}\` | Enter your Auth ID and Auth Token when asked |
 | Claude Desktop (local extension) | Open \`vobiz-mcp-v${pkg.version}.mcpb\` from the [latest release](${repo}/releases/latest) | Enter your Auth ID and Auth Token |
-| OpenAI Codex (CLI, IDE, app) | \`codex mcp add vobiz --url ${hosted}\` | The Vobiz sign-in opens automatically |
+| OpenAI Codex (CLI, IDE, app) | \`codex mcp add vobiz --url ${hosted}\` | The Vobiz sign-in opens in your browser; to sign in again later, run \`codex mcp login vobiz\` |
 | ChatGPT | **Plugins → + → Add custom MCP server** → \`${hosted}\` | Sign in, then use **@Vobiz** |
 | Gemini CLI | \`gemini mcp add -s user --transport http vobiz ${hosted}\` | Run \`/mcp auth vobiz\` |
 | Cursor | [Add to Cursor](${remoteCursorWeb}) | Click **Connect** in Cursor's MCP settings |
@@ -284,8 +284,10 @@ Codex CLI, the IDE extension and the ChatGPT desktop app share \`~/.codex/config
 
 \`\`\`bash
 codex mcp add vobiz --env VOBIZ_AUTH_ID=MA_XXXXXXXX --env VOBIZ_AUTH_TOKEN=YOUR_AUTH_TOKEN -- npx -y ${spec}
-# or remote with OAuth:
-codex mcp add vobiz --url ${hosted} && codex mcp login vobiz
+# or remote with OAuth (the Vobiz sign-in opens in your browser):
+codex mcp add vobiz --url ${hosted}
+# sign in again later, or if the browser did not open:
+codex mcp login vobiz
 \`\`\`
 
 To keep the token out of the file, forward it from your shell instead:

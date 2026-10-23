@@ -17,7 +17,7 @@ You need your **Auth ID** and **Auth Token** from the overview page of the [Vobi
 | Claude Code | `claude mcp add --transport http vobiz https://mcp.vobiz.ai/mcp` | Run `/mcp`, pick **vobiz**, sign in |
 | Claude Code (plugin: server + skills) | `/plugin install vobiz --marketplace vobiz-ai/Vobiz-MCP-Server` | Enter your Auth ID and Auth Token when asked |
 | Claude Desktop (local extension) | Open `vobiz-mcp-v1.4.2.mcpb` from the [latest release](https://github.com/vobiz-ai/Vobiz-MCP-Server/releases/latest) | Enter your Auth ID and Auth Token |
-| OpenAI Codex (CLI, IDE, app) | `codex mcp add vobiz --url https://mcp.vobiz.ai/mcp` | The Vobiz sign-in opens automatically |
+| OpenAI Codex (CLI, IDE, app) | `codex mcp add vobiz --url https://mcp.vobiz.ai/mcp` | The Vobiz sign-in opens in your browser; to sign in again later, run `codex mcp login vobiz` |
 | ChatGPT | **Plugins → + → Add custom MCP server** → `https://mcp.vobiz.ai/mcp` | Sign in, then use **@Vobiz** |
 | Gemini CLI | `gemini mcp add -s user --transport http vobiz https://mcp.vobiz.ai/mcp` | Run `/mcp auth vobiz` |
 | Cursor | [Add to Cursor](https://cursor.com/en/install-mcp?name=vobiz&config=eyJ1cmwiOiJodHRwczovL21jcC52b2Jpei5haS9tY3AifQ%3D%3D) | Click **Connect** in Cursor's MCP settings |
@@ -110,8 +110,10 @@ Codex CLI, the IDE extension and the ChatGPT desktop app share `~/.codex/config.
 
 ```bash
 codex mcp add vobiz --env VOBIZ_AUTH_ID=MA_XXXXXXXX --env VOBIZ_AUTH_TOKEN=YOUR_AUTH_TOKEN -- npx -y @vobiz/mcp@1.4.2
-# or remote with OAuth:
-codex mcp add vobiz --url https://mcp.vobiz.ai/mcp && codex mcp login vobiz
+# or remote with OAuth (the Vobiz sign-in opens in your browser):
+codex mcp add vobiz --url https://mcp.vobiz.ai/mcp
+# sign in again later, or if the browser did not open:
+codex mcp login vobiz
 ```
 
 To keep the token out of the file, forward it from your shell instead:
