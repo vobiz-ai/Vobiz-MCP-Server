@@ -21,11 +21,11 @@ It also ships the **Vobiz Agent Skills**, so the model knows how each Vobiz prod
 
 | | |
 |---|---|
-| **Tools** | 114 in 13 toolsets: calls, in-call control, conferences, audio streams, IVR/XML, records, numbers, SIP trunks and endpoints, applications, sub-accounts, billing, SMS/MMS/RCS, opt-outs, skills, and reminder calls with your own audio (hosted connector) |
-| **Prompts** | 15: one per Vobiz skill, e.g. `vobiz-voice-xml`, `vobiz-sip-trunking` |
+| **Tools** | 114 in 13 toolsets: calls, in-call control, conferences, media (audio streams, recordings, number releases, billing), records, IVR/XML, account and numbers, provisioning (applications, number purchases, SIP trunks), SIP endpoints and credentials, sub-accounts, messaging (SMS/MMS/RCS, opt-outs), skills, and reminder calls with your own audio (hosted connector) |
+| **Prompts** | 17: one per Vobiz skill, e.g. `vobiz-voice-xml`, `vobiz-sip-trunking` |
 | **Resources** | `vobiz://skills/index` and `vobiz://skills/{name}` (with completion) |
 | **Transports** | stdio (`npx`), Streamable HTTP for one account, hosted multi-tenant Streamable HTTP with OAuth 2.1 |
-| **Safety** | Calling, messaging and account changes are off until enabled. Every write is confirmed, rate-limited and idempotent. `VOBIZ_READ_ONLY` and `VOBIZ_TOOLSETS` narrow what the model can see. |
+| **Safety** | Calling, messaging and account changes are off until enabled. Calls, messages, purchases, transfers, provisioning and deletes need `confirm: true`; controls on a call already placed (keypad tones, playback, speech, muting) run without a second confirmation. Calls and messages are rate-limited and idempotent. `VOBIZ_READ_ONLY` and `VOBIZ_TOOLSETS` narrow what the model can see. |
 
 > Looking for documentation search instead of account operations? Use the hosted [Vobiz Docs MCP server](https://www.vobiz.ai/docs/resources/mcp) (`https://www.vobiz.ai/docs/mcp`). The two servers work well side by side.
 
@@ -63,6 +63,7 @@ Then say *"use the audio Morning alarm"* and the assistant passes that name as `
 - [Privacy policy](#privacy-policy)
 - [Development](#development)
 - [Troubleshooting](#troubleshooting)
+- [Related](#related)
 
 ## What you can ask
 
@@ -116,8 +117,8 @@ You need a Vobiz account, plus its **Auth ID** and **Auth Token** from the overv
 | Claude (web, Desktop, mobile) | **Settings → Connectors → Add custom connector** → `https://mcp.vobiz.ai/mcp` | Click **Connect** and sign in ([5 steps](#connect-claude-in-five-steps)) |
 | Claude Code | `claude mcp add --transport http vobiz https://mcp.vobiz.ai/mcp` | Run `/mcp`, pick **vobiz**, sign in |
 | Claude Code (plugin: server + skills) | `/plugin install vobiz --marketplace vobiz-ai/Vobiz-MCP-Server` | Enter your Auth ID and Auth Token when asked |
-| Claude Desktop (local extension) | Open `vobiz-mcp-v1.4.2.mcpb` from the [latest release](https://github.com/vobiz-ai/Vobiz-MCP-Server/releases/latest) | Enter your Auth ID and Auth Token |
-| OpenAI Codex (CLI, IDE, app) | `codex mcp add vobiz --url https://mcp.vobiz.ai/mcp` | The Vobiz sign-in opens automatically |
+| Claude Desktop (local extension) | Open `vobiz-mcp-v1.4.3.mcpb` from the [latest release](https://github.com/vobiz-ai/Vobiz-MCP-Server/releases/latest) | Enter your Auth ID and Auth Token |
+| OpenAI Codex (CLI, IDE, app) | `codex mcp add vobiz --url https://mcp.vobiz.ai/mcp` | The Vobiz sign-in opens in your browser; to sign in again later, run `codex mcp login vobiz` |
 | ChatGPT | **Plugins → + → Add custom MCP server** → `https://mcp.vobiz.ai/mcp` | Sign in, then use **@Vobiz** |
 | Gemini CLI | `gemini mcp add -s user --transport http vobiz https://mcp.vobiz.ai/mcp` | Run `/mcp auth vobiz` |
 | Cursor | [Add to Cursor](https://cursor.com/en/install-mcp?name=vobiz&config=eyJ1cmwiOiJodHRwczovL21jcC52b2Jpei5haS9tY3AifQ%3D%3D) | Click **Connect** in Cursor's MCP settings |
@@ -136,13 +137,13 @@ Local options run the server on your machine with `npx` and need Node.js 22.9 or
 | Client | Install |
 |---|---|
 | Claude (web, Desktop, mobile) | Settings → Connectors → Add custom connector → `https://mcp.vobiz.ai/mcp` |
-| Claude Desktop extension | Open `vobiz-mcp-v1.4.2.mcpb` from the [latest release](https://github.com/vobiz-ai/Vobiz-MCP-Server/releases/latest) |
+| Claude Desktop extension | Open `vobiz-mcp-v1.4.3.mcpb` from the [latest release](https://github.com/vobiz-ai/Vobiz-MCP-Server/releases/latest) |
 | Claude Code | `/plugin install vobiz --marketplace vobiz-ai/Vobiz-MCP-Server` (MCP server + skills) |
-| OpenAI Codex | `codex mcp add vobiz --env VOBIZ_AUTH_ID=MA_XXXXXXXX --env VOBIZ_AUTH_TOKEN=YOUR_AUTH_TOKEN -- npx -y @vobiz/mcp@1.4.2` |
+| OpenAI Codex | `codex mcp add vobiz --env VOBIZ_AUTH_ID=MA_XXXXXXXX --env VOBIZ_AUTH_TOKEN=YOUR_AUTH_TOKEN -- npx -y @vobiz/mcp@1.4.3` |
 | Gemini CLI | `gemini extensions install https://github.com/vobiz-ai/Vobiz-MCP-Server` |
-| Cursor | [One-click install](https://cursor.com/en/install-mcp?name=vobiz&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsIkB2b2Jpei9tY3BAMS40LjIiXSwiZW52Ijp7IlZPQklaX0FVVEhfSUQiOiIke2VudjpWT0JJWl9BVVRIX0lEfSIsIlZPQklaX0FVVEhfVE9LRU4iOiIke2VudjpWT0JJWl9BVVRIX1RPS0VOfSJ9fQ%3D%3D) |
-| VS Code / Copilot | [One-click install](https://insiders.vscode.dev/redirect/mcp/install?name=vobiz&config=%7B%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22%40vobiz%2Fmcp%401.4.2%22%5D%2C%22env%22%3A%7B%22VOBIZ_AUTH_ID%22%3A%22%24%7Benv%3AVOBIZ_AUTH_ID%7D%22%2C%22VOBIZ_AUTH_TOKEN%22%3A%22%24%7Benv%3AVOBIZ_AUTH_TOKEN%7D%22%7D%7D) |
-| Goose | `goose configure` → Add Extension → `npx -y @vobiz/mcp@1.4.2` ([deeplink](docs/INSTALL.md#goose)) |
+| Cursor | [One-click install](https://cursor.com/en/install-mcp?name=vobiz&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsIkB2b2Jpei9tY3BAMS40LjMiXSwiZW52Ijp7IlZPQklaX0FVVEhfSUQiOiIke2VudjpWT0JJWl9BVVRIX0lEfSIsIlZPQklaX0FVVEhfVE9LRU4iOiIke2VudjpWT0JJWl9BVVRIX1RPS0VOfSJ9fQ%3D%3D) |
+| VS Code / Copilot | [One-click install](https://insiders.vscode.dev/redirect/mcp/install?name=vobiz&config=%7B%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22%40vobiz%2Fmcp%401.4.3%22%5D%2C%22env%22%3A%7B%22VOBIZ_AUTH_ID%22%3A%22%24%7Benv%3AVOBIZ_AUTH_ID%7D%22%2C%22VOBIZ_AUTH_TOKEN%22%3A%22%24%7Benv%3AVOBIZ_AUTH_TOKEN%7D%22%7D%7D) |
+| Goose | `goose configure` → Add Extension → `npx -y @vobiz/mcp@1.4.3` ([deeplink](docs/INSTALL.md#goose)) |
 | Windsurf, Zed, Cline, JetBrains, Continue, LM Studio, Warp, ChatGPT | [docs/INSTALL.md](docs/INSTALL.md) |
 
 Any other MCP client:
@@ -154,7 +155,7 @@ Any other MCP client:
       "command": "npx",
       "args": [
         "-y",
-        "@vobiz/mcp@1.4.2"
+        "@vobiz/mcp@1.4.3"
       ],
       "env": {
         "VOBIZ_AUTH_ID": "MA_XXXXXXXX",
@@ -167,28 +168,28 @@ Any other MCP client:
 
 Calling, messaging and account changes stay off until you add `VOBIZ_ENABLE_CALLS`, `VOBIZ_ENABLE_MESSAGING` or `VOBIZ_ENABLE_PROVISIONING` set to `"true"` to `env`.
 
-To self-host the remote connector: `docker run -p 3000:3000 -e VOBIZ_HOSTED_URL=https://mcp.example.com -e VOBIZ_HOSTED_SECRET="$(openssl rand -hex 32)" ghcr.io/vobiz-ai/vobiz-mcp:v1.4.2` ([docs/HOSTING.md](docs/HOSTING.md)).
+To self-host the remote connector: `docker run -p 3000:3000 -e VOBIZ_HOSTED_URL=https://mcp.example.com -e VOBIZ_HOSTED_SECRET="$(openssl rand -hex 32)" ghcr.io/vobiz-ai/vobiz-mcp:v1.4.3` ([docs/HOSTING.md](docs/HOSTING.md)).
 <!-- install:end -->
 
 ## Tools
 
 Every tool has a `title`, input validation, and annotations: `readOnlyHint: true` or `destructiveHint: true`, plus `idempotentHint` and `openWorldHint`. Results are `structuredContent`, with the same JSON sent as text. [docs/TOOLS.md](docs/TOOLS.md) lists every input and is generated from the registry.
 
-| Toolset | Read-only | Writes (need confirmation) |
-|---|---|---|
-| `calls` | `get_call_status`, `list_live_calls` | `make_call`, `end_call`, `send_dtmf` |
-| `call_control` | | `transfer_call`, `hold_call`, `unhold_call`, `play_audio`, `stop_audio`, `speak_text`, `stop_speaking`, `start_recording`, `stop_recording` |
-| `conferences` | `list_conferences`, `get_conference` | `end_conference`, `end_all_conferences`, `mute_conference_member`, `unmute_conference_member`, `deafen_conference_member`, `undeafen_conference_member`, `kick_conference_member`, `hangup_conference_member`, `play_audio_to_conference_member`, `stop_audio_to_conference_member`, `start_conference_recording`, `stop_conference_recording` |
-| `media` | `list_audio_streams`, `get_audio_stream`, `list_transactions`, `list_transaction_types` | `start_audio_stream`, `stop_audio_stream`, `delete_recording`, `release_phone_number`, `cancel_number_release`, `assign_number_to_subaccount`, `unassign_number_from_subaccount` |
-| `records` | `get_call_details`, `list_call_records`, `get_call_recording`, `list_recordings` | |
-| `voice_xml` | `generate_answer_xml`, `get_gather_result`, `list_webhook_events`, `list_webhooks` | `gather_dtmf` |
-| `account` | `get_account_details`, `get_account_balance`, `get_concurrency`, `list_phone_numbers`, `get_phone_number_details`, `get_number_health`, `list_sip_trunks`, `get_sip_trunk` | |
-| `provisioning` | `list_applications`, `get_application`, `search_available_numbers` | `create_application`, `update_application`, `delete_application`, `buy_phone_number`, `update_phone_number`, `create_sip_trunk`, `update_sip_trunk`, `delete_sip_trunk` |
-| `sip` | `list_sip_endpoints`, `get_sip_endpoint`, `list_trunk_credentials`, `list_ip_acl_entries`, `list_origination_uris` | `create_sip_endpoint`, `update_sip_endpoint`, `delete_sip_endpoint`, `create_trunk_credential`, `update_trunk_credential`, `delete_trunk_credential`, `add_ip_acl_entry`, `update_ip_acl_entry`, `delete_ip_acl_entry`, `create_origination_uri`, `update_origination_uri`, `delete_origination_uri` |
-| `subaccounts` | `list_sub_accounts`, `get_sub_account`, `get_sub_account_kyc_status` | `create_sub_account`, `update_sub_account`, `delete_sub_account`, `create_sub_account_kyc_session` |
-| `messaging` | `list_messaging_numbers`, `preview_message_cost`, `list_messages`, `get_message`, `list_conversations`, `get_conversation_messages`, `list_broadcasts`, `get_broadcast`, `check_opt_out`, `list_opt_outs` | `send_message`, `add_opt_out`, `remove_opt_out` |
-| `reminders` (hosted only) | `list_reminder_calls`, `get_reminder_call`, `list_audio` | `schedule_reminder_call`, `cancel_reminder_call`, `create_audio_upload_link`, `import_audio_from_url`, `delete_audio` |
-| `skills` | `list_vobiz_skills`, `get_vobiz_skill` | |
+| Toolset | Read-only | Writes that need `confirm: true` | Writes without a second confirmation |
+|---|---|---|---|
+| `calls` | `get_call_status`, `list_live_calls` | `make_call`, `end_call` | `send_dtmf` |
+| `call_control` | | `transfer_call`, `hold_call`, `unhold_call`, `start_recording` | `play_audio`, `stop_audio`, `speak_text`, `stop_speaking`, `stop_recording` |
+| `conferences` | `list_conferences`, `get_conference` | `end_conference`, `end_all_conferences`, `kick_conference_member`, `hangup_conference_member`, `start_conference_recording` | `mute_conference_member`, `unmute_conference_member`, `deafen_conference_member`, `undeafen_conference_member`, `play_audio_to_conference_member`, `stop_audio_to_conference_member`, `stop_conference_recording` |
+| `media` | `list_audio_streams`, `get_audio_stream`, `list_transactions`, `list_transaction_types` | `start_audio_stream`, `delete_recording`, `release_phone_number`, `cancel_number_release`, `assign_number_to_subaccount`, `unassign_number_from_subaccount` | `stop_audio_stream` |
+| `records` | `get_call_details`, `list_call_records`, `get_call_recording`, `list_recordings` | | |
+| `voice_xml` | `generate_answer_xml`, `get_gather_result`, `list_webhook_events`, `list_webhooks` | `gather_dtmf` | |
+| `account` | `get_account_details`, `get_account_balance`, `get_concurrency`, `list_phone_numbers`, `get_phone_number_details`, `get_number_health`, `list_sip_trunks`, `get_sip_trunk` | | |
+| `provisioning` | `list_applications`, `get_application`, `search_available_numbers` | `create_application`, `update_application`, `delete_application`, `buy_phone_number`, `update_phone_number`, `create_sip_trunk`, `update_sip_trunk`, `delete_sip_trunk` | |
+| `sip` | `list_sip_endpoints`, `get_sip_endpoint`, `list_trunk_credentials`, `list_ip_acl_entries`, `list_origination_uris` | `create_sip_endpoint`, `update_sip_endpoint`, `delete_sip_endpoint`, `create_trunk_credential`, `update_trunk_credential`, `delete_trunk_credential`, `add_ip_acl_entry`, `update_ip_acl_entry`, `delete_ip_acl_entry`, `create_origination_uri`, `update_origination_uri`, `delete_origination_uri` | |
+| `subaccounts` | `list_sub_accounts`, `get_sub_account`, `get_sub_account_kyc_status` | `create_sub_account`, `update_sub_account`, `delete_sub_account`, `create_sub_account_kyc_session` | |
+| `messaging` | `list_messaging_numbers`, `preview_message_cost`, `list_messages`, `get_message`, `list_conversations`, `get_conversation_messages`, `list_broadcasts`, `get_broadcast`, `check_opt_out`, `list_opt_outs` | `send_message`, `add_opt_out`, `remove_opt_out` | |
+| `reminders` (hosted only) | `list_reminder_calls`, `get_reminder_call`, `list_audio` | `schedule_reminder_call`, `cancel_reminder_call`, `delete_audio` | `create_audio_upload_link`, `import_audio_from_url` |
+| `skills` | `list_vobiz_skills`, `get_vobiz_skill` | | |
 
 **Choosing tools.** 114 tools is a lot for some clients. Load only what you need:
 
@@ -217,7 +218,7 @@ Every tool has a `title`, input validation, and annotations: `readOnlyHint: true
 
 ## Skills, prompts and resources
 
-The 15 [Vobiz Agent Skills](https://www.vobiz.ai/docs/resources/skills) ship inside the package (`skills/`) and are exposed three ways, so they work in every client:
+The 17 [Vobiz Agent Skills](https://www.vobiz.ai/docs/resources/skills) ship inside the package (`skills/`) and are exposed three ways, so they work in every client:
 
 | Surface | How to use it |
 |---|---|
@@ -228,6 +229,7 @@ The 15 [Vobiz Agent Skills](https://www.vobiz.ai/docs/resources/skills) ship ins
 The skills:
 
 - **Voice and calls:** `vobiz-api`, `vobiz-voice-calls`, `vobiz-voice-xml`, `vobiz-audio-streams`, `vobiz-cdr`
+- **Campaigns and reporting:** `vobiz-campaign-planner`, `vobiz-reports`
 - **Numbers and infrastructure:** `vobiz-phone-numbers`, `vobiz-sip-trunking`, `vobiz-applications-endpoints`
 - **AI and messaging:** `vobiz-ai-voice-agents`, `vobiz-sms`, `vobiz-whatsapp`
 - **Accounts and partners:** `vobiz-sub-accounts`, `vobiz-partner-api`
@@ -274,7 +276,7 @@ All settings are environment variables. Every one is optional except credentials
 ## Run modes
 
 | Mode | Command | For |
-|---|---|---|
+|---|---|---|---|
 | **stdio** | `npx -y @vobiz/mcp` (or `node dist/index.js`) | Claude Desktop, Claude Code, Cursor and other local clients on one account |
 | **Single-account HTTP** | `npx -y @vobiz/mcp http` (or `npm run start:http`) | One account over Streamable HTTP behind a path secret; hosted IVR flows, gather, signed webhooks |
 | **Hosted multi-tenant** | `npx -y @vobiz/mcp hosted` (or `npm run start:hosted`, Docker) | Public connector: each user signs in with OAuth and acts only on their own account |
@@ -283,7 +285,7 @@ All settings are environment variables. Every one is optional except credentials
 ### Single-account HTTP endpoints
 
 | Path | Purpose | Auth |
-|---|---|---|
+|---|---|---|---|
 | `/mcp/<VOBIZ_HTTP_SECRET>` | Streamable HTTP MCP | path secret |
 | `/sse/<secret>`, `/message/<secret>` | legacy SSE MCP for older clients | path secret |
 | `/xml/flow/<id>` | hosted XML (answer, transfer, hold, dial) | Vobiz signature + 128-bit ID |
@@ -330,7 +332,15 @@ This server is published by Vobiz (Ilaimitado Private Limited). The full policy 
 **What it stores:**
 
 - **Local modes:** credentials stay in your environment or OS keychain. Idempotency records stay in memory, or in `VOBIZ_IDEMPOTENCY_FILE` if you set it.
-- **Hosted mode:** the server keeps no credential or conversation database. Credentials travel inside encrypted, expiring tokens held by your MCP client. Per-account rate-limit counters and idempotency records live in memory for up to 24 hours.
+- **Hosted mode** (`https://mcp.vobiz.ai/mcp`): the connector stores no conversation content. Your Vobiz Auth ID and Auth Token are kept only inside encrypted (AES-256-GCM), expiring tokens: the access and refresh tokens your MCP client holds and, while a reminder call is pending, its queued call job. It stores:
+
+| Item | Location | Retention |
+|---|---|---|---|
+| Idempotency records for calls, messages and number purchases (key, request fingerprint, the tool result) | Firestore | Up to 24 hours |
+| Rate counters for calls and messages (per account, per minute and per hour) | Firestore | Until the window ends (at most 1 hour) |
+| OAuth sessions (refresh-token family: ids, timestamps, a hash of the Auth ID; refresh tokens rotate with reuse detection) and used authorization codes | Firestore | Up to 90 days per session; codes expire after 5 minutes |
+| Reminder calls (destination number, message text, timezone, caller ID, schedule and the outcome of each attempt) | Firestore | Kept as your reminder history; `cancel_reminder_call` stops a pending one |
+| Audio library files and their names | Private Cloud Storage bucket, under a hash of the Auth ID | Until you delete them with `delete_audio` |
 
 **What it never does:** it does not read your conversation history, memory or files. It does not use your data for advertising, and it does not sell or share it with third parties.
 
@@ -347,7 +357,7 @@ git clone https://github.com/vobiz-ai/Vobiz-MCP-Server.git
 cd Vobiz-MCP-Server
 npm ci
 cp .env.example .env        # placeholders only; fill in your own credentials
-npm run check               # type-check, build, 253 mocked tests
+npm run check               # type-check, build, mocked tests
 npm run test:live           # live read-only smoke test with .env credentials (calls/messages/purchases forced off)
 npm run test:live:hosted    # live OAuth flow + hosted tools against the real API (no messages sent)
 npm run inspector           # MCP Inspector against dist/index.js
@@ -384,6 +394,11 @@ npm run skills:sync         # refresh bundled skills from the docs repository
 | `unsupported` on gather or hold | Run single-account HTTP mode with `VOBIZ_PUBLIC_URL`. |
 | Callbacks rejected with 401 | `VOBIZ_PUBLIC_URL` must match the URL Vobiz calls exactly. Try `VOBIZ_WEBHOOK_SIGNATURE=verify_if_present`. |
 | Hosted sign-in says the link expired | The sign-in page is valid for 15 minutes. Start the connection again from your client. |
+
+## Related
+
+- **Vobiz CLI** ([GitHub](https://github.com/vobiz-ai/Vobiz-CLI), [docs](https://www.vobiz.ai/docs/resources/cli)): run `vobiz mcp install <client>` to add this server to Claude Code, Cursor, Codex, VS Code, Gemini CLI, Windsurf, Zed or Claude Desktop. It uses the hosted connector with OAuth sign-in by default.
+- **Vobiz Agent Skills** ([GitHub](https://github.com/vobiz-ai/Agent-Skills), [docs](https://www.vobiz.ai/docs/resources/skills)): the same skills bundled here, packaged for any agent that loads skills.
 
 ## Built by Team Vobiz
 

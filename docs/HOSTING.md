@@ -214,7 +214,8 @@ The audio library is on whenever reminder calls are (`VOBIZ_REMINDERS`). Upload 
 ## Scaling and operations
 
 - **Stateless.** Any replica can serve any request, so run two or more behind a load balancer.
-- **Per-replica state.** Rate-limit counters (sign-in, `/token`, `/register`, `/authorize`) and idempotency records live in memory on each replica. They protect each process; Vobiz's own CPS limits still apply across the account. Sessions and used authorization codes are shared through the grant store when Firestore is configured.
+- **Per-replica state.** Rate-limit counters for the OAuth endpoints (sign-in, `/token`, `/register`, `/authorize`) live in memory on each replica. They protect each process; Vobiz's own CPS limits still apply across the account.
+- **Shared state.** When `VOBIZ_GCP_PROJECT` is set, Firestore holds idempotency records for calls, messages and number purchases (collection `idempotency`, up to 24 hours), the call and message rate counters (collection `counters`, until their minute or hour window ends), sessions and used authorization codes (the grant store, sessions up to 90 days) and reminder calls (`VOBIZ_FIRESTORE_COLLECTION`). Every idempotency, counter and grant document carries an expiry timestamp (`expiresAt` or `expireAt`): add a Firestore TTL policy on it. The audio library lives in `VOBIZ_MEDIA_BUCKET`. Without a GCP project, idempotency records and counters stay in memory on each replica.
 - **Logs.** Logs go to stderr and contain route templates, status codes and timings only. Tokens, message text and phone numbers are never logged.
 - **Revocation.** A client ends one session with `POST /revoke`. A user revokes every session at once by rotating their Auth Token in the console: Vobiz refuses the old token on the next call, and the next refresh ends the session. The operator revokes everyone at once by rotating `VOBIZ_HOSTED_SECRET`.
 

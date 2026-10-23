@@ -182,7 +182,7 @@ const oneStep = () => `| Client | One step | Then |
 | Claude Code | \`claude mcp add --transport http vobiz ${hosted}\` | Run \`/mcp\`, pick **vobiz**, sign in |
 | Claude Code (plugin: server + skills) | \`/plugin install vobiz --marketplace ${slug}\` | Enter your Auth ID and Auth Token when asked |
 | Claude Desktop (local extension) | Open \`vobiz-mcp-v${pkg.version}.mcpb\` from the [latest release](${repo}/releases/latest) | Enter your Auth ID and Auth Token |
-| OpenAI Codex (CLI, IDE, app) | \`codex mcp add vobiz --url ${hosted}\` | The Vobiz sign-in opens automatically |
+| OpenAI Codex (CLI, IDE, app) | \`codex mcp add vobiz --url ${hosted}\` | The Vobiz sign-in opens in your browser; to sign in again later, run \`codex mcp login vobiz\` |
 | ChatGPT | **Plugins → + → Add custom MCP server** → \`${hosted}\` | Sign in, then use **@Vobiz** |
 | Gemini CLI | \`gemini mcp add -s user --transport http vobiz ${hosted}\` | Run \`/mcp auth vobiz\` |
 | Cursor | [Add to Cursor](${remoteCursorWeb}) | Click **Connect** in Cursor's MCP settings |
@@ -247,7 +247,7 @@ The hosted connector needs no install: you add a URL and sign in with your Vobiz
 1. **Copy your credentials.** In the [Vobiz console](https://console.vobiz.ai) overview page, copy your **Auth ID** (\`MA_…\`, or \`SA_…\` for a sub-account) and **Auth Token**.
 2. **Open Connectors.** In claude.ai or Claude Desktop, go to **Settings → Connectors → Add custom connector**. On Team and Enterprise plans an Owner adds it under **Admin settings → Connectors**, then each member connects their own account.
 3. **Add the server.** Name it \`Vobiz\` and enter \`${hosted}\`. Leave the advanced OAuth fields empty and click **Add**.
-4. **Connect and sign in.** Click **Connect**. On the Vobiz sign-in page, paste your Auth ID and Auth Token, optionally tick **Read-only access**, and click **Allow access**. You return to Claude, connected.
+4. **Connect and sign in.** Click **Connect**. On the Vobiz sign-in page, paste your Auth ID and Auth Token, and choose **Full access**, **Personal assistant** or **Read-only**. Optionally fill in **Call me on**, **Call from** and **Timezone** for reminder calls (**Call me on** is required for Personal assistant). Click **Allow access**. You return to Claude, connected.
 5. **Use it.** In a new chat, enable **Vobiz** in the tools menu and ask: _"What's my Vobiz balance, and how many calls are live right now?"_
 
 To change between read-only and full access, disconnect and connect again. To revoke every app at once, rotate your Auth Token in the console.
@@ -284,8 +284,10 @@ Codex CLI, the IDE extension and the ChatGPT desktop app share \`~/.codex/config
 
 \`\`\`bash
 codex mcp add vobiz --env VOBIZ_AUTH_ID=MA_XXXXXXXX --env VOBIZ_AUTH_TOKEN=YOUR_AUTH_TOKEN -- npx -y ${spec}
-# or remote with OAuth:
-codex mcp add vobiz --url ${hosted} && codex mcp login vobiz
+# or remote with OAuth (the Vobiz sign-in opens in your browser):
+codex mcp add vobiz --url ${hosted}
+# sign in again later, or if the browser did not open:
+codex mcp login vobiz
 \`\`\`
 
 To keep the token out of the file, forward it from your shell instead:

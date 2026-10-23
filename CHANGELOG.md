@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.4.3 - 2026-10-23
+
+- **17 Vobiz Agent Skills.** Bundled skills re-synced from the Vobiz docs: new `vobiz-campaign-planner` and `vobiz-reports` (also as prompts and `vobiz://skills/*` resources), plus refreshed `vobiz-api` and `vobiz-partner-api`.
+- **140-series calling hours.** `vobiz-forward-deployed-engineer` now gives the correct window for 140-series promotional numbers: 10 AM-8 PM.
+- **Plivo migration skill.** `vobiz-plivo-migration` describes number provisioning positively (Vobiz provisions numbers from its own inventory; existing Plivo numbers stay with Plivo) and marks the compatibility package as planned.
+- **Privacy disclosure.** The README privacy policy lists exactly what the hosted connector stores, where and for how long: idempotency records and rate counters (Firestore, up to 24 hours), OAuth sessions (Firestore, up to 90 days, refresh tokens rotated with reuse detection), reminder calls (Firestore) and the audio library (a private Cloud Storage bucket). No conversation content is stored, and Auth Tokens live only inside encrypted tokens. `docs/HOSTING.md` describes the shared Firestore state the same way.
+- **Confirmation wording.** The README says which writes need `confirm: true` (calls, messages, purchases, transfers, provisioning, deletes) and which controls on a call already placed run without a second confirmation; the tools table has a column for each.
+- **Server card name.** The hosted server card is named `io.github.vobiz-ai/vobiz-mcp`, matching `server.json` and the MCP Registry.
+- **Sign-in text.** Install docs describe the real consent page: choose Full access, Personal assistant or Read-only, and optionally fill in Call me on, Call from and Timezone. Codex steps say the sign-in opens on `codex mcp add` and that `codex mcp login vobiz` signs in again.
+- README: the 13 toolsets listed as they are registered, a Related section for the Vobiz CLI (`vobiz mcp install <client>`) and the Agent Skills repository.
+
 ## 1.4.2
 
 - **Tool definitions rewritten for agents.** Every one of the 428 parameters now carries a description (was 64%), every tool declares a described output schema (was none), and the "Read-only" suffixes are replaced by facts the annotations cannot carry: ordering, page size, what an unknown id returns, what is capped or redacted. Descriptions name the sibling tool for the excluded case (for example `get_call_status` vs `get_call_details`, `play_audio` vs `speak_text` vs `start_audio_stream`). Output schemas keep every field optional so error results validate on the client. Measured with the new `npm run docs:coverage`; `npm run tdqs:lint` runs Glama's deterministic Tool Definition Quality Score linter in CI.
