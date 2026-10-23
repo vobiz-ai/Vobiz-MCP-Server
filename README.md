@@ -331,7 +331,15 @@ This server is published by Vobiz (Ilaimitado Private Limited). The full policy 
 **What it stores:**
 
 - **Local modes:** credentials stay in your environment or OS keychain. Idempotency records stay in memory, or in `VOBIZ_IDEMPOTENCY_FILE` if you set it.
-- **Hosted mode:** the server keeps no credential or conversation database. Credentials travel inside encrypted, expiring tokens held by your MCP client. Per-account rate-limit counters and idempotency records live in memory for up to 24 hours.
+- **Hosted mode** (`https://mcp.vobiz.ai/mcp`): the connector stores no conversation content. Your Vobiz Auth ID and Auth Token are kept only inside encrypted (AES-256-GCM), expiring tokens: the access and refresh tokens your MCP client holds and, while a reminder call is pending, its queued call job. It stores:
+
+| Item | Location | Retention |
+|---|---|---|
+| Idempotency records for calls, messages and number purchases (key, request fingerprint, the tool result) | Firestore | Up to 24 hours |
+| Rate counters for calls and messages (per account, per minute and per hour) | Firestore | Until the window ends (at most 1 hour) |
+| OAuth sessions (refresh-token family: ids, timestamps, a hash of the Auth ID; refresh tokens rotate with reuse detection) and used authorization codes | Firestore | Up to 90 days per session; codes expire after 5 minutes |
+| Reminder calls (destination number, message text, timezone, caller ID, schedule and the outcome of each attempt) | Firestore | Kept as your reminder history; `cancel_reminder_call` stops a pending one |
+| Audio library files and their names | Private Cloud Storage bucket, under a hash of the Auth ID | Until you delete them with `delete_audio` |
 
 **What it never does:** it does not read your conversation history, memory or files. It does not use your data for advertising, and it does not sell or share it with third parties.
 
