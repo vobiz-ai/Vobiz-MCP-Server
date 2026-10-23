@@ -22,7 +22,7 @@ It also ships the **Vobiz Agent Skills**, so the model knows how each Vobiz prod
 | | |
 |---|---|
 | **Tools** | 114 in 13 toolsets: calls, in-call control, conferences, audio streams, IVR/XML, records, numbers, SIP trunks and endpoints, applications, sub-accounts, billing, SMS/MMS/RCS, opt-outs, skills, and reminder calls with your own audio (hosted connector) |
-| **Prompts** | 15: one per Vobiz skill, e.g. `vobiz-voice-xml`, `vobiz-sip-trunking` |
+| **Prompts** | 17: one per Vobiz skill, e.g. `vobiz-voice-xml`, `vobiz-sip-trunking` |
 | **Resources** | `vobiz://skills/index` and `vobiz://skills/{name}` (with completion) |
 | **Transports** | stdio (`npx`), Streamable HTTP for one account, hosted multi-tenant Streamable HTTP with OAuth 2.1 |
 | **Safety** | Calling, messaging and account changes are off until enabled. Every write is confirmed, rate-limited and idempotent. `VOBIZ_READ_ONLY` and `VOBIZ_TOOLSETS` narrow what the model can see. |
@@ -217,7 +217,7 @@ Every tool has a `title`, input validation, and annotations: `readOnlyHint: true
 
 ## Skills, prompts and resources
 
-The 15 [Vobiz Agent Skills](https://www.vobiz.ai/docs/resources/skills) ship inside the package (`skills/`) and are exposed three ways, so they work in every client:
+The 17 [Vobiz Agent Skills](https://www.vobiz.ai/docs/resources/skills) ship inside the package (`skills/`) and are exposed three ways, so they work in every client:
 
 | Surface | How to use it |
 |---|---|
@@ -228,6 +228,7 @@ The 15 [Vobiz Agent Skills](https://www.vobiz.ai/docs/resources/skills) ship ins
 The skills:
 
 - **Voice and calls:** `vobiz-api`, `vobiz-voice-calls`, `vobiz-voice-xml`, `vobiz-audio-streams`, `vobiz-cdr`
+- **Campaigns and reporting:** `vobiz-campaign-planner`, `vobiz-reports`
 - **Numbers and infrastructure:** `vobiz-phone-numbers`, `vobiz-sip-trunking`, `vobiz-applications-endpoints`
 - **AI and messaging:** `vobiz-ai-voice-agents`, `vobiz-sms`, `vobiz-whatsapp`
 - **Accounts and partners:** `vobiz-sub-accounts`, `vobiz-partner-api`

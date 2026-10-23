@@ -6,11 +6,13 @@ Copied from the Vobiz docs (`.mintlify/skills`) by `npm run skills:sync`. Do not
 - `vobiz-api`
 - `vobiz-applications-endpoints`
 - `vobiz-audio-streams`
+- `vobiz-campaign-planner`
 - `vobiz-cdr`
 - `vobiz-forward-deployed-engineer`
 - `vobiz-partner-api`
 - `vobiz-phone-numbers`
 - `vobiz-plivo-migration`
+- `vobiz-reports`
 - `vobiz-sip-trunking`
 - `vobiz-sms`
 - `vobiz-sub-accounts`

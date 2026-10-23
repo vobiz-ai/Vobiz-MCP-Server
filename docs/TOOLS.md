@@ -1358,5 +1358,5 @@ Return the Markdown text of one bundled Vobiz Agent Skill: a documentation playb
 
 | Input | Type | Required | Notes |
 |---|---|---|---|
-| `name` | `vobiz-ai-voice-agents` | `vobiz-api` | `vobiz-applications-endpoints` | `vobiz-audio-streams` | `vobiz-cdr` | `vobiz-forward-deployed-engineer` | `vobiz-partner-api` | `vobiz-phone-numbers` | `vobiz-plivo-migration` | `vobiz-sip-trunking` | `vobiz-sms` | `vobiz-sub-accounts` | `vobiz-voice-calls` | `vobiz-voice-xml` | `vobiz-whatsapp` | yes | Skill name from list_vobiz_skills, e.g. vobiz-voice-calls. |
+| `name` | `vobiz-ai-voice-agents` | `vobiz-api` | `vobiz-applications-endpoints` | `vobiz-audio-streams` | `vobiz-campaign-planner` | `vobiz-cdr` | `vobiz-forward-deployed-engineer` | `vobiz-partner-api` | `vobiz-phone-numbers` | `vobiz-plivo-migration` | `vobiz-reports` | `vobiz-sip-trunking` | `vobiz-sms` | `vobiz-sub-accounts` | `vobiz-voice-calls` | `vobiz-voice-xml` | `vobiz-whatsapp` | yes | Skill name from list_vobiz_skills, e.g. vobiz-voice-calls. |
 | `section` | string |  | Optional `##` heading to return instead of the whole skill (case-insensitive prefix match on the headings list_vobiz_skills shows). |
