@@ -256,7 +256,7 @@ describe("hosted connector server card", () => {
     const card = (await (await fetch(`${base}${routes[0]}`)).json()) as Record<string, unknown>;
     // Required fields and their constraints, as in the extension's schema.json.
     expect(card.$schema).toBe(SERVER_CARD_SCHEMA);
-    expect(card.name).toBe("ai.vobiz/mcp");
+    expect(card.name).toBe("io.github.vobiz-ai/vobiz-mcp");
     expect(card.name).toMatch(/^[a-zA-Z0-9.-]+\/[a-zA-Z0-9._-]+$/);
     expect(typeof card.description).toBe("string");
     expect((card.description as string).length).toBeGreaterThan(0);
@@ -282,7 +282,7 @@ describe("hosted connector server card", () => {
     const typed = await fetch(`${base}${routes[0]}`, { headers: { Accept: SERVER_CARD_MEDIA_TYPE } });
     expect(typed.status).toBe(200);
     expect(typed.headers.get("content-type")).toContain(SERVER_CARD_MEDIA_TYPE);
-    expect(((await typed.json()) as { name: string }).name).toBe("ai.vobiz/mcp");
+    expect(((await typed.json()) as { name: string }).name).toBe("io.github.vobiz-ai/vobiz-mcp");
   });
 });
 

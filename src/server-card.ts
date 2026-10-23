@@ -17,7 +17,7 @@ import { SERVER_VERSION } from "./version.js";
 
 export const SERVER_CARD_SCHEMA = "https://static.modelcontextprotocol.io/schemas/v1/server-card.schema.json";
 /** Reverse-DNS server name (exactly one slash). */
-export const SERVER_CARD_NAME = "ai.vobiz/mcp";
+export const SERVER_CARD_NAME = "io.github.vobiz-ai/vobiz-mcp";
 /** At most 100 characters (schema maxLength). */
 export const SERVER_CARD_DESCRIPTION = "Calls, call control, conferences, records, numbers, SIP and SMS on your own Vobiz account.";
 export const SERVER_CARD_MEDIA_TYPE = "application/mcp-server-card+json";
