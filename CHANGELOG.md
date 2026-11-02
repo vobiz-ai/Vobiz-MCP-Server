@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.4.4 - 2026-11-02
+
+- **Root discovery.** The hosted connector answers `GET /` with the MCP endpoint, server card and OAuth metadata URLs (JSON, or a small page for browsers) and `Link` headers, so a scanner or agent that knows only `mcp.vobiz.ai` finds the endpoint instead of a 404. `POST /` redirects to `/mcp` with a 308.
+- Docker image pins ffmpeg `8.1.3-r0` (Alpine dropped `8.1.2-r0`), and the lockfile picks up patched `qs`, `body-parser` and `fast-uri`.
+
 ## 1.4.3 - 2026-10-23
 
 - **17 Vobiz Agent Skills.** Bundled skills re-synced from the Vobiz docs: new `vobiz-campaign-planner` and `vobiz-reports` (also as prompts and `vobiz://skills/*` resources), plus refreshed `vobiz-api` and `vobiz-partner-api`.
