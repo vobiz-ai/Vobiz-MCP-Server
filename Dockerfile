@@ -19,7 +19,7 @@ LABEL io.modelcontextprotocol.server.name="io.github.vobiz-ai/vobiz-mcp" \
 # -rN builds from its mirrors, so when this stops resolving, or the base digest moves to a new Alpine release, bump it:
 #   docker run --rm <the FROM image above> sh -c 'apk update >/dev/null && apk policy ffmpeg'
 # The runtime only needs `node`: npm, npx and corepack are removed to shrink the attack surface.
-RUN apk add --no-cache ffmpeg=8.1.2-r0 \
+RUN apk add --no-cache ffmpeg=8.1.3-r0 \
  && rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
            /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack
 WORKDIR /app
