@@ -286,6 +286,45 @@ describe("hosted connector server card", () => {
   });
 });
 
+describe("hosted connector root", () => {
+  it("points host-only discovery at the MCP endpoint as JSON", async () => {
+    const r = await fetch(`${base}/`);
+    expect(r.status).toBe(200);
+    expect(r.headers.get("content-type")).toContain("application/json");
+    expect(r.headers.get("access-control-allow-origin")).toBe("*");
+    const link = r.headers.get("link") ?? "";
+    expect(link).toContain('<https://mcp.example.test/mcp>; rel="service"');
+    expect(link).toContain('<https://mcp.example.test/.well-known/mcp/server-card.json>; rel="describedby"');
+    const body = (await r.json()) as Record<string, unknown>;
+    expect(body.mcp_endpoint).toBe("https://mcp.example.test/mcp");
+    expect(body.transport).toBe("streamable-http");
+    expect(body.version).toBe(SERVER_VERSION);
+    expect(body.server_card).toBe("https://mcp.example.test/.well-known/mcp/server-card.json");
+    expect(body.oauth_protected_resource).toBe("https://mcp.example.test/.well-known/oauth-protected-resource/mcp");
+    expect(body.oauth_authorization_server).toBe("https://mcp.example.test/.well-known/oauth-authorization-server");
+  });
+
+  it("serves a locked-down page to browsers", async () => {
+    const r = await fetch(`${base}/`, { headers: { Accept: "text/html,application/xhtml+xml,*/*;q=0.8" } });
+    expect(r.status).toBe(200);
+    expect(r.headers.get("content-type")).toContain("text/html");
+    expect(r.headers.get("content-security-policy")).toContain("default-src 'none'");
+    const html = await r.text();
+    expect(html).toContain("https://mcp.example.test/mcp");
+    expect(html).not.toContain("<script");
+  });
+
+  it("redirects a POST to the root to the MCP endpoint, keeping the method", async () => {
+    const r = await fetch(`${base}/`, { method: "POST", redirect: "manual", headers: { "Content-Type": "application/json" }, body: "{}" });
+    expect(r.status).toBe(308);
+    expect(r.headers.get("location")).toBe("https://mcp.example.test/mcp");
+  });
+
+  it("still answers 404 for unknown paths", async () => {
+    expect((await fetch(`${base}/nope`)).status).toBe(404);
+  });
+});
+
 describe("hosted connector scopes and reminder calls", () => {
   it("validates the consent fields server-side", async () => {
     const { client_id } = await register();

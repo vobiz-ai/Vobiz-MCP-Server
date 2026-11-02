@@ -3,6 +3,8 @@
  * Hosted, multi-tenant Vobiz MCP connector (e.g. https://mcp.vobiz.ai/mcp) for claude.ai, Claude Desktop,
  * Claude Code and other remote MCP clients.
  *
+ *   GET  /                                      discovery for host-only probes: MCP endpoint, server card, OAuth metadata
+ *   POST /                                      308 to /mcp
  *   POST /mcp                                   Streamable HTTP, Bearer token required
  *   GET  /.well-known/oauth-protected-resource/mcp   RFC 9728 metadata
  *   GET  /.well-known/oauth-authorization-server     RFC 8414 metadata (PKCE S256, DCR, CIMD)
@@ -501,6 +503,45 @@ export function createHostedApp(o: HostedOptions): express.Express {
   const serverCard = serverCardHandler(buildServerCard({ cfg, mcpUrl, iconUrl: new URL(`${base}/favicon.svg`) }));
   app.get(`${mcpUrl.pathname}/server-card`, serverCard);
   app.get("/.well-known/mcp/server-card.json", serverCard);
+  // The bare origin. Scanners and agents that know only the host (a DNS record cannot carry a path) land here, so
+  // the root points at the MCP endpoint and its discovery documents instead of answering 404. JSON by default,
+  // a small page for browsers. A POST to the root is redirected to the endpoint with its method and body kept (308).
+  const serverCardUrl = `${base}/.well-known/mcp/server-card.json`;
+  const rootInfo = {
+    name: "Vobiz MCP Server",
+    description: "Remote MCP server for Vobiz: calls, call control, conferences, records, numbers, SIP and SMS on your own Vobiz account.",
+    version: SERVER_VERSION,
+    mcp_endpoint: mcpUrl.href,
+    transport: "streamable-http",
+    authentication: "OAuth 2.1 (sign in with your Vobiz Auth ID and Auth Token)",
+    server_card: serverCardUrl,
+    oauth_protected_resource: getOAuthProtectedResourceMetadataUrl(mcpUrl),
+    oauth_authorization_server: `${base}/.well-known/oauth-authorization-server`,
+    documentation: new URL(cfg.links.docs).href,
+  };
+  const rootLinks = [
+    `<${mcpUrl.href}>; rel="service"`,
+    `<${serverCardUrl}>; rel="describedby"; type="application/json"`,
+    `<${rootInfo.documentation}>; rel="service-doc"`,
+  ].join(", ");
+  const rootPage =
+    `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">` +
+    `<title>Vobiz MCP Server</title><link rel="icon" href="/favicon.svg"></head>` +
+    `<body style="font-family:system-ui,sans-serif;max-width:40rem;margin:3rem auto;padding:0 1rem;line-height:1.5">` +
+    `<h1>Vobiz MCP Server</h1><p>${esc(rootInfo.description)}</p>` +
+    `<p>MCP endpoint (Streamable HTTP, OAuth): <code>${esc(rootInfo.mcp_endpoint)}</code></p>` +
+    `<p>Add this URL as a custom connector in Claude, ChatGPT or any MCP client.</p><ul>` +
+    `<li><a href="${esc(rootInfo.documentation)}">Setup guide</a></li>` +
+    `<li><a href="${esc(serverCardUrl)}">Server card</a></li>` +
+    `<li><a href="${esc(rootInfo.oauth_protected_resource)}">OAuth protected resource metadata</a></li></ul></body></html>`;
+  app.get("/", (req, res) => {
+    res.set({ Link: rootLinks, Vary: "Accept", "Cache-Control": "public, max-age=3600", "Access-Control-Allow-Origin": "*" });
+    if (req.accepts(["json", "html"]) === "html") {
+      return res.set("Content-Security-Policy", "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'").type("html").send(rootPage);
+    }
+    res.json(rootInfo);
+  });
+  app.post("/", (_req, res) => res.redirect(308, mcpUrl.href));
   // OpenAI Apps domain verification: the token from the OpenAI platform, served verbatim.
   app.get("/.well-known/openai-apps-challenge", (_req, res) =>
     cfg.openaiAppsChallenge ? res.type("text/plain").set("Cache-Control", "no-store").send(cfg.openaiAppsChallenge) : res.status(404).json({ error: "not_found" }),
