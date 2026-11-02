@@ -3,14 +3,14 @@
 # Base image pinned by digest (multi-arch index of node:24-alpine, Node 24.22.0 / Alpine 3.24.2), so a rebuild
 # is reproducible and a re-pushed tag cannot change what we ship. Dependabot (docker ecosystem) bumps the digest.
 # Refresh by hand: docker buildx imagetools inspect node:24-alpine  (the top-level "Digest:").
-FROM node:24-alpine@sha256:44fce696f38ba8c987c4db89954051000bbd05ffd8d8659ba15ed4a8602e937f AS build
+FROM node:24-alpine@sha256:8a32c8cf649a49915a66e81e7a609223c708d0adabf288ee3f4077d765542f85 AS build
 WORKDIR /app
 COPY package.json package-lock.json tsconfig.json ./
 RUN npm ci --ignore-scripts
 COPY src ./src
 RUN npm run build && npm prune --omit=dev
 
-FROM node:24-alpine@sha256:44fce696f38ba8c987c4db89954051000bbd05ffd8d8659ba15ed4a8602e937f
+FROM node:24-alpine@sha256:8a32c8cf649a49915a66e81e7a609223c708d0adabf288ee3f4077d765542f85
 LABEL io.modelcontextprotocol.server.name="io.github.vobiz-ai/vobiz-mcp" \
       org.opencontainers.image.source="https://github.com/vobiz-ai/Vobiz-MCP-Server" \
       org.opencontainers.image.description="Official Vobiz MCP server (hosted OAuth connector)" \
