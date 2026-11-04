@@ -197,6 +197,8 @@ describe("time helpers", () => {
     expect(parseWhen("2026-07-01 09:30", "America/New_York")!.toISOString()).toBe("2026-07-01T13:30:00.000Z"); // EDT
     expect(parseWhen("2026-12-01T09:30", "America/New_York")!.toISOString()).toBe("2026-12-01T14:30:00.000Z"); // EST
     expect(parseWhen("2026-02-31T09:30", "UTC")).toBeUndefined();
+    expect(parseWhen("2026-02-30T10:00:00Z", "UTC")).toBeUndefined();
+    expect(parseWhen("2026-11-31T10:00:00+05:30", "Asia/Kolkata")).toBeUndefined();
     expect(parseWhen("6am", "UTC")).toBeUndefined();
   });
 
