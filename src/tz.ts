@@ -81,6 +81,9 @@ export function parseWhen(at: string, tz: string, now: number = Date.now()): Dat
   const s = at.trim();
   if (s.toLowerCase() === "now") return new Date(now);
   if (WITH_OFFSET.test(s)) {
+    const date = s.slice(0, 10);
+    const calendarDate = new Date(`${date}T00:00:00.000Z`);
+    if (Number.isNaN(calendarDate.getTime()) || calendarDate.toISOString().slice(0, 10) !== date) return undefined;
     const t = Date.parse(s);
     return Number.isNaN(t) ? undefined : new Date(t);
   }
