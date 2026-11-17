@@ -11,3 +11,5 @@ Design notes for reviewers:
 - Money-spending and real-world actions are off by default, need `confirm: true`, and are rate-limited and idempotent.
 - Call-control URLs must be https and on an approved host (hosted mode: any public host, never a private or loopback address).
 - Vobiz callbacks are verified with V3/V2 HMAC signatures, with nonce-replay protection.
+
+Compliance: Vobiz (Ilaimitado Private Limited) is ISO/IEC 27001:2022 certified and holds a SOC 2 Type 1 report. Certificates, penetration-test reports, the Data Processing Addendum and the sub-processor list are available from the [Vobiz Trust Center](https://www.vobiz.ai/trust-center).

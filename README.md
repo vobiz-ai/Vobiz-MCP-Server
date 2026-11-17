@@ -60,6 +60,7 @@ Then say *"use the audio Morning alarm"* and the assistant passes that name as `
 - [Configuration](#configuration)
 - [Run modes](#run-modes)
 - [Hosted connector (OAuth)](#hosted-connector-oauth)
+- [Security](#security)
 - [Privacy policy](#privacy-policy)
 - [Development](#development)
 - [Troubleshooting](#troubleshooting)
@@ -318,6 +319,16 @@ All settings are environment variables. Every one is optional except credentials
 **Tool exclusions.** The hosted connector leaves out tools that buy things or need the server to host one account's callbacks. The default list is `buy_phone_number`, `gather_dtmf`, `get_gather_result`, `list_webhook_events`, `hold_call` and `unhold_call`, and you can change it with `VOBIZ_HOSTED_EXCLUDED_TOOLS`. Browser `Origin` headers are checked against `VOBIZ_ALLOWED_ORIGINS`.
 
 Deployment, DNS, scaling and directory submission are covered in [docs/HOSTING.md](docs/HOSTING.md) and [docs/PUBLISHING.md](docs/PUBLISHING.md).
+
+## Security
+
+Full details for security reviewers are on the docs page, [Security](https://www.vobiz.ai/docs/resources/vobiz-mcp#security), and in [SECURITY.md](SECURITY.md). In short:
+
+- **Compliance.** Vobiz (Ilaimitado Private Limited) is ISO/IEC 27001:2022 certified (valid to 14 April 2029) and holds a SOC 2 Type 1 report (security, availability and confidentiality, as of 2 May 2026). Third-party penetration tests of the web app, API and AWS architecture were completed in April 2026 with every finding closed. The certificate, the reports (under NDA), the Data Processing Addendum, a CAIQ-Lite questionnaire and the sub-processor list are available from the [Vobiz Trust Center](https://www.vobiz.ai/trust-center).
+- **Hosted connector.** OAuth 2.1 with PKCE (S256), Client ID Metadata Documents and dynamic client registration; short-lived access tokens, rotating refresh tokens with reuse detection, token revocation and a 90-day session cap. Credentials live only inside AES-256-GCM sealed tokens. TLS 1.2+ with HSTS; `/mcp` answers `401` until the client signs in. It runs on Google Cloud in Mumbai (`asia-south1`); your calls, messages and records stay in your Vobiz account on AWS Mumbai (`ap-south-1`).
+- **Per-user access.** Each user signs in with their own Vobiz credentials and picks **Full access**, **Personal assistant** or **Read-only**. Read-only exposes the 48 read tools and cannot spend or change anything. [docs/TOOLS.md](docs/TOOLS.md) marks every tool read-only or write.
+- **For organizations.** Connect a dedicated [sub-account](https://www.vobiz.ai/docs/platform/subaccounts) (`SA_` credentials) funded with only what the integration should spend; accounts are prepaid, a `hard` credit limit blocks new calls once used up, and the connector adds its own caps on call duration, calls and messages per minute and hour, concurrency and a balance floor. Rotating the Auth Token revokes every session at once. Every action lands in the account's call records and transactions.
+- **Reporting.** Email [security@vobiz.ai](mailto:security@vobiz.ai) to report a vulnerability privately. We acknowledge within 3 business days.
 
 ## Privacy policy
 
